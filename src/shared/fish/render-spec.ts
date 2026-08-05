@@ -6,40 +6,38 @@
 //
 // MUST stay free of React/React Native/Skia imports: it runs under plain Node.
 //
-// Every IR feature below must be expressible in BOTH backends, or the preview
-// stops being evidence about the app. Current mapping:
+// This is a FLAT VECTOR style — bold uniform outlines, flat colour, no
+// gradients/blur/blend modes — so the IR is deliberately narrow: a `Paint` is
+// just a colour + opacity, and a primitive is a filled-or-stroked path/circle,
+// or a group (for opacity only). Every feature below must be expressible in
+// BOTH backends, or the preview stops being evidence about the app:
 //
-//   feature                     Skia                      SVG preview
-//   --------------------------- ------------------------- ----------------------
-//   linear / radial gradient    <LinearGradient> etc.     <linearGradient> etc.
-//   elliptical radial (`scale`) gradient `transform`      gradientTransform
-//   primitive `blur` (mask)     MaskFilter.MakeBlur       feGaussianBlur on shape
-//   group `blur` (image)        <Blur> in layer paint     feGaussianBlur on <g>
-//   multiply/screen/overlay/    blendMode                 mix-blend-mode
-//     softLight
-//   plusLighter                 blendMode                 CSS plus-lighter
-//   isolate                     <Group layer>             isolation:isolate
-//   clip                        <Group clip>              <clipPath>
+//   feature          Skia                       SVG preview
+//   ---------------- -------------------------- ----------------------------
+//   fill             Path/Circle color          fill
+//   stroke           style="stroke" strokeWidth stroke / fill="none"
+//   clip             <Group clip>               <clipPath>
+//   group opacity    <Group opacity>            <g opacity>
 //
-// Every row above is exact in both backends — there is currently NO feature
-// that one can express and the other only approximates. Keep it that way.
-//
-// Deliberately NOT in the IR, each for a reason:
-//   sweep gradients   — Skia has one, SVG has none. Iridescence uses a
-//                       multi-stop linear ramp instead, which reads the same at
-//                       fish scale and is exact on both sides.
-//   Turbulence/noise  — Skia and SVG both implement the same Perlin spec, but
-//                       not the same phase, so the preview would stop matching.
-//   SkSL shaders      — Skia-only, compile on first frame, and the likeliest
-//                       source of iOS/Android divergence.
-// Add any of them only with a documented SVG story and a note in this table.
+// Deliberately NOT in the IR (this was tried and reverted — see git history
+// for the airbrushed/gradient version if reviving any of this):
+//   gradients, blur (mask or image), blend modes, isolate — none of them read
+//   as "flat vector clip art"; they were the whole airbrushed style this file
+//   moved away from. Add any of them back only with a documented SVG story.
 //
 // Local space: origin at body center, nose pointing LEFT (-x), y down.
 // Adult footprint ≈ x [-52..70], y [-67 (sailfin tip)..42 (anal fin tip)].
 //
-// Art direction follows assets/fish/README.md: a chunky molly with a blunt
-// snout, a deep belly, a narrow peduncle, a broad scalloped caudal fan, ray
-// lines on every fin, a dark outline, and a glossy band along the upper flank.
+// Art direction: flat vector clip-art / coloring-book style. A chunky molly
+// with a blunt snout and a deep belly; a bold uniform-weight outline around
+// the body AND separately around every fin lobe, so fins read as distinct
+// attached pieces rather than blending into the body; short dash-mark rays
+// on every fin instead of full gradient membranes; one flat shadow shape and
+// one flat "sticker shine" shape for roundness, no gradients/blur/blend.
+// Rolled traits carry the drama: `tail:"lyretail"` + `dorsal:"sailfin"` are
+// the showy veiltail-betta silhouette; the common `standard`/`round` roll
+// stays calmer. Rarity shows via fin tint, shadow/shine strength, and — rare
+// tier and up — a coloured ring around the eye in the variety's accent hue.
 
 import { seedFromString } from "../lib/seed";
 
@@ -58,30 +56,14 @@ export interface Box {
   height: number;
 }
 
-export interface Stop {
-  offset: number;
-  color: string;
-}
-
-export type Paint =
-  | { type: "solid"; color: string; opacity?: number }
-  | { type: "linear"; from: XY; to: XY; stops: Stop[]; opacity?: number }
-  | {
-      type: "radial";
-      center: XY;
-      radius: number;
-      stops: Stop[];
-      opacity?: number;
-      /** Non-uniform scale about `center` — gives an elliptical falloff. */
-      scale?: XY;
-    };
-
 /**
- * Deliberately a short allowlist. The separable modes are safe everywhere; the
- * non-separable ones (hue/color/luminosity) are where GPU backends diverge on
- * colour space, so they are omitted until something actually needs them.
+ * A flat fill/stroke colour. Not a union — this style has no gradients,
+ * blur, or blend modes, so there is nothing else a paint could be.
  */
-export type Blend = "srcOver" | "multiply" | "screen" | "overlay" | "softLight" | "plusLighter";
+export interface Paint {
+  color: string;
+  opacity?: number;
+}
 
 interface DrawCommon {
   paint: Paint;
@@ -91,37 +73,18 @@ interface DrawCommon {
    * by string identity, so reusing one variable costs a single clip object.
    */
   clip?: string;
-  blend?: Blend;
   /**
-   * Gaussian sigma in local units, MASK-blur semantics: softens this shape's
-   * own alpha in a single draw, no offscreen layer. Contrast `group.blur`.
+   * Render as a stroked outline instead of a fill. Works on both `path` and
+   * `circle` — the flat-vector style outlines fin lobes, the body, and the
+   * eye ring all the same way.
    */
-  blur?: number;
+  stroke?: { width: number };
 }
 
 export type Primitive =
-  | ({
-      kind: "path";
-      d: string;
-      /** Render as a stroked line instead of a fill. */
-      stroke?: { width: number };
-    } & DrawCommon)
+  | ({ kind: "path"; d: string } & DrawCommon)
   | ({ kind: "circle"; cx: number; cy: number; r: number } & DrawCommon)
-  | {
-      kind: "group";
-      children: Primitive[];
-      clip?: string;
-      blend?: Blend;
-      opacity?: number;
-      /** IMAGE-filter blur: blurs the composited result. Forces a layer. */
-      blur?: number;
-      /**
-       * Composite `blend` against this group's own contents rather than
-       * whatever is behind the fish. Required for correctness whenever a child
-       * uses a non-`srcOver` blend, or `overlay` would pick up the tank water.
-       */
-      isolate?: boolean;
-    };
+  | { kind: "group"; children: Primitive[]; clip?: string; opacity?: number };
 
 export interface FishRenderSpec {
   /** Drawn first; animated as a group rotating around tailPivot. */
@@ -147,9 +110,9 @@ export interface FishRenderSpec {
 export const STAGE_SQUISH = { egg: 1, fry: 0.72, juvenile: 0.88, adult: 1 } as const;
 
 /**
- * Slack added around the raw geometry for stroke width and (from Phase 2) blur.
- * Kept generous — over-reporting bounds costs a few transparent pixels, while
- * under-reporting visibly clips soft edges.
+ * Slack added around the raw geometry for stroke width and the shadow/shine
+ * blobs. Kept generous — over-reporting bounds costs a few transparent
+ * pixels, while under-reporting visibly clips a shape at the edge.
  */
 const BOUNDS_PAD = 22;
 
@@ -205,34 +168,14 @@ const EGG_RADIUS = 12;
 
 export function eggSpec(): Primitive[] {
   return [
-    {
-      kind: "circle",
-      cx: 0,
-      cy: 0,
-      r: EGG_RADIUS,
-      paint: { type: "solid", color: "#f6e3b0", opacity: 0.92 },
-    },
-    {
-      kind: "circle",
-      cx: -3.5,
-      cy: -4,
-      r: 3.5,
-      paint: { type: "solid", color: "#fff7e0", opacity: 0.9 },
-    },
-    { kind: "circle", cx: 2, cy: 2, r: 4.4, paint: { type: "solid", color: "#e0a24e" } },
+    { kind: "circle", cx: 0, cy: 0, r: EGG_RADIUS, paint: { color: "#f6e3b0", opacity: 0.92 } },
+    { kind: "circle", cx: -3.5, cy: -4, r: 3.5, paint: { color: "#fff7e0", opacity: 0.9 } },
+    { kind: "circle", cx: 2, cy: 2, r: 4.4, paint: { color: "#e0a24e" } },
   ];
 }
 
 export function eggSilhouetteSpec(): Primitive[] {
-  return [
-    {
-      kind: "circle",
-      cx: 0,
-      cy: 0,
-      r: EGG_RADIUS,
-      paint: { type: "solid", color: SILHOUETTE_COLOR },
-    },
-  ];
+  return [{ kind: "circle", cx: 0, cy: 0, r: EGG_RADIUS, paint: { color: SILHOUETTE_COLOR } }];
 }
 
 /** Body-silhouette half height (dead-fish placement) without building a spec. */
@@ -286,70 +229,69 @@ function mix(hex: string, target: readonly [number, number, number], t: number):
 const darken = (hex: string, t: number) => mix(hex, [0, 0, 0], t);
 const lighten = (hex: string, t: number) => mix(hex, [255, 255, 255], t);
 
-function rgba(hex: string, alpha: number): string {
-  const rgb = parseHex(hex) ?? [255, 255, 255];
-  return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
-}
-
 // ---------------------------------------------------------------------------
 // Rarity material — how "premium" a fish's finish reads, independent of its
-// pattern. Rare-tier values match what Phase 2 shipped and was reviewed
-// against, so rare fish are visually unchanged; common/uncommon are toned
-// down toward "matte, minimal highlights" and epic/legendary are pushed up
-// toward "premium gloss, bright rim lighting" — the tiering the brief asks
-// for, without moving the tier everything was already tuned around.
+// pattern. Every field here is a flat-vector-compatible knob (opacity or
+// count, never a gradient/blur/blend strength) — common is plain and
+// matte-reading, legendary gets a coloured eye-ring accent and the most
+// pronounced shine/shadow/fin-tint.
 // ---------------------------------------------------------------------------
 
 export interface Material {
-  /** Screen-blend gloss band peak alpha — the wet highlight along the flank. */
-  gloss: number;
-  /** Soft-light radial core bloom peak alpha — roundness and sheen. */
-  bloom: number;
-  /** Plus-lighter rim light peak alpha along the top/rear edge. */
-  rim: number;
-  /** Fin trailing-edge alpha. LOWER is more translucent. */
-  finTrail: number;
   /** Fan/dorsal notch wobble. LOWER is cleaner/more refined. */
   finJitter: number;
   /** Multiplier on pattern-primitive opacities — richer contrast at higher tiers. */
   patternContrast: number;
+  /** How far the fin's flat fill lightens from its base tone. Higher reads as more delicate. */
+  finTint: number;
+  /** Sticker-shine shape opacity — the flat "premium gloss" cue. */
+  shine: number;
+  /** Shadow-blob opacity — a little more contrast/dimension at higher tiers. */
+  shadow: number;
+  /** Eye-ring accent stroke opacity, in the variety's `accentColor`. 0 = no ring. */
+  eyeRing: number;
 }
 
 const MATERIAL_BY_TIER: Record<RarityTier, Material> = {
-  common: { gloss: 0.16, bloom: 0.4, rim: 0.1, finTrail: 0.7, finJitter: 0.13, patternContrast: 1 },
+  common: {
+    finJitter: 0.13,
+    patternContrast: 1,
+    finTint: 0.06,
+    shine: 0.35,
+    shadow: 0.16,
+    eyeRing: 0,
+  },
   uncommon: {
-    gloss: 0.24,
-    bloom: 0.5,
-    rim: 0.22,
-    finTrail: 0.62,
     finJitter: 0.09,
     patternContrast: 1.03,
+    finTint: 0.1,
+    shine: 0.45,
+    shadow: 0.19,
+    eyeRing: 0,
   },
-  // Matches the fixed constants Phase 2 shipped with — the tier everything
-  // else is calibrated relative to.
   rare: {
-    gloss: 0.34,
-    bloom: 0.62,
-    rim: 0.5,
-    finTrail: 0.56,
     finJitter: 0.06,
     patternContrast: 1.08,
+    finTint: 0.16,
+    shine: 0.55,
+    shadow: 0.22,
+    eyeRing: 0.5,
   },
   epic: {
-    gloss: 0.42,
-    bloom: 0.7,
-    rim: 0.62,
-    finTrail: 0.42,
     finJitter: 0.035,
     patternContrast: 1.14,
+    finTint: 0.22,
+    shine: 0.65,
+    shadow: 0.25,
+    eyeRing: 0.8,
   },
   legendary: {
-    gloss: 0.5,
-    bloom: 0.78,
-    rim: 0.74,
-    finTrail: 0.3,
     finJitter: 0.02,
     patternContrast: 1.2,
+    finTint: 0.3,
+    shine: 0.75,
+    shadow: 0.28,
+    eyeRing: 1,
   },
 };
 
@@ -503,54 +445,59 @@ interface BodyGeom {
 
 function bodyGeom(body: FishTraits["body"]): BodyGeom {
   if (body === "balloon") {
-    // Short, tall, egg-round — the balloon molly of the reference sheet.
+    // Short and deep-bellied — the balloon molly of the reference sheet — but
+    // a stretched oval, not a circle: ~1.5:1 length-to-depth, with a longer,
+    // more gradual approach into both the head and the caudal peduncle (extra
+    // control points throughout, no single sharp transition) and a peduncle
+    // wide enough that the tail has real material to grow out of.
     return {
       d:
-        "M -40 -1 " +
-        "C -40 -13 -33 -22 -22 -27 " +
-        "C -10 -32 5 -31 16 -25 " +
-        "C 24 -20 30 -13 33 -9 " +
-        "C 35 -8 36 -8 36 -6 " +
-        "L 36 9 " +
-        "C 36 11 35 11 33 12 " +
-        "C 30 17 24 24 14 29 " +
-        "C 1 35 -16 31 -28 22 " +
-        "C -36 16 -40 7 -40 -1 Z",
-      nose: { x: -40, y: -1 },
-      backPeak: { x: -4, y: -31 },
-      bellyLow: { x: -5, y: 32 },
-      peduncleTop: { x: 36, y: -6 },
-      peduncleBottom: { x: 36, y: 9 },
-      halfHeight: 33,
-      bbox: { x: -40, y: -33, width: 76, height: 68 },
+        "M -48 -1 " +
+        "C -49 -9 -46 -17 -38 -22 " +
+        "C -28 -28 -14 -30 0 -29 " +
+        "C 14 -28 26 -24 34 -18 " +
+        "C 39 -15 42 -11 46 -6 " +
+        "C 47 -2 47 3 46 7 " +
+        "C 45 12 42 16 35 21 " +
+        "C 27 26 14 30 0 31 " +
+        "C -14 32 -28 30 -38 24 " +
+        "C -46 19 -49 11 -48 -1 Z",
+      nose: { x: -48, y: -1 },
+      backPeak: { x: 0, y: -29 },
+      bellyLow: { x: 0, y: 31 },
+      peduncleTop: { x: 47, y: -8 },
+      peduncleBottom: { x: 47, y: 9 },
+      halfHeight: 32,
+      bbox: { x: -49, y: -32, width: 96, height: 64 },
     };
   }
   // Standard: ~2.25:1 length-to-depth — elongated enough to read as a molly
   // rather than a goldfish/pufferfish silhouette. A blunt rounded snout, a
   // back that crests just ahead of centre, a belly carrying the volume, and a
-  // full rear that steps in to a short caudal peduncle rather than tapering to
-  // a point. (Same curve family as before, stretched ~15% longer and ~14%
-  // shallower — every downstream primitive reads its position off the named
-  // landmarks below, so this one change reshapes the whole fish.)
+  // full, gently-tapering rear that bulges into a wide, ROUNDED caudal
+  // peduncle — no straight wall and no corner where the taper meets it (the
+  // previous version had both, and they poked out as a visible notch once
+  // the tail's own hub-based root sat inside it). The peduncle reads as one
+  // smooth continuation of the belly curve, wide enough that the tail has
+  // real material to grow out of.
   return {
     d:
       "M -61 -4 " +
       "C -60 -12 -53 -16 -43 -18 " +
       "C -29 -22 -10 -23 6 -22 " +
-      "C 20 -20 31 -15 39 -9 " +
-      "C 41 -9 43 -8 43 -6 " +
-      "L 43 7 " +
-      "C 43 9 41 9 39 10 " +
-      "C 31 16 20 20 6 22 " +
+      "C 20 -20 32 -16 40 -11 " +
+      "C 44 -11 46 -8 46 -1 " +
+      "C 46 6 44 11 39 13 " +
+      "C 32 18 20 20 6 22 " +
       "C -13 23 -32 20 -45 12 " +
       "C -54 9 -60 3 -61 -4 Z",
     nose: { x: -61, y: -4 },
     backPeak: { x: -3, y: -22 },
     bellyLow: { x: -5, y: 22 },
-    peduncleTop: { x: 43, y: -6 },
-    peduncleBottom: { x: 43, y: 7 },
+    peduncleTop: { x: 46, y: -8 },
+    peduncleBottom: { x: 46, y: 9 },
     halfHeight: 23,
-    bbox: { x: -61, y: -23, width: 104, height: 46 },
+    bbox: { x: -61, y: -23, width: 107, height: 46 },
   };
 }
 
@@ -560,49 +507,63 @@ function tailGeom(
   jitter?: number,
   rng?: () => number,
 ): FinShape {
-  const top = geom.peduncleTop;
-  const bottom = geom.peduncleBottom;
-  const px = top.x;
+  const px = geom.peduncleTop.x;
+  // The tail's hub sits well inside the body silhouette rather than right at
+  // its edge — the body is drawn on top and its opaque fill buries everything
+  // from the hub out to the peduncle edge, so the tail reads as growing out
+  // of the body instead of butting against a hard vertical seam. Animation
+  // stays safe: rotation happens about this same hub point (see `tailPivot`
+  // in buildFishSpec), so the hidden portion never swings out from cover.
+  const hx = px - 11;
   if (tail === "lyretail") {
-    // A lyre: a full fan whose top and bottom corners draw out into points,
-    // leaving a shallow concave sweep between them. Sized down ~20% from the
-    // original so it reads as a fin rather than a second body lobe.
+    // Two long flowing points with a deep, soft V between them — sized down
+    // ~16% from the previous pass (it was reading as oversized) and rebuilt
+    // with extra control points throughout so every vertex is a gentle curve
+    // rather than a hard corner: both tips round off instead of coming to a
+    // sharp triangle, and the waist gets its own short easing curve instead
+    // of being a single cusp where the two lobes meet.
     const q = (dx: number) => f(px + dx);
+    const h = (dx: number) => f(hx + dx);
     return {
       d:
-        `M ${f(px)} ${f(top.y + 1)} ` +
-        `C ${q(8)} -11 ${q(15)} -19 ${q(24)} -29 ` +
-        `C ${q(21)} -19 ${q(18)} -10 ${q(17)} -1 ` +
-        `C ${q(18)} 8 ${q(21)} 18 ${q(24)} 27 ` +
-        `C ${q(15)} 18 ${q(8)} 10 ` +
-        `${f(px)} ${f(bottom.y - 1)} Z`,
+        `M ${h(0)} 0 ` +
+        `C ${q(1)} -14 ${q(13)} -27 ${q(21)} -34 ` +
+        `C ${q(27)} -39 ${q(31)} -41 ${q(32)} -38 ` +
+        `C ${q(31)} -35 ${q(27)} -30 ${q(20)} -22 ` +
+        `C ${q(14)} -15 ${q(9)} -8 ${q(7)} -1 ` +
+        `C ${q(6.5)} 0 ${q(6.5)} 1 ${q(7)} 2 ` +
+        `C ${q(9)} 9 ${q(14)} 16 ${q(20)} 23 ` +
+        `C ${q(27)} 31 ${q(31)} 36 ${q(32)} 39 ` +
+        `C ${q(31)} 42 ${q(27)} 40 ${q(21)} 35 ` +
+        `C ${q(13)} 28 ${q(1)} 15 ${h(0)} 0 Z`,
       rays: [
-        `M ${q(2)} ${f(top.y + 2)} C ${q(9)} -10 ${q(15)} -18 ${q(22)} -26`,
-        `M ${q(2)} -3 C ${q(7)} -7 ${q(11)} -12 ${q(14)} -17`,
-        `M ${q(2)} -1 C ${q(7)} -1 ${q(11)} -1 ${q(15)} -1`,
-        `M ${q(2)} 2 C ${q(7)} 6 ${q(11)} 10 ${q(14)} 15`,
-        `M ${q(2)} ${f(bottom.y - 2)} C ${q(9)} 9 ${q(15)} 16 ${q(22)} 24`,
+        `M ${h(0)} 0 C ${q(2)} -15 ${q(13)} -27 ${q(25)} -35`,
+        `M ${h(0)} 0 C ${q(2)} -7 ${q(8)} -12 ${q(13)} -18`,
+        `M ${h(0)} 0 C ${q(2)} -1 ${q(7)} -1 ${q(12)} -1`,
+        `M ${h(0)} 0 C ${q(2)} 7 ${q(8)} 12 ${q(13)} 18`,
+        `M ${h(0)} 0 C ${q(2)} 15 ${q(13)} 27 ${q(25)} 35`,
       ],
-      pivot: { x: px, y: 0 },
-      tip: { x: px + 17, y: -1 },
-      // The lyre's two drawn-out corners are the extreme points of the literal.
+      pivot: { x: hx, y: 0 },
+      tip: { x: px + 32, y: -1 },
+      // The lyre's two rounded points are the extreme reach of the literal.
       bbox: boxOfPoints([
-        { x: px, y: -29 },
-        { x: px + 24, y: 27 },
+        { x: hx, y: -42 },
+        { x: px + 32, y: 42 },
       ]),
     };
   }
-  // Round: the big scalloped paddle of the reference art. Sized down ~20% from
-  // the original — still generous, but it no longer dominates the body.
+  // Round: the big scalloped paddle of the reference art, hubbed the same way
+  // as the lyretail. Sized down to match (radius trimmed so the visible reach
+  // from the body edge drops ~16%, same as the lyretail).
   return fan({
-    pivot: { x: px, y: 0 },
-    radius: 25,
+    pivot: { x: hx, y: 0 },
+    radius: 32,
     from: -68,
     to: 68,
     lobes: 7,
     bulge: 2.8,
-    rootTop: { x: px, y: top.y + 1 },
-    rootBottom: { x: px, y: bottom.y - 1 },
+    rootTop: { x: hx, y: -3 },
+    rootBottom: { x: hx, y: 4 },
     jitter,
     rng,
   });
@@ -639,11 +600,11 @@ function dorsalGeom(
       d:
         `M -30 ${f(base + 2)} ` +
         `C -30 ${f(base - 16)} -27 ${f(base - 28)} ${f(notches[0].x)} ${f(notches[0].y)} ` +
-        lobedEdge(notches, pivot, 2.8) +
+        lobedEdge(notches, pivot, 3.6) +
         ` L 25 ${f(base + 3)} Z`,
       bbox: boxOfPoints(
         [...notches, { x: -30, y: base + 3 }, { x: 25, y: base + 3 }],
-        2.8 * 2 + (jitter ?? 0) * 8,
+        3.6 * 2 + (jitter ?? 0) * 8,
       ),
       rays: [
         `M -23 ${f(base)} C -23 ${f(base - 14)} -22 ${f(base - 25)} -18 ${f(base - 33)}`,
@@ -657,34 +618,36 @@ function dorsalGeom(
       tip: { x: 3, y: base - 46 },
     };
   }
-  // Standard: a rounded back-leaning fan over the crest of the back, scalloped
-  // down the trailing edge.
+  // Standard: taller and wavier than the old "small fan" — still calmer than
+  // sailfin, but reads as a deliberately flat-vector dorsal on its own, not
+  // just a stub. One more notch than before for a wavier crest.
   const pivot: XY = { x: -4, y: base };
   const notches: XY[] = [
-    { x: -10, y: base - 23 },
-    { x: -3, y: base - 25 },
-    { x: 4, y: base - 22 },
-    { x: 9, y: base - 15 },
-    { x: 11, y: base - 6 },
+    { x: -12, y: base - 31 },
+    { x: -6, y: base - 36 },
+    { x: 1, y: base - 33 },
+    { x: 7, y: base - 27 },
+    { x: 11, y: base - 17 },
+    { x: 13, y: base - 8 },
   ].map((p) => jitterPt(p, jitter, rng));
   return {
     d:
-      `M -21 ${f(base + 2)} ` +
-      `C -20 ${f(base - 11)} -16 ${f(base - 19)} ${f(notches[0].x)} ${f(notches[0].y)} ` +
-      lobedEdge(notches, pivot, 2.4) +
-      ` L 8 ${f(base + 3)} Z`,
+      `M -23 ${f(base + 2)} ` +
+      `C -22 ${f(base - 14)} -18 ${f(base - 24)} ${f(notches[0].x)} ${f(notches[0].y)} ` +
+      lobedEdge(notches, pivot, 3) +
+      ` L 10 ${f(base + 3)} Z`,
     bbox: boxOfPoints(
-      [...notches, { x: -21, y: base + 3 }, { x: 8, y: base + 3 }],
-      2.4 * 2 + (jitter ?? 0) * 8,
+      [...notches, { x: -23, y: base + 3 }, { x: 10, y: base + 3 }],
+      3 * 2 + (jitter ?? 0) * 8,
     ),
     rays: [
-      `M -16 ${f(base)} C -15 ${f(base - 9)} -13 ${f(base - 16)} -11 ${f(base - 22)}`,
-      `M -9 ${f(base)} C -8 ${f(base - 10)} -6 ${f(base - 18)} -4 ${f(base - 23)}`,
-      `M -2 ${f(base)} C 0 ${f(base - 9)} 2 ${f(base - 16)} 4 ${f(base - 20)}`,
-      `M 4 ${f(base + 1)} C 6 ${f(base - 6)} 8 ${f(base - 10)} 9 ${f(base - 14)}`,
+      `M -18 ${f(base)} C -17 ${f(base - 12)} -15 ${f(base - 22)} -13 ${f(base - 30)}`,
+      `M -10 ${f(base)} C -9 ${f(base - 14)} -7 ${f(base - 24)} -5 ${f(base - 31)}`,
+      `M -2 ${f(base)} C 0 ${f(base - 12)} 2 ${f(base - 22)} 4 ${f(base - 27)}`,
+      `M 5 ${f(base + 1)} C 7 ${f(base - 8)} 9 ${f(base - 14)} 10 ${f(base - 19)}`,
     ],
     pivot,
-    tip: { x: -3, y: base - 25 },
+    tip: { x: -6, y: base - 36 },
   };
 }
 
@@ -698,7 +661,6 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
   const out: Primitive[] = [];
   const bodyD = geom.d;
   const solid = (color: string, opacity = 1): Paint => ({
-    type: "solid",
     color,
     opacity: Math.min(1, opacity * material.patternContrast),
   });
@@ -712,6 +674,7 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
 
     case "spots": {
       // Dalmatian: irregular blotches of mixed size, nothing over the face.
+      // Flat fill, hard edge — a die-cut sticker patch, not an airbrushed one.
       for (let i = 0; i < 13; i++) {
         const cx = lerp(geom.nose.x + 16, rear - 2, rng());
         const cy = lerp(top + 5, bot - 5, rng());
@@ -721,9 +684,6 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
           kind: "path",
           d: blobPath(cx, cy, r, r * lerp(0.75, 1.15, rng()), 0.45, rng),
           paint: solid(pattern.color, 0.92),
-          // Just enough softness to kill the die-cut vector edge; a dalmatian
-          // spot is still meant to read as crisp.
-          blur: 0.9,
           clip: bodyD,
         });
       }
@@ -737,7 +697,6 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
             kind: "path",
             d: blobPath(cx, cy, r, r, 0.45, rng),
             paint: solid(pattern.color, 0.72),
-            blur: 0.8,
           });
         }
       }
@@ -745,23 +704,14 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
     }
 
     case "speckle": {
-      // Gold Dust wears a dark head washing back into the metallic base. The
-      // blur is what stops the wash reading as a visible gradient boundary.
+      // Gold Dust wears a dark head cap washing back into the metallic base.
+      // Flat style has no gradient wash, so this is now a hard-edged patch —
+      // the same "cap" device the koi/calico patterns already use below.
       if (pattern.frontColor) {
         out.push({
           kind: "path",
-          d: geom.d,
-          paint: {
-            type: "linear",
-            from: { x: geom.nose.x, y: 0 },
-            to: { x: 10, y: 0 },
-            stops: [
-              { offset: 0, color: rgba(pattern.frontColor, 0.97) },
-              { offset: 0.45, color: rgba(pattern.frontColor, 0.85) },
-              { offset: 1, color: rgba(pattern.frontColor, 0) },
-            ],
-          },
-          blur: 2,
+          d: blobPath(geom.nose.x + 12, 0, 16, geom.halfHeight * 0.9, 0.22, rng),
+          paint: solid(pattern.frontColor, 0.95),
           clip: bodyD,
         });
       }
@@ -790,13 +740,12 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
             pattern.color,
             (wide ? lerp(0.55, 0.95, rng()) : lerp(0.5, 0.95, t)) * (metallic ? 0.75 : 1),
           ),
-          blur: r * 0.55,
         });
       }
       if (metallic) {
-        // Reflected-light glints instead of painted dots: short tinted
-        // streaks, plus-lighter blended, angled as if catching one light
-        // source — reads as glossy surface sheen rather than dusted pigment.
+        // Reflected-light glints instead of painted dots: short tinted flat
+        // streaks angled as if catching one light source — reads as glossy
+        // surface sheen rather than dusted pigment.
         for (let i = 0; i < 9; i++) {
           const { cx, cy } = place(i);
           const len = lerp(2.5, 5.5, rng());
@@ -806,19 +755,14 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
           out.push({
             kind: "path",
             d: `M ${f(cx - dx)} ${f(cy - dy)} L ${f(cx + dx)} ${f(cy + dy)}`,
-            paint: {
-              type: "solid",
-              color: lighten(pattern.color, 0.6),
-              opacity: lerp(0.4, 0.75, rng()),
-            },
-            stroke: { width: lerp(0.6, 1.1, rng()) },
-            blend: "plusLighter",
-            blur: 0.4,
+            paint: { color: lighten(pattern.color, 0.6), opacity: lerp(0.55, 0.9, rng()) },
+            stroke: { width: lerp(0.7, 1.2, rng()) },
           });
         }
       } else {
-        // A sparse pass of tiny hard dots, added light. This is what makes
-        // the dusting read as metallic rather than as printed pigment.
+        // A sparse pass of tiny flat highlight dots, lighter than the base
+        // colour. This is what makes the dusting read as metallic rather
+        // than as printed pigment.
         for (let i = 0; i < 10; i++) {
           const { cx, cy } = place(i);
           out.push({
@@ -826,8 +770,7 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
             cx,
             cy,
             r: lerp(0.5, 1.1, rng()),
-            paint: { type: "solid", color: "#ffffff", opacity: lerp(0.35, 0.75, rng()) },
-            blend: "plusLighter",
+            paint: { color: lighten(pattern.color, 0.7), opacity: lerp(0.5, 0.85, rng()) },
           });
         }
       }
@@ -841,12 +784,10 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
       const skeleton = [-28, -18, -8, 2, 12, 22, 31];
       const hi = top - 5;
       const lo = bot + 5;
-      // Each bar is drawn twice: a wide soft halo under a tighter core. A real
-      // bar on a fish has a shoulder where the pigment thins, not a cut edge.
-      const bar = (d: string) => {
-        out.push({ kind: "path", d, paint: solid(pattern.color, 0.5), blur: 1.6, clip: bodyD });
-        out.push({ kind: "path", d, paint: solid(pattern.color, 0.92), blur: 0.35, clip: bodyD });
-      };
+      // One flat fill per bar — no soft halo, this is ink on a fish, not an
+      // airbrushed pigment gradient.
+      const bar = (d: string) =>
+        out.push({ kind: "path", d, paint: solid(pattern.color, 0.94), clip: bodyD });
       const fullBar = (x: number, w: number, lean: number) =>
         `M ${f(x - w)} ${f(hi)} Q ${f(x - w + lean)} 0 ${f(x - w - 1)} ${f(lo)} ` +
         `L ${f(x + w - 1)} ${f(lo)} Q ${f(x + w + lean)} 0 ${f(x + w)} ${f(hi)} Z`;
@@ -900,12 +841,12 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
     case "patches": {
       const [primary, secondary] = pattern.colors;
       const nx = geom.nose.x;
-      // Koi/calico patches are bold and near-hard-edged; "soft" (sakura) keeps
-      // a soft transition but is toned down from a full blur wash so the
-      // patches stay recognisable at small sizes instead of reading as a haze.
-      const patchBlur = pattern.style === "soft" ? 2.2 : 1.1;
+      // Koi/calico patches are bold and hard-edged. "Soft" (sakura) has no
+      // blur to fall back on in a flat style, so it stays distinct through
+      // fewer, smaller patches at a lower fixed opacity instead — a lighter
+      // touch rather than a softer edge.
       const patch = (d: string, color: string, opacity: number) =>
-        out.push({ kind: "path", d, paint: solid(color, opacity), blur: patchBlur, clip: bodyD });
+        out.push({ kind: "path", d, paint: solid(color, opacity), clip: bodyD });
       if (pattern.style === "koi") {
         // Sanke: a red hood over the front ~30-45% of the fish, and nothing
         // red further back, so the body still reads as pearl white with a
@@ -942,102 +883,64 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
         patch(blobPath(32, -13, 8, 7, 0.55, rng), secondary ?? "#23262e", 0.9);
         return out;
       }
-      // soft (sakura) — tighter wobble than koi/calico so the patch edges read
-      // as an intentional shape rather than a blob, even under the blur.
-      patch(blobPath(-15, -9, 13, 11, 0.3, rng), primary, 0.94);
-      patch(blobPath(14, 9, 12, 10, 0.3, rng), secondary ?? primary, 0.9);
-      patch(blobPath(28, -9, 9, 8, 0.3, rng), primary, 0.9);
-      patch(blobPath(nx + 18, 5, 8, 7, 0.3, rng), secondary ?? primary, 0.8);
+      // soft (sakura) — smaller, fewer, and lower-opacity than koi/calico so
+      // the pastel read survives without blur to fall back on.
+      patch(blobPath(-15, -9, 9, 8, 0.3, rng), primary, 0.72);
+      patch(blobPath(16, 8, 8, 7, 0.3, rng), secondary ?? primary, 0.68);
+      patch(blobPath(29, -8, 6, 5, 0.3, rng), primary, 0.68);
       return out;
     }
   }
 }
 
 interface Shimmer {
-  /** Drawn inside the isolated skin group, under the volume shading. */
-  base: Primitive;
+  /** Tint the sticker-shine shape (built in buildFishSpec) uses. */
+  tint: string;
   /**
-   * Drawn AFTER the skin group, on top of gloss/bloom/shadow. The base
-   * diagonal sweep is subtle enough to sit under the shading like the
-   * original single-primitive shimmer did, but small targeted highlights
-   * (Electric Blue's dorsal/tail glow) would be washed out there — the
-   * softLight bloom and screen gloss band are large, high-opacity overlays
-   * covering most of the upper flank.
+   * Iridescent (Electric Blue) only: flat accent dashes along the dorsal
+   * ridge and tail root, on top of everything else, so the metallic read
+   * comes from more than one highlight the way a real reflective fish would.
    */
   accents: Primitive[];
 }
 
-function shimmerPrimitive(kind: ShimmerKind, geom: BodyGeom, material: Material): Shimmer {
+function shimmerPrimitive(kind: ShimmerKind, geom: BodyGeom): Shimmer {
   const bodyD = geom.d;
-  const stops =
-    kind === "silver"
-      ? [
-          { offset: 0, color: "rgba(255,255,255,0)" },
-          { offset: 0.5, color: "rgba(255,255,255,0.55)" },
-          { offset: 1, color: "rgba(255,255,255,0)" },
-        ]
-      : kind === "bluePurple"
-        ? [
-            { offset: 0, color: "rgba(148,116,255,0)" },
-            { offset: 0.45, color: "rgba(148,116,255,0.85)" },
-            { offset: 0.7, color: "rgba(90,148,255,0.7)" },
-            { offset: 1, color: "rgba(148,116,255,0)" },
-          ]
-        : [
-            { offset: 0, color: "rgba(126,224,255,0)" },
-            { offset: 0.35, color: "rgba(126,224,255,0.6)" },
-            { offset: 0.65, color: "rgba(255,255,255,0.5)" },
-            { offset: 1, color: "rgba(126,224,255,0)" },
-          ];
-  // Higher-tier fish get a punchier shimmer, matching "strong metallic
-  // reflections" (epic) / "premium gloss" (legendary) — ratioed off rare,
-  // which is where this opacity was originally tuned.
-  const opacity = Math.min(1, 0.8 * (material.bloom / 0.62));
-  const base: Primitive = {
-    kind: "path",
-    d: "M -36 -14 C -12 -21 14 -18 34 -6 C 14 -9 -12 -12 -36 -11 Z",
-    paint: { type: "linear", from: { x: -36, y: -14 }, to: { x: 34, y: -6 }, stops, opacity },
-    clip: bodyD,
-  };
-  if (kind !== "iridescent") return { base, accents: [] };
+  const tint = kind === "silver" ? "#ffffff" : kind === "bluePurple" ? "#9474ff" : "#7ee9ff";
+  if (kind !== "iridescent") return { tint, accents: [] };
 
-  // Electric Blue: two extra targeted cyan highlights — along the dorsal
-  // ridge and over the peduncle/tail root — on top of the base diagonal
-  // sweep, so the "iridescent" read isn't just one sliver but a metallic
-  // body with brighter accents where a real fish would catch the light.
   const dorsalGlow: Primitive = {
     kind: "path",
-    d:
-      `M ${f(geom.backPeak.x - 14)} ${f(geom.backPeak.y + 5)} ` +
-      `Q ${f(geom.backPeak.x)} ${f(geom.backPeak.y - 5)} ${f(geom.backPeak.x + 17)} ${f(geom.backPeak.y + 3)}`,
-    paint: { type: "solid", color: "#7ff2ff", opacity: 0.5 * (material.bloom / 0.62) },
-    stroke: { width: 3 },
-    blend: "plusLighter",
-    blur: 2.2,
+    d: `M ${f(geom.backPeak.x - 12)} ${f(geom.backPeak.y + 5)} L ${f(geom.backPeak.x + 12)} ${f(geom.backPeak.y + 2)}`,
+    paint: { color: "#7ff2ff", opacity: 0.85 },
+    stroke: { width: 2.4 },
     clip: bodyD,
   };
   const tailGlow: Primitive = {
     kind: "path",
-    d: `M ${f(geom.peduncleTop.x - 10)} ${f(geom.peduncleTop.y + 3)} L ${f(geom.peduncleTop.x + 3)} 0`,
-    paint: { type: "solid", color: "#8ff7ff", opacity: 0.46 * (material.bloom / 0.62) },
-    stroke: { width: 2.6 },
-    blend: "plusLighter",
-    blur: 1.8,
+    d: `M ${f(geom.peduncleTop.x - 9)} ${f(geom.peduncleTop.y + 3)} L ${f(geom.peduncleTop.x + 2)} 0`,
+    paint: { color: "#8ff7ff", opacity: 0.8 },
+    stroke: { width: 2 },
     clip: bodyD,
   };
-  return { base, accents: [dorsalGlow, tailGlow] };
+  return { tint, accents: [dorsalGlow, tailGlow] };
 }
 
 // ---------------------------------------------------------------------------
 // The spec builder.
 // ---------------------------------------------------------------------------
 
+// A fixed ink colour across every palette — the reference art's outline is
+// bold and uniform-weight across the whole roster, which reads as one fixed
+// ink, not a per-fish tint.
+const OUTLINE_COLOR = "#181818";
+
 export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec {
   const geom = bodyGeom(traits.body);
   const bodyD = geom.d;
   const px = geom.peduncleTop.x;
-  // Rarity-driven finish: how glossy/rim-lit/translucent-finned this fish
-  // reads, and how "clean" its fin lobes are — see materialFor()'s header.
+  // Rarity-driven finish: how "clean" fin lobes are, and (Section D) how
+  // premium the sticker-shine/pattern read — see materialFor()'s header.
   const material = materialFor(def.rarity.tier);
   const finRng = makeRng(`fin-${def.id}`);
   const tail = tailGeom(traits.tail, geom, material.finJitter, finRng);
@@ -1045,77 +948,35 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
   const p = def.palette;
   const belly = geom.bellyLow.y;
   const bp = geom.backPeak.y;
-  const outlineColor = darken(p.back, 0.45);
 
-  // A fin is a translucent membrane stretched over rays, not a coloured shape
-  // with lines drawn on top. So it is emitted as ONE group: the membrane fades
-  // to genuinely transparent at the edge, the rays *multiply* through it, and a
-  // sheen runs along the leading edge. The group's own opacity handles the
-  // near/far dimming, which used to be pre-multiplied into three separate
-  // paints.
-  const finPaint = (shape: FinShape): Paint => ({
-    type: "linear",
-    from: shape.pivot,
-    to: shape.tip,
-    stops: [
-      { offset: 0, color: rgba(darken(p.fin, 0.24), 0.98) },
-      { offset: 0.55, color: rgba(p.fin, 0.93) },
-      // Translucent at the trailing edge — the water shows through — but the
-      // fin must still read as its own colour, so this stops well short of 0.
-      // How far short is rarity-driven: common fins stay fairly opaque, epic
-      // and legendary fins are noticeably more see-through.
-      { offset: 1, color: rgba(lighten(p.fin, 0.18), material.finTrail) },
-    ],
-  });
-  const pushFin = (out: Primitive[], shape: FinShape, alpha = 1, rayAlpha = 0.5) => {
-    const children: Primitive[] = [
-      { kind: "path", d: shape.d, paint: finPaint(shape) },
-      // Rays darken the membrane rather than sitting on it. Clipped to the fin
-      // so they cannot poke past the scalloped edge.
-      ...shape.rays.map((d): Primitive => ({
-        kind: "path",
-        d,
-        paint: { type: "solid", color: darken(p.finRay, 0.1), opacity: rayAlpha },
-        stroke: { width: 1 },
-        blend: "multiply",
-        clip: shape.d,
-      })),
-      // A soft light catch along the root-to-tip axis.
-      {
-        kind: "path",
-        d: shape.d,
-        blend: "plusLighter",
-        blur: 2,
-        clip: shape.d,
-        paint: {
-          type: "linear",
-          from: shape.pivot,
-          to: shape.tip,
-          stops: [
-            { offset: 0, color: "rgba(255,255,255,0)" },
-            { offset: 0.35, color: "rgba(255,255,255,0.13)" },
-            { offset: 1, color: "rgba(255,255,255,0)" },
-          ],
-        },
-      },
-      {
-        kind: "path",
-        d: shape.d,
-        paint: { type: "solid", color: outlineColor, opacity: 0.38 },
-        stroke: { width: 1.2 },
-      },
-    ];
-    out.push({ kind: "group", children, opacity: alpha, isolate: true });
+  // A fin is a flat coloured membrane with a bold outline and a handful of
+  // ray-line strokes — no gradient, no translucency. Rarity still shows: the
+  // flatter/lighter the fill (`finTint`, replacing what used to be a
+  // trailing-edge alpha fade), the more "delicate" the fin reads.
+  const finTint = lighten(p.fin, material.finTint);
+  const pushFin = (out: Primitive[], shape: FinShape) => {
+    out.push({
+      kind: "group",
+      children: [
+        { kind: "path", d: shape.d, paint: { color: finTint } },
+        // Ray lines, clipped to the fin so they can't poke past the scalloped
+        // edge — decorative line detail, not a gradient membrane.
+        ...shape.rays.map((d): Primitive => ({
+          kind: "path",
+          d,
+          paint: { color: darken(p.finRay, 0.15), opacity: 0.55 },
+          stroke: { width: 0.9 },
+          clip: shape.d,
+        })),
+        { kind: "path", d: shape.d, paint: { color: OUTLINE_COLOR }, stroke: { width: 1.6 } },
+      ],
+    });
   };
 
   const tailPrimitives: Primitive[] = [];
-  pushFin(tailPrimitives, tail, 1, 0.46);
+  pushFin(tailPrimitives, tail);
 
   const body: Primitive[] = [];
-
-  // Fins that sit behind the body outline: dorsal above, pelvic + anal below.
-  // Their roots are covered by the body fill drawn next.
-  pushFin(body, dorsal);
 
   // Roots sit inside the silhouette, so only the fan below the belly shows.
   const pelvicFar = fan({
@@ -1155,141 +1016,63 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
     rng: finRng,
   });
 
-  // The far-side pelvic reads as depth: same fin, pushed back and dimmed.
-  pushFin(body, pelvicFar, 0.55, 0.22);
-  pushFin(body, pelvic, 0.95);
-  pushFin(body, anal, 0.95);
+  // Fins that grow FROM the body — dorsal, pelvics, anal — are pushed BEFORE
+  // the body fill/outline, not after. Every one of their roots sits well
+  // inside the silhouette (see each fin's own root coordinates above and in
+  // dorsalGeom), so the opaque body fill + contour drawn on top buries the
+  // root entirely: no competing outline, no hard seam, and the body's own
+  // shadow/shine naturally "continues" onto the fin base because that patch
+  // of the fin base literally IS body surface. Only the free outer part of
+  // each fin — the part beyond the body's edge — ends up visible, with its
+  // own outline, reading as one continuous creature rather than parts glued
+  // together. (The tail gets the same treatment via z-order in fish-sprite.tsx
+  // — its group renders before the body already — plus a hub root deep
+  // inside the peduncle, built in tailGeom.)
+  pushFin(body, dorsal);
+  pushFin(body, pelvicFar);
+  pushFin(body, pelvic);
+  pushFin(body, anal);
 
-  // Everything painted onto the skin lives in ONE isolated group. Isolation is
-  // a correctness requirement, not an optimisation: `overlay`/`softLight`/
-  // `multiply` composite against their backdrop, and without a layer that
-  // backdrop is the tank water, not the fish.
-  const skin: Primitive[] = [];
+  // The body: one flat fill.
+  body.push({ kind: "path", d: geom.d, paint: { color: p.mid } });
 
-  // The base colour: back→belly gradient.
-  skin.push({
+  // Pattern + shimmer sit directly on the flat base…
+  body.push(...patternPrimitives(def, geom, material));
+  const shimmer = def.shimmer ? shimmerPrimitive(def.shimmer, geom) : null;
+
+  // …then ONE flat shadow shape gives it roundness and ONE flat sticker-shine
+  // shape gives it a premium read — both hard-edged, no blur/gradient. This
+  // replaces what used to be a four-primitive gradient shading stack, and
+  // because it's drawn AFTER the fin roots above, it visibly "continues" onto
+  // the buried fin bases rather than stopping short at the body edge.
+  const shadowRng = makeRng(`shadow-${def.id}`);
+  body.push({
     kind: "path",
-    d: geom.d,
-    paint: {
-      type: "linear",
-      from: { x: 0, y: bp },
-      to: { x: 0, y: belly },
-      stops: [
-        { offset: 0, color: p.back },
-        { offset: 0.5, color: p.mid },
-        { offset: 1, color: p.belly },
-      ],
-    },
-  });
-
-  // Pattern + shimmer sit directly on the base colour…
-  skin.push(...patternPrimitives(def, geom, material));
-  const shimmer = def.shimmer ? shimmerPrimitive(def.shimmer, geom, material) : null;
-  if (shimmer) skin.push(shimmer.base);
-
-  // Sparse scale scribbles across the flank.
-  const scaleRng = makeRng(`scales-${def.id}`);
-  for (let i = 0; i < 8; i++) {
-    const x = lerp(-18, 30, scaleRng());
-    const y = lerp(-14, 14, scaleRng());
-    skin.push({
-      kind: "path",
-      d: `M ${f(x)} ${f(y)} q 1.8 -2.2 3.6 0 q 1.8 2.2 3.6 0`,
-      paint: { type: "solid", color: "#000000", opacity: 0.055 },
-      stroke: { width: 0.7 },
-      clip: bodyD,
-    });
-  }
-
-  // …and the volume goes over the top of all of it.
-  //
-  // Light from above is a vertical ramp, so that stays linear — but it is now
-  // carrying only the top-down component, at roughly half its old strength,
-  // because the two radials below supply the actual roundness.
-  skin.push({
-    kind: "path",
-    d: geom.d,
-    paint: {
-      type: "linear",
-      from: { x: 0, y: bp },
-      to: { x: 0, y: belly },
-      stops: [
-        { offset: 0, color: "rgba(0,0,0,0.30)" },
-        { offset: 0.1, color: "rgba(0,0,0,0.05)" },
-        { offset: 0.34, color: "rgba(255,255,255,0.0)" },
-        { offset: 0.6, color: "rgba(0,0,0,0.04)" },
-        { offset: 0.84, color: "rgba(255,255,255,0.13)" },
-        { offset: 0.94, color: "rgba(255,255,255,0.02)" },
-        { offset: 1, color: "rgba(0,0,0,0.24)" },
-      ],
-    },
-  });
-
-  // The airbrushed core: a wide elliptical bloom over the upper flank. Soft
-  // light *lightens the colour that is already there* instead of washing it
-  // toward grey the way a plain white overlay does — that difference is most of
-  // what separates "illustrated" from "flat vector". Peak strength is
-  // rarity-driven: near-matte at common, a strong sheen at legendary.
-  skin.push({
-    kind: "path",
-    d: geom.d,
-    blend: "softLight",
-    paint: {
-      type: "radial",
-      center: { x: -8, y: bp * 0.45 },
-      radius: geom.halfHeight * 1.7,
-      scale: { x: 2.4, y: 1 },
-      stops: [
-        { offset: 0, color: `rgba(255,255,255,${material.bloom})` },
-        { offset: 0.55, color: `rgba(255,255,255,${(material.bloom * 0.48).toFixed(2)})` },
-        { offset: 1, color: "rgba(255,255,255,0)" },
-      ],
-    },
-  });
-
-  // Depth at the rear and under the belly. Warm-dark rather than black, so the
-  // shadow keeps the body's own hue instead of going muddy.
-  const shadowTone = darken(p.back, 0.6);
-  skin.push({
-    kind: "path",
-    d: geom.d,
-    blend: "multiply",
-    paint: {
-      type: "radial",
-      center: { x: px * 0.6, y: belly * 0.7 },
-      radius: geom.halfHeight * 1.9,
-      scale: { x: 1.5, y: 1 },
-      stops: [
-        { offset: 0, color: rgba(shadowTone, 0.5) },
-        { offset: 0.6, color: rgba(shadowTone, 0.16) },
-        { offset: 1, color: rgba(shadowTone, 0) },
-      ],
-    },
-  });
-
-  // A soft gloss band along the upper flank — blurred, so it has no edge to
-  // give itself away. This is the wet highlight the reference art leans on;
-  // rarity scales its strength ("matte" at common, "premium gloss" at
-  // legendary).
-  skin.push({
-    kind: "path",
-    d: geom.d,
-    blend: "screen",
-    blur: 4,
+    d: blobPath(
+      px * 0.55,
+      belly * 0.55,
+      geom.halfHeight * 1.1,
+      geom.halfHeight * 0.75,
+      0.35,
+      shadowRng,
+    ),
+    paint: { color: p.back, opacity: material.shadow },
     clip: bodyD,
-    paint: {
-      type: "linear",
-      from: { x: 0, y: bp * 0.9 },
-      to: { x: 0, y: bp * 0.1 },
-      stops: [
-        { offset: 0, color: "rgba(255,255,255,0)" },
-        { offset: 0.45, color: `rgba(255,255,255,${material.gloss})` },
-        { offset: 1, color: "rgba(255,255,255,0)" },
-      ],
-    },
+  });
+  const shineRng = makeRng(`shine-${def.id}`);
+  body.push({
+    kind: "path",
+    d: blobPath(bp * 0.3, bp * 0.55, geom.halfHeight * 0.7, geom.halfHeight * 0.4, 0.3, shineRng),
+    paint: { color: shimmer?.tint ?? p.belly, opacity: material.shine },
+    clip: bodyD,
   });
 
-  body.push({ kind: "group", children: skin, isolate: true });
+  // The contour that makes the whole thing read as illustration — ONE
+  // continuous stroke around the body silhouette. Fin outlines never cross
+  // it because their roots are buried underneath; only the outer, free part
+  // of each fin carries its own outline, so this line is the fish's one
+  // uninterrupted boundary.
+  body.push({ kind: "path", d: geom.d, paint: { color: OUTLINE_COLOR }, stroke: { width: 2.4 } });
 
   // Gill cover: a lighter cheek plate with a hard trailing edge.
   const gx = geom.nose.x + 21; // operculum trailing edge, scaled off the snout
@@ -1299,72 +1082,38 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
       `M ${f(gx)} ${f(bp + 7)} C ${f(gx + 7)} ${f(bp + 15)} ${f(gx + 7)} 6 ${f(gx)} 15 ` +
       `C ${f(gx - 10)} 13 ${f(gx - 17)} 4 ${f(gx - 18)} -4 ` +
       `C ${f(gx - 18)} -12 ${f(gx - 11)} ${f(bp + 8)} ${f(gx)} ${f(bp + 7)} Z`,
-    paint: { type: "solid", color: "#ffffff", opacity: 0.16 },
+    paint: { color: p.belly, opacity: 0.5 },
     clip: bodyD,
   });
   body.push({
     kind: "path",
     d: `M ${f(gx)} ${f(bp + 7)} C ${f(gx + 7)} ${f(bp + 15)} ${f(gx + 7)} 6 ${f(gx)} 15`,
-    paint: { type: "solid", color: outlineColor, opacity: 0.6 },
-    stroke: { width: 1.7 },
+    paint: { color: OUTLINE_COLOR, opacity: 0.75 },
+    stroke: { width: 1.4 },
     clip: bodyD,
-  });
-
-  // The contour that makes the whole thing read as illustration. `multiply`
-  // rather than a flat dark stroke: it darkens while keeping the body's own
-  // hue, so the outline sits *in* the fish instead of on top of it.
-  body.push({
-    kind: "path",
-    d: geom.d,
-    paint: { type: "solid", color: outlineColor, opacity: 0.6 },
-    stroke: { width: 2.2 },
-    blend: "multiply",
-  });
-
-  // Rim light: a bright edge along the top and rear, where the key light wraps
-  // around the silhouette. Clipped to the body so only the inner half of the
-  // stroke survives, and masked by a ramp so it fades out before the belly.
-  // Peak strength is rarity-driven — minimal at common, "bright rim lighting"
-  // at legendary.
-  body.push({
-    kind: "path",
-    d: geom.d,
-    stroke: { width: 2 },
-    blend: "plusLighter",
-    blur: 0.8,
-    clip: bodyD,
-    paint: {
-      type: "linear",
-      from: { x: geom.nose.x, y: belly },
-      to: { x: px, y: bp },
-      stops: [
-        { offset: 0, color: "rgba(255,255,255,0)" },
-        { offset: 0.55, color: `rgba(255,255,255,${(material.rim * 0.32).toFixed(2)})` },
-        { offset: 1, color: `rgba(255,255,255,${material.rim})` },
-      ],
-    },
   });
 
   // Shimmer accents (Electric Blue's dorsal/tail glow) land here — on top of
-  // every shading layer, so they read as bright highlights instead of being
-  // absorbed into the gloss/bloom underneath.
+  // every shading layer, so they read as bright highlights.
   if (shimmer?.accents.length) body.push(...shimmer.accents);
 
-  // Pectoral fin: a small translucent membrane just behind the gill cover,
-  // angled down and back.
+  // Pectoral fin: drawn on top of the body (it's the one fin a real fish's
+  // silhouette doesn't hide), so instead of burying its root it's positioned
+  // to overlap INTO the gill cover — root pulled back and up so it visibly
+  // rests against the body/gill curve rather than floating just beside it.
   const pectoral = fan({
-    pivot: { x: gx + 4, y: -1 },
-    radius: 14,
-    from: 16,
-    to: 78,
+    pivot: { x: gx + 1, y: 2 },
+    radius: 15,
+    from: 20,
+    to: 88,
     lobes: 4,
     bulge: 1.8,
-    rootTop: { x: gx + 2, y: -5 },
-    rootBottom: { x: gx + 8, y: 2 },
+    rootTop: { x: gx - 3, y: -2 },
+    rootBottom: { x: gx + 2, y: 6 },
     jitter: material.finJitter,
     rng: finRng,
   });
-  pushFin(body, pectoral, 0.6, 0.26);
+  pushFin(body, pectoral);
 
   // The little upturned molly mouth, right at the snout tip: a dark crease
   // with a lip highlight above it.
@@ -1373,49 +1122,48 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
   body.push({
     kind: "path",
     d: `M ${f(nx + 0.5)} ${f(ny + 3)} C ${f(nx + 3)} ${f(ny + 4.5)} ${f(nx + 6)} ${f(ny + 5.5)} ${f(nx + 9)} ${f(ny + 5.5)}`,
-    paint: { type: "solid", color: "#000000", opacity: 0.5 },
+    paint: { color: "#000000", opacity: 0.5 },
     stroke: { width: 1.6 },
     clip: bodyD,
   });
   body.push({
     kind: "path",
     d: `M ${f(nx + 1)} ${f(ny + 1)} C ${f(nx + 4)} ${f(ny + 2)} ${f(nx + 7)} ${f(ny + 2.5)} ${f(nx + 10)} ${f(ny + 2.5)}`,
-    paint: { type: "solid", color: "#ffffff", opacity: 0.28 },
+    paint: { color: "#ffffff", opacity: 0.28 },
     stroke: { width: 1.3 },
     clip: bodyD,
   });
 
-  // The eye: high and forward — still the most recognisable feature, but
-  // sized down ~17% from the original so it reads as cute rather than
-  // dominating the face. Cream ring, dark rim, wide pupil, one clean primary
-  // catchlight and a much subtler secondary rather than two equally strong
-  // ones — a single crisp highlight reads better at small sizes than two.
+  // The eye: high and forward — still the most recognisable feature. Cream
+  // fill, a real stroked-circle rim (no more SVG-arc-path workaround now that
+  // circles can stroke), a dark pupil, and one clean catchlight — a single
+  // crisp highlight reads better at small sizes than two competing ones.
   const eye = { cx: nx + 19, cy: -9 };
   const r = 5.3;
-  body.push({ kind: "circle", ...eye, r, paint: { type: "solid", color: "#f6f2e8" } });
-  body.push({
-    kind: "path",
-    d: `M ${f(eye.cx - r)} ${f(eye.cy)} a ${r} ${r} 0 1 0 ${f(r * 2)} 0 a ${r} ${r} 0 1 0 ${f(-r * 2)} 0`,
-    paint: { type: "solid", color: "#12161f", opacity: 0.9 },
-    stroke: { width: 1.1 },
-  });
-  body.push({ kind: "circle", ...eye, r: 3.6, paint: { type: "solid", color: "#0b0e14" } });
+  body.push({ kind: "circle", ...eye, r, paint: { color: "#f6f2e8" } });
+  // Rare+ only: a coloured accent ring just outside the dark rim, in the
+  // variety's own accent hue — the single most legible "this one is special"
+  // cue a flat-vector fish has, worn right on its face.
+  if (material.eyeRing > 0) {
+    body.push({
+      kind: "circle",
+      ...eye,
+      r: r + 1,
+      paint: { color: def.accentColor, opacity: material.eyeRing },
+      stroke: { width: 1.8 },
+    });
+  }
+  body.push({ kind: "circle", ...eye, r, paint: { color: OUTLINE_COLOR }, stroke: { width: 1.3 } });
+  body.push({ kind: "circle", ...eye, r: 3.6, paint: { color: "#0b0e14" } });
   body.push({
     kind: "circle",
     cx: eye.cx - 1.6,
     cy: eye.cy - 1.7,
     r: 1.5,
-    paint: { type: "solid", color: "#f9fcff", opacity: 0.98 },
-  });
-  body.push({
-    kind: "circle",
-    cx: eye.cx + 1.5,
-    cy: eye.cy + 1.7,
-    r: 0.75,
-    paint: { type: "solid", color: "#f9fcff", opacity: 0.4 },
+    paint: { color: "#ffffff", opacity: 0.95 },
   });
 
-  // Every drawn shape contributes; the pad covers strokes and soft edges.
+  // Every drawn shape contributes; the pad covers stroke width.
   const bounds = inflateBox(
     [tail.bbox, dorsal.bbox, pelvicFar.bbox, pelvic.bbox, anal.bbox, pectoral.bbox].reduce(
       unionBox,
@@ -1426,7 +1174,7 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
 
   return {
     tail: tailPrimitives,
-    tailPivot: { x: px, y: 1 },
+    tailPivot: { x: tail.pivot.x, y: 1 },
     body,
     bodyPathD: geom.d,
     silhouetteDs: [tail.d, dorsal.d, pelvicFar.d, pelvic.d, anal.d, geom.d, pectoral.d],

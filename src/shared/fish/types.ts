@@ -83,7 +83,10 @@ export interface ColorDef {
   name: string;
   description: string;
   rarity: Rarity;
-  /** UI chips/badges — not fish rendering. */
+  /**
+   * UI chips/badges, and — for rare+ tiers — the colour of the rendered
+   * eye-ring rarity accent (see `Material.eyeRing` in render-spec.ts).
+   */
   accentColor: string;
   palette: {
     back: string;

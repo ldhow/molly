@@ -2,13 +2,10 @@
 // bakes a fish once and replays it as a flat image.
 //
 // Why this exists. The declarative <PrimitiveNode> tree in fish-sprite.tsx is
-// ~84 nodes per fish, and Phase 2's shading needs ~7 offscreen layers per fish
-// (one per fin group, one for the skin) plus a dozen mask blurs. At
-// MAX_RENDERED_FISH the tank would pay all of that on EVERY frame, for art that
-// never changes — only the fish's transform does.
-//
-// So: draw the spec once into an offscreen surface, snapshot it, and let the
-// per-frame cost be a single textured quad. Blur and layers are paid once.
+// dozens of nodes per fish. At MAX_RENDERED_FISH the tank would rebuild all of
+// that on EVERY frame, for art that never changes — only the fish's transform
+// does. So: draw the spec once into an offscreen surface, snapshot it, and let
+// the per-frame cost be a single textured quad.
 //
 // The tail is baked separately because it is the one part that animates
 // (it rotates about `tailPivot` every frame).
@@ -18,32 +15,21 @@
 // case fails the build here rather than silently rendering nothing.
 
 import {
-  BlendMode,
-  BlurStyle,
   ClipOp,
   FillType,
   PaintStyle,
   Skia,
   StrokeCap,
   StrokeJoin,
-  TileMode,
   type SkCanvas,
   type SkImage,
   type SkPaint,
   type SkPath,
   type SkPicture,
-  type SkShader,
 } from "@shopify/react-native-skia";
 
 import { getColorDef } from "@/shared/fish/catalog";
-import {
-  buildFishSpec,
-  STAGE_SQUISH,
-  type Blend,
-  type Box,
-  type Paint as SpecPaint,
-  type Primitive,
-} from "@/shared/fish/render-spec";
+import { buildFishSpec, STAGE_SQUISH, type Box, type Primitive } from "@/shared/fish/render-spec";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
 
 /**
@@ -76,83 +62,13 @@ function assertNever(x: never): never {
   throw new Error(`fish-picture: unhandled IR case ${JSON.stringify(x)}`);
 }
 
-function blendMode(blend: Blend): BlendMode {
-  switch (blend) {
-    case "srcOver":
-      return BlendMode.SrcOver;
-    case "multiply":
-      return BlendMode.Multiply;
-    case "screen":
-      return BlendMode.Screen;
-    case "overlay":
-      return BlendMode.Overlay;
-    case "softLight":
-      return BlendMode.SoftLight;
-    case "plusLighter":
-      return BlendMode.Plus;
-    default:
-      return assertNever(blend);
-  }
-}
-
-function shaderFor(paint: SpecPaint): SkShader | null {
-  switch (paint.type) {
-    case "solid":
-      return null;
-    case "linear":
-      return Skia.Shader.MakeLinearGradient(
-        Skia.Point(paint.from.x, paint.from.y),
-        Skia.Point(paint.to.x, paint.to.y),
-        paint.stops.map((s) => Skia.Color(s.color)),
-        paint.stops.map((s) => s.offset),
-        TileMode.Clamp,
-      );
-    case "radial": {
-      // The elliptical variant is a uniform radial with a local matrix that
-      // scales about the centre — the same construction SVG expresses as
-      // gradientTransform, so the two backends agree exactly.
-      let localMatrix;
-      const s = paint.scale;
-      if (s && (s.x !== 1 || s.y !== 1)) {
-        localMatrix = Skia.Matrix();
-        localMatrix.translate(paint.center.x, paint.center.y);
-        localMatrix.scale(s.x, s.y);
-        localMatrix.translate(-paint.center.x, -paint.center.y);
-      }
-      return Skia.Shader.MakeRadialGradient(
-        Skia.Point(paint.center.x, paint.center.y),
-        paint.radius,
-        paint.stops.map((st) => Skia.Color(st.color)),
-        paint.stops.map((st) => st.offset),
-        TileMode.Clamp,
-        localMatrix,
-      );
-    }
-    default:
-      return assertNever(paint);
-  }
-}
-
-function makePaint(prim: Extract<Primitive, { paint: SpecPaint }>): SkPaint {
+function makePaint(prim: Extract<Primitive, { paint: { color: string } }>): SkPaint {
   const paint = Skia.Paint();
   paint.setAntiAlias(true);
-
-  const shader = shaderFor(prim.paint);
-  if (shader) {
-    paint.setShader(shader);
-  } else if (prim.paint.type === "solid") {
-    paint.setColor(Skia.Color(prim.paint.color));
-  }
-  // `opacity` modulates whatever the colour or shader produced.
+  paint.setColor(Skia.Color(prim.paint.color));
   paint.setAlphaf((prim.paint.opacity ?? 1) * paint.getAlphaf());
 
-  if (prim.blend) paint.setBlendMode(blendMode(prim.blend));
-  // A primitive blur is a MASK filter: it softens this shape's own alpha in a
-  // single draw. `respectCTM: true` so the sigma scales with the bake factor.
-  if (prim.blur !== undefined && prim.blur > 0) {
-    paint.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, prim.blur, true));
-  }
-  if (prim.kind === "path" && prim.stroke) {
+  if (prim.stroke) {
     paint.setStyle(PaintStyle.Stroke);
     paint.setStrokeWidth(prim.stroke.width);
     paint.setStrokeCap(StrokeCap.Round);
@@ -191,17 +107,15 @@ export function drawSpec(canvas: SkCanvas, prims: Primitive[], cache: PathCache)
     }
 
     if (prim.kind === "group") {
-      // A group blur is an IMAGE filter, and `isolate` forces the same layer so
-      // children blend against the fish rather than the tank water behind it.
-      const layerPaint = Skia.Paint();
-      layerPaint.setAlphaf(prim.opacity ?? 1);
-      if (prim.blend) layerPaint.setBlendMode(blendMode(prim.blend));
-      if (prim.blur !== undefined && prim.blur > 0) {
-        layerPaint.setImageFilter(Skia.ImageFilter.MakeBlur(prim.blur, prim.blur, TileMode.Decal));
+      if (prim.opacity !== undefined && prim.opacity !== 1) {
+        const layerPaint = Skia.Paint();
+        layerPaint.setAlphaf(prim.opacity);
+        canvas.saveLayer(layerPaint);
+        drawSpec(canvas, prim.children, cache);
+        canvas.restore();
+      } else {
+        drawSpec(canvas, prim.children, cache);
       }
-      canvas.saveLayer(layerPaint);
-      drawSpec(canvas, prim.children, cache);
-      canvas.restore();
     } else if (prim.kind === "circle") {
       canvas.drawCircle(prim.cx, prim.cy, prim.r, makePaint(prim));
     } else if (prim.kind === "path") {

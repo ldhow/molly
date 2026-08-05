@@ -1,15 +1,11 @@
 import {
-  Blur,
-  BlurMask,
   Circle,
   ColorMatrix,
   Group,
   Image as SkiaImage,
-  LinearGradient,
   Paint,
   Path,
   Picture,
-  RadialGradient,
   Skia,
   useClock,
   useImage,
@@ -33,9 +29,7 @@ import {
   eggSpec,
   SILHOUETTE_COLOR,
   STAGE_SQUISH,
-  type Blend,
   type Box,
-  type Paint as SpecPaint,
   type Primitive,
 } from "@/shared/fish/render-spec";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
@@ -306,85 +300,23 @@ function assertNever(x: never): never {
 }
 
 /**
- * The IR's `Blend` names are deliberately spelled as Skia's own blendMode prop
- * strings, so this is the identity apart from dropping the default. Passing the
- * result to a Skia node is what type-checks that correspondence: if `Blend` ever
- * gains a name Skia doesn't have, the call sites below stop compiling.
- */
-function skiaBlend(blend: Blend): Exclude<Blend, "srcOver"> | undefined {
-  return blend === "srcOver" ? undefined : blend;
-}
-
-function paintChild(paint: SpecPaint) {
-  switch (paint.type) {
-    case "solid":
-      return null;
-    case "linear":
-      return (
-        <LinearGradient
-          start={vec(paint.from.x, paint.from.y)}
-          end={vec(paint.to.x, paint.to.y)}
-          colors={paint.stops.map((s) => s.color)}
-          positions={paint.stops.map((s) => s.offset)}
-        />
-      );
-    case "radial": {
-      // `scale` gives an elliptical falloff; Skia applies it as a transform
-      // about the centre, exactly as SVG's gradientTransform does.
-      const s = paint.scale;
-      return (
-        <RadialGradient
-          c={vec(paint.center.x, paint.center.y)}
-          r={paint.radius}
-          colors={paint.stops.map((st) => st.color)}
-          positions={paint.stops.map((st) => st.offset)}
-          origin={vec(paint.center.x, paint.center.y)}
-          transform={s ? [{ scaleX: s.x }, { scaleY: s.y }] : undefined}
-        />
-      );
-    }
-    default:
-      return assertNever(paint);
-  }
-}
-
-/**
- * One IR primitive as Skia nodes. Clip/blur/blend are applied here rather than
- * by callers so the tree structure matches the SVG emitter one-for-one.
+ * One IR primitive as Skia nodes. `clip` is applied here rather than by
+ * callers so the tree structure matches the SVG emitter one-for-one.
  */
 function PrimitiveNode({ compiled, clips }: { compiled: CompiledPrimitive; clips: ClipCache }) {
   const { prim } = compiled;
 
   if (prim.kind === "group") {
-    const inner = (
-      <>
+    return (
+      <Group clip={prim.clip ? clips.get(prim.clip) : undefined} opacity={prim.opacity ?? 1}>
         {compiled.children!.map((c, i) => (
           <PrimitiveNode key={i} compiled={c} clips={clips} />
         ))}
-      </>
-    );
-    // A group blur is an IMAGE filter — it blurs the composited result, so it
-    // needs a layer. `isolate` forces that same layer so children blending
-    // against "the backdrop" see the fish, not the tank water behind it.
-    const needsLayer = prim.isolate || prim.blur !== undefined || prim.blend !== undefined;
-    const layer = needsLayer ? (
-      <Paint opacity={prim.opacity ?? 1} blendMode={prim.blend ? skiaBlend(prim.blend) : undefined}>
-        {prim.blur !== undefined ? <Blur blur={prim.blur} /> : null}
-      </Paint>
-    ) : undefined;
-    return (
-      <Group clip={prim.clip ? clips.get(prim.clip) : undefined} layer={layer}>
-        {needsLayer ? inner : <Group opacity={prim.opacity ?? 1}>{inner}</Group>}
       </Group>
     );
   }
 
   const opacity = prim.paint.opacity ?? 1;
-  const solidColor = prim.paint.type === "solid" ? prim.paint.color : undefined;
-  const blendMode = prim.blend ? skiaBlend(prim.blend) : undefined;
-  // A primitive blur is a MASK filter: it softens this shape's own alpha in a
-  // single draw, with no offscreen allocation.
-  const maskBlur = prim.blur !== undefined ? <BlurMask blur={prim.blur} style="normal" /> : null;
 
   let node: React.JSX.Element | null = null;
   if (prim.kind === "circle") {
@@ -393,30 +325,24 @@ function PrimitiveNode({ compiled, clips }: { compiled: CompiledPrimitive; clips
         cx={prim.cx}
         cy={prim.cy}
         r={prim.r}
-        color={solidColor}
+        color={prim.paint.color}
         opacity={opacity}
-        blendMode={blendMode}
-      >
-        {paintChild(prim.paint)}
-        {maskBlur}
-      </Circle>
+        style={prim.stroke ? "stroke" : "fill"}
+        strokeWidth={prim.stroke?.width}
+      />
     );
   } else if (prim.kind === "path") {
     if (!compiled.path) return null;
     node = (
       <Path
         path={compiled.path}
-        color={solidColor}
+        color={prim.paint.color}
         opacity={opacity}
         style={prim.stroke ? "stroke" : "fill"}
         strokeWidth={prim.stroke?.width}
         strokeCap="round"
         strokeJoin="round"
-        blendMode={blendMode}
-      >
-        {paintChild(prim.paint)}
-        {maskBlur}
-      </Path>
+      />
     );
   } else {
     return assertNever(prim);
