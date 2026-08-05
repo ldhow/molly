@@ -13,12 +13,14 @@ Molly — a Forest-style focus app themed as an aquarium. A focus session grows 
 ## Commands
 
 ```sh
-npx expo start          # dev server; the only supported workflow (Expo Go)
+npx expo start --port 8082 # dev server against the EAS dev build (8081 is taken)
 npx expo start --web
 npx drizzle-kit generate   # after editing src/db/schema.ts — writes src/db/migrations/ (commit it)
-npx tsc --noEmit           # typecheck
-npx expo lint              # ESLint is not installed yet; this prompts to set it up
+yarn fish:preview          # regenerate src/docs/fish-preview.html — the fish-art iteration loop
+npm run verify             # typecheck + lint + format:check
 ```
+
+Note `format:check` is currently red across ~80 pre-existing files; `npx prettier --check` the files you touched rather than reading the whole-repo result as a regression.
 
 No test runner is configured. The pure modules (`features/session/utils/machine.ts`, `features/stats/utils/stats.ts`, `features/fish/utils/unlocks.ts`, `shared/utils/`) are written to be unit-testable if one is added; until then, verify behavior with the checklist at the end of [src/docs/PLAN.md](src/docs/PLAN.md).
 
@@ -26,7 +28,7 @@ No test runner is configured. The pure modules (`features/session/utils/machine.
 
 ## Hard constraints
 
-- **Expo Go only.** `@shopify/react-native-skia` is pinned to **2.6.2** because that is the version bundled in Expo Go for SDK 57. Upgrading it (or adding any package with custom native code) forces a dev build and breaks the workflow.
+- **EAS development build.** This was "Expo Go only" with `@shopify/react-native-skia` pinned to **2.6.2** (the version Expo Go bundles for SDK 57). The project has since moved to a dev build, so the pin and the no-native-code rule are no longer hard constraints. 2.6.2 is nonetheless still what the fish renderer targets, and it already provides every primitive that renderer needs — treat a Skia upgrade as an independent decision, not a prerequisite for anything.
 - **SDK 57 API surfaces changed.** Per [AGENTS.md](AGENTS.md), re-read the exact page at https://docs.expo.dev/versions/v57.0.0/ for each Expo API immediately before writing code against it.
 - **`reactCompiler` and `typedRoutes` are on** ([app.json](app.json) `experiments`). Typed routes means `router.push("/session")` is checked against the file tree.
 
@@ -60,8 +62,24 @@ When changing session logic, put the decision in `machine.ts` as a pure function
 
 ### Skia tank
 
-[TankCanvas](src/features/tank/components/TankCanvas.tsx) composes water, sand, plants, bubbles, and fish; the same canvas renders the tank (many fish) and the in-session view (one centered growing fish) via the `mode` prop. Animation uses Skia `useClock()` + Reanimated `useDerivedValue` passed straight into Skia props — use Skia's `interpolateColors`, not Reanimated's `interpolateColor`.
-
-[FishSprite](src/features/tank/components/FishSprite.tsx) draws a sprite image when one is registered in [sprites.ts](src/features/tank/utils/sprites.ts) and otherwise falls back to a built-in vector renderer driven by `FishVariant.colors/bodyShape/finShape`. **The sprite manifest is currently empty** — the app runs entirely on the vector fallback. To ship real art, follow the spec and prompt pack in [assets/fish/README.md](assets/fish/README.md) and register the files in `sprites.ts`; nothing else needs to change. Dead fish are the same drawing with a grayscale `ColorMatrix`, flipped, resting on the sand — there is no separate dead artwork.
+[tank-canvas.tsx](src/shared/components/tank/tank-canvas.tsx) composes water, sand, plants, bubbles, and fish; the same canvas renders the tank (many fish) and the in-session view (one centered growing fish) via the `mode` prop. Animation uses Skia `useClock()` + Reanimated `useDerivedValue` passed straight into Skia props — use Skia's `interpolateColors`, not Reanimated's `interpolateColor`.
 
 Rendering is capped at `MAX_RENDERED_FISH` (25) with a "+N more" count.
+
+### How a fish is drawn — read this before touching fish art
+
+[render-spec.ts](src/shared/fish/render-spec.ts) is the single source of truth. It builds a renderer-agnostic list of primitives (SVG path strings + paint descriptors) for a trait combination, and **must stay free of React/React Native/Skia imports** — it runs under plain Node so the preview gallery can use it.
+
+There are **three backends over that one IR**, and they must be changed together:
+
+| Backend          | File                                                                          | Role                                 |
+| ---------------- | ----------------------------------------------------------------------------- | ------------------------------------ |
+| Declarative Skia | [fish-sprite.tsx](src/shared/components/tank/fish-sprite.tsx) `PrimitiveNode` | reference implementation             |
+| Imperative Skia  | [fish-picture.ts](src/shared/components/tank/fish-picture.ts) `drawSpec`      | what actually ships — feeds the bake |
+| SVG              | [fish-preview.ts](scripts/fish-preview.ts) `primitiveSvg`                     | the preview gallery                  |
+
+Each is a `switch` over the same union with an exhaustive `default` that throws, so **adding an IR case fails `npm run typecheck` until all three handle it.** That is the mechanism keeping the preview honest — do not weaken it.
+
+`yarn fish:preview` regenerates [src/docs/fish-preview.html](src/docs/fish-preview.html): every colour × life stage, plus dead and locked, from the exact code the app runs. **This is the iteration loop for art work — no device needed.** Only add IR features both Skia and SVG can express; the header comment in `render-spec.ts` carries the mapping table and the list of deliberately-excluded features (sweep gradients, Perlin noise, SkSL) with reasons.
+
+Fish are **generated, not authored**: ~480 trait combinations, so there is no sprite sheet. `FISH_RENDER_MODE` in `fish-picture.ts` selects `"image"` (default — bake once to a texture, one quad per frame), `"picture"`, or `"nodes"`; each degrades to the next automatically. The `<Image>` sprite path and the empty manifest in [sprites.ts](src/shared/lib/sprites.ts) survive as a per-colour override. Dead fish are the same drawing with a grayscale `ColorMatrix`, flipped, resting on the sand — there is no separate dead artwork.

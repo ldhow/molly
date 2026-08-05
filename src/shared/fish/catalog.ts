@@ -11,17 +11,17 @@ export const COLOR_DEFS: readonly ColorDef[] = [
     id: "goldDust",
     order: 1,
     name: "Gold Dust",
-    description: "Metallic gold up front, fading into black speckles on the rear.",
+    description: "Black head and shoulders washing back into metallic gold, dusted with speckles.",
     rarity: { tier: "common" },
     accentColor: "#f2b53a",
     palette: {
       back: "#d3921f",
       mid: "#f2b53a",
       belly: "#fbd97e",
-      fin: "#e8a428",
-      finRay: "#8f5c12",
+      fin: "#20222b",
+      finRay: "#08090c",
     },
-    pattern: { type: "speckle", color: "#23262e" },
+    pattern: { type: "speckle", color: "#20232b", frontColor: "#14161c" },
     unlock: { type: "default" },
   },
   {
@@ -235,7 +235,7 @@ export const COLOR_DEFS: readonly ColorDef[] = [
     id: "blackDiamond",
     order: 14,
     name: "Black Diamond",
-    description: "Glossy black with a blue-purple metallic shimmer under light.",
+    description: "Glossy black scattered with icy blue flecks and a violet metallic shimmer.",
     rarity: { tier: "epic", stars: 3 },
     accentColor: "#8a6cf0",
     palette: {
@@ -245,7 +245,7 @@ export const COLOR_DEFS: readonly ColorDef[] = [
       fin: "#161927",
       finRay: "#000000",
     },
-    pattern: { type: "solid" },
+    pattern: { type: "speckle", color: "#7fb2ff", spread: "body", metallic: true },
     shimmer: "bluePurple",
     unlock: { type: "streakDays", days: 21 },
   },
@@ -254,7 +254,7 @@ export const COLOR_DEFS: readonly ColorDef[] = [
     order: 15,
     name: "Sanke",
     description:
-      "Bright red head, pearl white body, and bold black patches — the classic Koi Sanke pattern.",
+      "Red-capped head, pearl white body, and balanced black patches — the classic Koi Sanke pattern.",
     rarity: { tier: "legendary" },
     accentColor: "#d4402a",
     palette: {
@@ -264,7 +264,7 @@ export const COLOR_DEFS: readonly ColorDef[] = [
       fin: "#eae6dd",
       finRay: "#a89f8f",
     },
-    pattern: { type: "patches", colors: ["#d4402a", "#1c1e24"], style: "koi" },
+    pattern: { type: "patches", colors: ["#ff0000", "#1c1e24"], style: "koi" },
     unlock: { type: "streakOrGrant", days: 30 },
   },
 ] as const;

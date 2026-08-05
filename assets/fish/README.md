@@ -1,8 +1,18 @@
-# Fish sprite art pack
+# Fish sprite art pack — OPTIONAL OVERRIDE, not the shipping path
 
-The app currently renders fish with a built-in vector fallback. To upgrade to
-photorealistic sprites, generate the images below with an AI image tool, save
-them here, and register them in `src/shared/lib/sprites.ts`.
+> **This is no longer how fish are drawn.** The app renders them procedurally
+> from `src/shared/fish/render-spec.ts`, because a fish is four independent
+> trait axes (~480 combinations) and a sprite manifest keyed by colour cannot
+> show a rolled balloon body, lyretail, or sailfin. See the "How a fish is
+> drawn" section of `CLAUDE.md`, and iterate with `yarn fish:preview`.
+>
+> The sprite path below still works and still takes precedence for any colour
+> you register — use it to hand-author a single showpiece variety, not to
+> replace the renderer. Note the variant list further down predates the
+> colour × traits split and no longer matches `ColorId`.
+
+To use it: generate the images below, save them here, and register them in
+`src/shared/lib/sprites.ts`.
 
 ## Spec (all images)
 

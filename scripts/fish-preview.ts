@@ -16,7 +16,14 @@ import {
 import { RARITY_COLORS, formatRarity } from "../src/shared/fish/rarity";
 import {
   buildFishSpec,
+  DEAD_GRAYSCALE_MATRIX,
+  DEAD_OPACITY,
+  eggSilhouetteSpec,
+  eggSpec,
+  maxFishBounds,
+  SILHOUETTE_COLOR,
   STAGE_SQUISH,
+  type Blend,
   type Paint,
   type Primitive,
 } from "../src/shared/fish/render-spec";
@@ -24,33 +31,167 @@ import type { ColorDef, FishTraits, UnlockRule } from "../src/shared/fish/types"
 
 const STAGE_SCALE = { egg: 0.34, fry: 0.42, juvenile: 0.66, adult: 1 } as const;
 
+// One frame for every cell, wide enough for the tallest combination (a sailfin
+// balloon). Derived, not hardcoded — the old fixed viewBox clipped the sailfin
+// crest by a pixel.
+const FRAME = maxFishBounds(COLOR_DEFS[0]);
+
+const f = (n: number) => n.toFixed(1);
+
+/**
+ * The dead-fish desaturation, as the exact matrix the app's ColorMatrix uses.
+ * SVG filter regions default to bbox ±10%, which silently clips anything soft —
+ * every filter this script emits carries an explicit oversized region.
+ */
+function deadFilter(id: string): string {
+  return (
+    `<filter id="${id}" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">` +
+    `<feColorMatrix type="matrix" values="${DEAD_GRAYSCALE_MATRIX.join(" ")}"/>` +
+    `</filter>`
+  );
+}
+
 let uid = 0;
 
-function paintAttrs(paint: Paint, defs: string[]): { fill: string; opacity: number } {
-  if (paint.type === "solid") {
-    return { fill: paint.color, opacity: paint.opacity ?? 1 };
+/**
+ * Per-<svg> emitter state. Clip paths and blur filters are memoised by content
+ * so a body clip reused by 30 primitives costs one <clipPath>, matching how the
+ * Skia backend compiles one SkPath per unique `d`.
+ */
+interface SvgCtx {
+  defs: string[];
+  clips: Map<string, string>;
+  blurs: Map<number, string>;
+}
+
+function newCtx(): SvgCtx {
+  return { defs: [], clips: new Map(), blurs: new Map() };
+}
+
+function clipRef(ctx: SvgCtx, d: string): string {
+  let id = ctx.clips.get(d);
+  if (!id) {
+    id = `clip${uid++}`;
+    ctx.clips.set(d, id);
+    ctx.defs.push(`<clipPath id="${id}"><path d="${d}"/></clipPath>`);
   }
+  return id;
+}
+
+/**
+ * A Gaussian blur filter. The oversized region is mandatory: SVG defaults a
+ * filter to the bbox ±10%, which silently crops anything soft — a bug that
+ * would show up ONLY in the preview and quietly break app/preview parity.
+ */
+function blurRef(ctx: SvgCtx, sigma: number): string {
+  let id = ctx.blurs.get(sigma);
+  if (!id) {
+    id = `blur${uid++}`;
+    ctx.blurs.set(sigma, id);
+    ctx.defs.push(
+      `<filter id="${id}" x="-50%" y="-50%" width="200%" height="200%" ` +
+        `color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="${sigma}"/></filter>`,
+    );
+  }
+  return id;
+}
+
+function paintAttrs(paint: Paint, ctx: SvgCtx): { fill: string; opacity: number } {
+  const opacity = paint.opacity ?? 1;
+  if (paint.type === "solid") return { fill: paint.color, opacity };
+
   const id = `g${uid++}`;
   const stops = paint.stops
     .map((s) => `<stop offset="${s.offset}" stop-color="${s.color}"/>`)
     .join("");
-  defs.push(
-    `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${paint.from.x}" y1="${paint.from.y}" x2="${paint.to.x}" y2="${paint.to.y}">${stops}</linearGradient>`,
-  );
-  return { fill: `url(#${id})`, opacity: paint.opacity ?? 1 };
+
+  if (paint.type === "linear") {
+    ctx.defs.push(
+      `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${paint.from.x}" y1="${paint.from.y}" x2="${paint.to.x}" y2="${paint.to.y}">${stops}</linearGradient>`,
+    );
+    return { fill: `url(#${id})`, opacity };
+  }
+
+  if (paint.type === "radial") {
+    const { x: cx, y: cy } = paint.center;
+    // Elliptical falloff: scale about the centre. Skia expresses the identical
+    // thing as a `transform` on the gradient node.
+    const s = paint.scale;
+    const gt =
+      s && (s.x !== 1 || s.y !== 1)
+        ? ` gradientTransform="translate(${f(cx)} ${f(cy)}) scale(${s.x} ${s.y}) translate(${f(-cx)} ${f(-cy)})"`
+        : "";
+    ctx.defs.push(
+      `<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="${f(cx)}" cy="${f(cy)}" r="${f(paint.radius)}"${gt}>${stops}</radialGradient>`,
+    );
+    return { fill: `url(#${id})`, opacity };
+  }
+
+  return assertNever(paint);
 }
 
-function primitiveSvg(prim: Primitive, defs: string[], clipId: string): string {
-  const clipAttr =
-    prim.kind === "path" && prim.clip === "body" ? ` clip-path="url(#${clipId})"` : "";
-  const { fill, opacity } = paintAttrs(prim.paint, defs);
+function assertNever(x: never): never {
+  throw new Error(`fish-preview: unhandled IR case ${JSON.stringify(x)}`);
+}
+
+function cssBlend(blend: Blend): string {
+  switch (blend) {
+    case "srcOver":
+      return "normal";
+    case "multiply":
+      return "multiply";
+    case "screen":
+      return "screen";
+    case "overlay":
+      return "overlay";
+    case "softLight":
+      return "soft-light";
+    case "plusLighter":
+      return "plus-lighter";
+    default:
+      return assertNever(blend);
+  }
+}
+
+/** Shared attributes for anything drawable: clip, blur, blend, isolation. */
+function commonAttrs(
+  ctx: SvgCtx,
+  o: { clip?: string; blend?: Blend; blur?: number; isolate?: boolean },
+): string {
+  let out = "";
+  if (o.clip) out += ` clip-path="url(#${clipRef(ctx, o.clip)})"`;
+  if (o.blur) out += ` filter="url(#${blurRef(ctx, o.blur)})"`;
+  const style: string[] = [];
+  if (o.blend && o.blend !== "srcOver") style.push(`mix-blend-mode:${cssBlend(o.blend)}`);
+  // `isolation:isolate` makes children blend against this group's own contents
+  // rather than the water behind the fish — SVG's answer to Skia's
+  // <Group layer={<Paint/>}>.
+  if (o.isolate) style.push("isolation:isolate");
+  if (style.length) out += ` style="${style.join(";")}"`;
+  return out;
+}
+
+function primitiveSvg(prim: Primitive, ctx: SvgCtx): string {
+  if (prim.kind === "group") {
+    const inner = prim.children.map((c) => primitiveSvg(c, ctx)).join("");
+    let attrs = commonAttrs(ctx, prim);
+    if (prim.opacity !== undefined && prim.opacity !== 1) attrs += ` opacity="${prim.opacity}"`;
+    return `<g${attrs}>${inner}</g>`;
+  }
+
+  const { fill, opacity } = paintAttrs(prim.paint, ctx);
+  const attrs = commonAttrs(ctx, prim);
+
   if (prim.kind === "circle") {
-    return `<circle cx="${prim.cx}" cy="${prim.cy}" r="${prim.r}" fill="${fill}" opacity="${opacity}"/>`;
+    return `<circle cx="${prim.cx}" cy="${prim.cy}" r="${prim.r}" fill="${fill}" opacity="${opacity}"${attrs}/>`;
   }
-  if (prim.stroke) {
-    return `<path d="${prim.d}" fill="none" stroke="${fill}" stroke-width="${prim.stroke.width}" stroke-linecap="round" opacity="${opacity}"${clipAttr}/>`;
+  if (prim.kind === "path") {
+    if (prim.stroke) {
+      return `<path d="${prim.d}" fill="none" stroke="${fill}" stroke-width="${prim.stroke.width}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"${attrs}/>`;
+    }
+    return `<path d="${prim.d}" fill="${fill}" opacity="${opacity}"${attrs}/>`;
   }
-  return `<path d="${prim.d}" fill="${fill}" opacity="${opacity}"${clipAttr}/>`;
+  return assertNever(prim);
 }
 
 interface FishOpts {
@@ -63,31 +204,38 @@ function fishSvg(traits: FishTraits, def: ColorDef, opts: FishOpts = {}): string
   const stage = opts.stage ?? "adult";
   const scale = STAGE_SCALE[stage];
   const squish = STAGE_SQUISH[stage];
-  const defs: string[] = [];
+  const ctx = newCtx();
+  const defs = ctx.defs;
   let content: string;
 
   if (stage === "egg") {
-    content =
-      `<circle r="12" fill="#f6e3b0" opacity="0.92"/>` +
-      `<circle cx="-3.5" cy="-4" r="3.5" fill="#fff7e0" opacity="0.9"/>` +
-      `<circle cx="2" cy="2" r="4.4" fill="#e0a24e"/>`;
+    const prims = opts.silhouette ? eggSilhouetteSpec() : eggSpec();
+    content = prims.map((p) => primitiveSvg(p, ctx)).join("");
   } else {
     const spec = buildFishSpec(traits, def);
-    const clipId = `clip${uid++}`;
-    defs.push(`<clipPath id="${clipId}"><path d="${spec.bodyPathD}"/></clipPath>`);
     if (opts.silhouette) {
-      content = spec.silhouetteDs.map((d) => `<path d="${d}" fill="#0a1b29"/>`).join("");
+      content = spec.silhouetteDs
+        .map((d) => `<path d="${d}" fill="${SILHOUETTE_COLOR}"/>`)
+        .join("");
     } else {
       content =
-        spec.tail.map((p) => primitiveSvg(p, defs, clipId)).join("") +
-        spec.body.map((p) => primitiveSvg(p, defs, clipId)).join("");
+        spec.tail.map((p) => primitiveSvg(p, ctx)).join("") +
+        spec.body.map((p) => primitiveSvg(p, ctx)).join("");
     }
   }
 
+  // Dead fish: belly-up, desaturated with the SAME matrix + opacity the app
+  // applies via Skia's ColorMatrix, so the two cannot drift.
   const flip = opts.dead ? " scale(1,-1)" : "";
-  const filter = opts.dead ? ` filter="grayscale(0.9) opacity(0.65)"` : "";
+  let attrs = "";
+  if (opts.dead) {
+    const id = `dead${uid++}`; // SVG ids are document-global — never reuse one
+    defs.push(deadFilter(id));
+    attrs = ` filter="url(#${id})" opacity="${DEAD_OPACITY}"`;
+  }
   return (
-    `<svg viewBox="-76 -70 156 126" width="156" height="126"${filter}>` +
+    `<svg viewBox="${f(FRAME.x)} ${f(FRAME.y)} ${f(FRAME.width)} ${f(FRAME.height)}" ` +
+    `width="${f(FRAME.width)}" height="${f(FRAME.height)}"${attrs}>` +
     `<defs>${defs.join("")}</defs>` +
     `<g transform="scale(${scale})${flip} scale(1,${squish})">${content}</g>` +
     `</svg>`
@@ -193,9 +341,9 @@ const html = `<!doctype html>
 <tbody>
 ${colorRows}
 </tbody></table>
-<h2>Rolled-trait showcases</h2>
+<h2 id="showcases">Rolled-trait showcases</h2>
 <div class="shows">${showcaseCells}</div>
-<h2>Roll odds</h2>
+<h2 id="odds">Roll odds</h2>
 <table class="odds"><thead><tr><td>Axis</td><td>Trait</td><td>Rarity</td><td>Weight</td></tr></thead>
 <tbody>${oddsRows}</tbody></table>
 </body></html>`;

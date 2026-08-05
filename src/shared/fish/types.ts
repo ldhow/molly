@@ -49,8 +49,21 @@ export type FishPattern =
   | { type: "solid" }
   /** Dalmatian: round spots; optionally spilling onto the tail/fins. */
   | { type: "spots"; color: string; onFins?: boolean }
-  /** Gold dust: fine speckles concentrated on the rear half. */
-  | { type: "speckle"; color: string }
+  /**
+   * Fine speckles — rear-weighted by default (gold dust), or dusted over the
+   * whole flank ("body", black diamond). `frontColor` washes the head and
+   * shoulders in a second colour before the speckles land. `metallic` swaps
+   * the sparkle pass from small painted dots to a sparser set of tinted
+   * diagonal light-glint streaks — reads as reflected light off a glossy
+   * surface rather than dusted-on pigment (black diamond).
+   */
+  | {
+      type: "speckle";
+      color: string;
+      spread?: "rear" | "body";
+      frontColor?: string;
+      metallic?: boolean;
+    }
   /** Zebra/caramel zebra = clean bars, tiger = broken bars. */
   | { type: "stripes"; color: string; style: "clean" | "broken" }
   /**

@@ -6,7 +6,9 @@ Build a focus/productivity app in the fresh Expo SDK 57 starter at this repo, mo
 
 **Technical stack (user-mandated)**: feature-based architecture · **Zustand** for state · **React Query** for data fetching/caching · **Drizzle ORM** over expo-sqlite.
 
-**Visuals (user-confirmed)**: fish must look realistic → **2D photorealistic sprite images** (AI-generated, transparent PNGs) rendered inside the Skia scene — NOT vector-drawn fish. Skia still renders the water, light, bubbles, plants, and animates the sprites.
+**Visuals (superseded — see below)**: originally "fish must look realistic → 2D photorealistic sprite images (AI-generated, transparent PNGs) rendered inside the Skia scene — NOT vector-drawn fish."
+
+**Visuals (current, user-confirmed)**: fish are **drawn procedurally** from `src/shared/fish/render-spec.ts`. The sprite-image route was reversed because a fish is 4 independent trait axes (15 colours × 2 bodies × 2 tails × 2 dorsals × 4 life stages ≈ 480 combinations); authored PNGs would either cost 480 images or force the rolled traits to stop being visible. The render spec generates all of them, and the realism instead comes from the drawing itself — radial volume shading, soft-edged patterns, translucent fins, blend-mode gloss — which the widened IR now supports. The `<Image>` sprite path in `fish-sprite.tsx` and the empty manifest in `src/shared/lib/sprites.ts` remain as an override for individual colours. Skia still renders the water, light, bubbles and plants.
 
 **AGENTS.md mandate**: re-read the exact SDK 57 doc page (https://docs.expo.dev/versions/v57.0.0/) for each API immediately before writing its code.
 
