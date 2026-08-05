@@ -1,3 +1,4 @@
+import { useKeepAwake } from "expo-keep-awake";
 import { Redirect } from "expo-router";
 import { useEffect } from "react";
 import { Alert, StyleSheet, Text, View } from "react-native";
@@ -18,7 +19,15 @@ import { useSessionStore } from "../store/session-store";
 import type { ActiveSession } from "../types";
 import { progressOf, secondsLeftOf } from "../utils/machine";
 
+/** Lock tag, so releasing ours cannot release anyone else's keep-awake. */
+const KEEP_AWAKE_TAG = "molly-focus-screen";
+
 export function SessionScreen() {
+  // Hold the display on for as long as this screen is mounted. The tank IS the
+  // timer — a fish growing in real time — so an auto-lock would hide the one
+  // thing the user is here to watch. Released automatically on unmount.
+  useKeepAwake(KEEP_AWAKE_TAG, { suppressDeactivateWarnings: true });
+
   const active = useSessionStore((s) => s.active);
   const result = useSessionStore((s) => s.result);
 
