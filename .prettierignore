@@ -1,0 +1,32 @@
+# Dependencies & build output
+node_modules/
+.expo/
+.expo-shared/
+dist/
+web-build/
+coverage/
+example/
+
+# Native projects — managed by prebuild, formatting them creates churn
+android/
+ios/
+
+# Lockfiles & generated
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+expo-env.d.ts
+src/db/migrations/
+
+# Skill sources
+.claude/
+
+# Assets
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ttf
+*.otf
