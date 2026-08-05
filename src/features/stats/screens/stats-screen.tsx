@@ -1,7 +1,6 @@
 import { FlatList, StyleSheet, Text, View } from "react-native";
 
-import { getVariant } from "@/shared/fish/variants";
-import type { VariantId } from "@/shared/fish/types";
+import { getColorDef, traitsOfRow } from "@/shared/fish/catalog";
 import { EmptyState } from "@/shared/components/empty-state";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 import { ScreenContainer } from "@/shared/components/screen-container";
@@ -49,12 +48,12 @@ export function StatsScreen() {
           />
         }
         renderItem={({ item }) => {
-          const variant = getVariant(item.variantId as VariantId);
+          const colorName = getColorDef(traitsOfRow(item).color).name;
           return (
             <View style={styles.historyRow}>
               <Text style={styles.historyIcon}>{OUTCOME_ICON[item.outcome]}</Text>
               <View style={styles.historyBody}>
-                <Text style={styles.historyName}>{variant.name}</Text>
+                <Text style={styles.historyName}>{colorName}</Text>
                 <Text style={styles.historyMeta}>
                   {item.localDate} · {formatMinutes(item.plannedMinutes)}
                 </Text>

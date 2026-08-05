@@ -13,17 +13,14 @@ interface Props {
 export function WaterBackground({ width, height }: Props) {
   const rays = useMemo(
     () =>
-      [0.18, 0.42, 0.68].map((f, i) => {
-        const path = Skia.Path.Make();
+      [0.18, 0.42, 0.68].flatMap((f, i) => {
         const topX = width * f;
         const w = 46 + i * 22;
         const drift = 90 + i * 40;
-        path.moveTo(topX, -10);
-        path.lineTo(topX + w, -10);
-        path.lineTo(topX + w + drift, height);
-        path.lineTo(topX + drift, height);
-        path.close();
-        return path;
+        const path = Skia.Path.MakeFromSVGString(
+          `M ${topX} -10 L ${topX + w} -10 L ${topX + w + drift} ${height} L ${topX + drift} ${height} Z`,
+        );
+        return path ? [path] : [];
       }),
     [width, height],
   );
@@ -49,17 +46,16 @@ export function WaterBackground({ width, height }: Props) {
 
 export function Sand({ width, height }: Props) {
   const path = useMemo(() => {
-    const p = Skia.Path.Make();
     const top = height - SAND_HEIGHT;
-    p.moveTo(0, height);
-    p.lineTo(0, top + SAND_HEIGHT * 0.35);
-    p.quadTo(width * 0.28, top, width * 0.55, top + SAND_HEIGHT * 0.3);
-    p.quadTo(width * 0.8, top + SAND_HEIGHT * 0.55, width, top + SAND_HEIGHT * 0.2);
-    p.lineTo(width, height);
-    p.close();
-    return p;
+    return Skia.Path.MakeFromSVGString(
+      `M 0 ${height} L 0 ${top + SAND_HEIGHT * 0.35} ` +
+        `Q ${width * 0.28} ${top} ${width * 0.55} ${top + SAND_HEIGHT * 0.3} ` +
+        `Q ${width * 0.8} ${top + SAND_HEIGHT * 0.55} ${width} ${top + SAND_HEIGHT * 0.2} ` +
+        `L ${width} ${height} Z`,
+    );
   }, [width, height]);
 
+  if (!path) return null;
   return (
     <Path path={path}>
       <LinearGradient

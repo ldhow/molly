@@ -35,6 +35,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@types/node": "^26.1.2",
     "@types/react": "~19.2.2",
     "babel-plugin-inline-import": "^3.0.0",
     "drizzle-kit": "^0.31.10",
@@ -42,6 +43,7 @@
     "eslint-config-expo": "~57.0.1",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
+    "tsx": "^4.23.7",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -51,6 +53,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "fish:preview": "tsx scripts/fish-preview.ts",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

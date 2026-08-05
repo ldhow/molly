@@ -1,36 +1,93 @@
-export type VariantId =
-  "black" | "goldDust" | "dalmatian" | "sailfin" | "balloon" | "lyretail" | "marble";
+export type RarityTier = "common" | "uncommon" | "rare" | "epic" | "legendary";
+
+export interface Rarity {
+  tier: RarityTier;
+  /** Sub-tier within rare/epic, shown as ★s (e.g. Epic ★★★). */
+  stars?: 1 | 2 | 3;
+}
+
+export type ColorId =
+  | "goldDust"
+  | "dalmatian"
+  | "sunkiss"
+  | "black"
+  | "gold"
+  | "platinum"
+  | "chocolate"
+  | "zebra"
+  | "tiger"
+  | "sakura"
+  | "trio"
+  | "caramelZebra"
+  | "electricBlue"
+  | "blackDiamond"
+  | "sanke";
+
+export type BodyId = "standard" | "balloon";
+export type TailId = "round" | "lyretail";
+export type DorsalId = "standard" | "sailfin";
+
+/** A concrete fish: user-chosen color + rolled body/tail/dorsal. */
+export interface FishTraits {
+  color: ColorId;
+  body: BodyId;
+  tail: TailId;
+  dorsal: DorsalId;
+}
 
 export type LifeStage = "egg" | "fry" | "juvenile" | "adult";
 
 export type UnlockRule =
   | { type: "default" }
   | { type: "sessionMinutes"; minutes: number }
+  | { type: "totalHours"; hours: number }
   | { type: "streakDays"; days: number }
-  | { type: "totalHours"; hours: number };
+  /** Streak OR a manual grant (dev/event stand-in). */
+  | { type: "streakOrGrant"; days: number };
 
-export interface FishVariant {
-  id: VariantId;
+export type FishPattern =
+  | { type: "solid" }
+  /** Dalmatian: round spots; optionally spilling onto the tail/fins. */
+  | { type: "spots"; color: string; onFins?: boolean }
+  /** Gold dust: fine speckles concentrated on the rear half. */
+  | { type: "speckle"; color: string }
+  /** Zebra/caramel zebra = clean bars, tiger = broken bars. */
+  | { type: "stripes"; color: string; style: "clean" | "broken" }
+  /**
+   * Blotches of other colors over the base:
+   * koi = red head patch + bold black patches (sanke),
+   * calico = distinct mid-size patches (trio),
+   * soft = blurry-edged pastel patches (sakura).
+   */
+  | { type: "patches"; colors: string[]; style: "koi" | "calico" | "soft" };
+
+export type ShimmerKind = "silver" | "bluePurple" | "iridescent";
+
+export interface ColorDef {
+  id: ColorId;
+  /** Unlock sequence & Fishdex order (1-based). */
+  order: number;
   name: string;
   description: string;
-  /** UI chips / fishdex cards — not fish rendering. */
+  rarity: Rarity;
+  /** UI chips/badges — not fish rendering. */
   accentColor: string;
-  /** Drives the built-in vector renderer until real sprite art is dropped in. */
-  colors: {
-    body: string;
+  palette: {
+    back: string;
+    mid: string;
     belly: string;
     fin: string;
-    spots?: string;
+    finRay: string;
   };
-  bodyShape: "standard" | "balloon";
-  finShape: "standard" | "sailfin" | "lyretail";
+  pattern: FishPattern;
+  shimmer?: ShimmerKind;
   unlock: UnlockRule;
 }
 
-export interface OwnedFish {
-  id: string;
-  variantId: VariantId;
-  status: "alive" | "dead";
-  earnedAt: number;
-  sessionMinutes: number;
+export interface RollableDef<Id extends string> {
+  id: Id;
+  name: string;
+  rarity: Rarity;
+  /** Relative roll weight within its axis. */
+  weight: number;
 }

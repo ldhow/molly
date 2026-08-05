@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 
-import { getVariant } from "@/shared/fish/variants";
-import type { VariantId } from "@/shared/fish/types";
+import { traitsOfRow } from "@/shared/fish/catalog";
 import { useSessionsQuery } from "@/shared/hooks/use-sessions-query";
 
 import { MAX_RENDERED_FISH, STAGE_SCALE } from "@/shared/constants/tank";
@@ -18,7 +17,7 @@ export function useOwnedFish() {
   return useMemo(() => {
     const all = (rows ?? []).map((row): TankFish => ({
       key: row.id,
-      variant: getVariant(row.variantId as VariantId),
+      traits: traitsOfRow(row),
       stage: "adult",
       status: row.outcome === "completed" ? "alive" : "dead",
       scale: STAGE_SCALE.adult * sizeForMinutes(row.plannedMinutes),

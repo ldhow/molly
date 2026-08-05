@@ -1,4 +1,4 @@
-import { Group, Path, Skia, useClock, vec } from "@shopify/react-native-skia";
+import { Group, Path, Skia, useClock, vec, type SkPath } from "@shopify/react-native-skia";
 import { useMemo } from "react";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
@@ -26,11 +26,14 @@ export function Plants({ width, height }: Props) {
       paths: Array.from({ length: p.blades }, (_, b) => {
         const spread = (b - (p.blades - 1) / 2) * 9;
         const h = p.h * (0.7 + 0.3 * Math.abs(Math.sin(b * 2.4 + i)));
-        const path = Skia.Path.Make();
-        path.moveTo(spread * 0.4, 0);
-        path.quadTo(spread - 6, -h * 0.55, spread + 3, -h);
+        const path = Skia.Path.MakeFromSVGString(
+          `M ${spread * 0.4} 0 Q ${spread - 6} ${-h * 0.55} ${spread + 3} ${-h}`,
+        );
         return { path, color: PLANT_COLORS[(b + i) % PLANT_COLORS.length] };
-      }),
+      }).filter(
+        (blade): blade is { path: NonNullable<typeof blade.path>; color: string } =>
+          blade.path !== null,
+      ),
     }));
   }, [width, height]);
 
@@ -52,7 +55,7 @@ function SwayingPlant({
     x: number;
     baseY: number;
     phase: number;
-    paths: { path: ReturnType<typeof Skia.Path.Make>; color: string }[];
+    paths: { path: SkPath; color: string }[];
   };
 }) {
   const transform = useDerivedValue(() => [

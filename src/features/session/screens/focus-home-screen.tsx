@@ -6,10 +6,11 @@ import { FishBody } from "@/shared/components/tank/fish-sprite";
 import { Button } from "@/shared/components/button";
 import { ScreenContainer } from "@/shared/components/screen-container";
 import { palette, radius, spacing } from "@/shared/constants/theme";
-import type { VariantId } from "@/shared/fish/types";
+import { DEFAULT_COLOR_ID, getColorDef, standardTraits } from "@/shared/fish/catalog";
+import { formatRarity, RARITY_COLORS } from "@/shared/fish/rarity";
+import type { ColorId } from "@/shared/fish/types";
 import { unlockHint } from "@/shared/fish/unlocks";
 import { useUnlocks } from "@/shared/fish/use-unlocks";
-import { getVariant } from "@/shared/fish/variants";
 import { useNow } from "@/shared/hooks/use-now";
 import { useSessionsQuery } from "@/shared/hooks/use-sessions-query";
 import { computeCurrentStreak } from "@/shared/lib/sessions";
@@ -23,7 +24,7 @@ const PREVIEW_H = 104;
 
 export function FocusHomeScreen() {
   const [minutes, setMinutes] = useState(DEFAULT_DURATION_MINUTES);
-  const [variantId, setVariantId] = useState<VariantId>("black");
+  const [colorId, setColorId] = useState<ColorId>(DEFAULT_COLOR_ID);
   const { entries } = useUnlocks();
   const { data: sessionRows } = useSessionsQuery();
   const now = useNow(60_000);
@@ -33,8 +34,8 @@ export function FocusHomeScreen() {
   );
   const startSession = useStartSession();
 
-  const selected = getVariant(variantId);
-  const selectedEntry = entries.find((e) => e.variant.id === variantId);
+  const selected = getColorDef(colorId);
+  const selectedEntry = entries.find((e) => e.def.id === colorId);
   const selectedUnlocked = selectedEntry?.unlocked ?? false;
 
   return (
@@ -62,7 +63,7 @@ export function FocusHomeScreen() {
               ]}
             >
               <FishBody
-                variant={selected}
+                traits={standardTraits(colorId)}
                 stage="adult"
                 clock={null}
                 phase={0}
@@ -70,10 +71,20 @@ export function FocusHomeScreen() {
               />
             </Group>
           </Canvas>
-          <Text style={styles.previewName}>{selectedUnlocked ? selected.name : "???"}</Text>
+          <View style={styles.previewNameRow}>
+            <Text style={styles.previewName}>{selectedUnlocked ? selected.name : "???"}</Text>
+            <Text style={[styles.rarityBadge, { color: RARITY_COLORS[selected.rarity.tier] }]}>
+              {formatRarity(selected.rarity)}
+            </Text>
+          </View>
           <Text style={styles.previewHint}>
             {selectedUnlocked ? selected.description : unlockHint(selected.unlock)}
           </Text>
+          {selectedUnlocked ? (
+            <Text style={styles.rollNote}>
+              Body & fins are revealed when your molly grows up 🎲
+            </Text>
+          ) : null}
         </View>
 
         <Text style={styles.sectionTitle}>Your molly</Text>
@@ -82,22 +93,22 @@ export function FocusHomeScreen() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.variantRow}
         >
-          {entries.map(({ variant, unlocked }) => {
-            const active = variant.id === variantId;
+          {entries.map(({ def, unlocked }) => {
+            const active = def.id === colorId;
             return (
               <Pressable
-                key={variant.id}
-                onPress={() => setVariantId(variant.id)}
+                key={def.id}
+                onPress={() => setColorId(def.id)}
                 style={[styles.variantChip, active && styles.variantChipActive]}
               >
                 <View
                   style={[
                     styles.variantDot,
-                    { backgroundColor: unlocked ? variant.accentColor : palette.border },
+                    { backgroundColor: unlocked ? def.accentColor : palette.border },
                   ]}
                 />
                 <Text style={[styles.variantLabel, active && styles.variantLabelActive]}>
-                  {unlocked ? variant.name.replace(" Molly", "") : "🔒"}
+                  {unlocked ? def.name : "🔒"}
                 </Text>
               </Pressable>
             );
@@ -109,7 +120,7 @@ export function FocusHomeScreen() {
 
         <Button
           label={`Start ${minutes} min focus`}
-          onPress={() => startSession(variantId, minutes)}
+          onPress={() => startSession(colorId, minutes)}
           disabled={!selectedUnlocked}
           style={styles.startButton}
         />
@@ -156,8 +167,11 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   previewCanvas: { width: PREVIEW_W, height: PREVIEW_H },
+  previewNameRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   previewName: { color: palette.text, fontSize: 17, fontWeight: "700" },
+  rarityBadge: { fontSize: 11, fontWeight: "800" },
   previewHint: { color: palette.textDim, fontSize: 13, textAlign: "center" },
+  rollNote: { color: palette.textFaint, fontSize: 11, textAlign: "center" },
   sectionTitle: {
     color: palette.textDim,
     fontSize: 13,

@@ -1,12 +1,13 @@
 import type { SessionOutcome } from "@/db/schema";
-import type { VariantId } from "@/shared/fish/types";
+import type { ColorId, FishTraits } from "@/shared/fish/types";
 
 export type { SessionOutcome };
 
 /** The persisted snapshot of a running session — survives app kill. */
 export interface ActiveSession {
   id: string;
-  variantId: VariantId;
+  /** Chosen color. Body/tail/dorsal are rolled only at completion. */
+  colorId: ColorId;
   plannedMinutes: number;
   /** epoch ms */
   startedAt: number;
@@ -16,7 +17,9 @@ export interface ActiveSession {
 
 /** In-memory record of the last finished session, shown on the result sheet. */
 export interface SessionResult {
-  variantId: VariantId;
+  colorId: ColorId;
+  /** Rolled at completion (all-standard for failed/abandoned sessions). */
+  traits: FishTraits;
   plannedMinutes: number;
   outcome: SessionOutcome;
   endedAt: number;

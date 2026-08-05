@@ -2,7 +2,7 @@ import { Canvas } from "@shopify/react-native-skia";
 import { useState } from "react";
 import { StyleSheet, View, type ViewStyle } from "react-native";
 
-import type { FishVariant, LifeStage } from "@/shared/fish/types";
+import type { FishTraits, LifeStage } from "@/shared/fish/types";
 
 import { FishSprite } from "./fish-sprite";
 import { Bubbles } from "./bubbles";
@@ -11,7 +11,7 @@ import { Sand, WaterBackground } from "./water-background";
 
 export interface TankFish {
   key: string;
-  variant: FishVariant;
+  traits: FishTraits;
   stage: LifeStage;
   status: "alive" | "dead";
   scale: number;
@@ -46,7 +46,7 @@ export function TankCanvas({ fish, mode = "tank", style }: Props) {
           {dead.map((f) => (
             <FishSprite
               key={f.key}
-              variant={f.variant}
+              traits={f.traits}
               stage={f.stage}
               status="dead"
               bounds={size}
@@ -57,7 +57,7 @@ export function TankCanvas({ fish, mode = "tank", style }: Props) {
           {alive.map((f) => (
             <FishSprite
               key={f.key}
-              variant={f.variant}
+              traits={f.traits}
               stage={f.stage}
               status="alive"
               bounds={size}

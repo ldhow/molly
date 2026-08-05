@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { Alert, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { getVariant } from "@/shared/fish/variants";
+import { standardTraits } from "@/shared/fish/catalog";
 import type { LifeStage } from "@/shared/fish/types";
 import { TankCanvas } from "@/shared/components/tank/tank-canvas";
 import { seedFromString } from "@/shared/lib/seed";
@@ -56,7 +56,7 @@ function ActiveSessionView({ session }: { session: ActiveSession }) {
 
   const progress = progressOf(session, now);
   const stage = stageForProgress(progress);
-  const variant = getVariant(session.variantId);
+  const traits = standardTraits(session.colorId);
 
   const confirmGiveUp = () => {
     Alert.alert("Give up?", "Your molly won't survive if you end the session early.", [
@@ -77,7 +77,7 @@ function ActiveSessionView({ session }: { session: ActiveSession }) {
         fish={[
           {
             key: session.id,
-            variant,
+            traits,
             stage,
             status: "alive",
             scale: 0.45 + 0.55 * progress,

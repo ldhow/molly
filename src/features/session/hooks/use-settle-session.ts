@@ -1,6 +1,8 @@
 import * as Haptics from "expo-haptics";
 import { useCallback } from "react";
 
+import { rollTraits, standardTraits } from "@/shared/fish/catalog";
+
 import { useSessionStore } from "../store/session-store";
 import type { SessionOutcome } from "../types";
 import { cancelAllSessionNotifications } from "../utils/notifications";
@@ -22,8 +24,12 @@ export function useSettleSession() {
       const active = store.active;
       if (!active) return false;
 
-      store.finish(outcome, endedAt);
-      endSession.mutate({ session: active, outcome, endedAt });
+      // The reveal moment: rare body/tail/dorsal traits only come from
+      // completed sessions — a dead molly is always the plain kind.
+      const traits =
+        outcome === "completed" ? rollTraits(active.colorId) : standardTraits(active.colorId);
+      store.finish(outcome, endedAt, traits);
+      endSession.mutate({ session: active, outcome, endedAt, traits });
       void cancelAllSessionNotifications();
 
       if (outcome === "completed") {

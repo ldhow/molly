@@ -1,7 +1,7 @@
 import { useRouter } from "expo-router";
 import { useCallback } from "react";
 
-import type { VariantId } from "@/shared/fish/types";
+import type { ColorId } from "@/shared/fish/types";
 
 import { useSessionStore } from "../store/session-store";
 import {
@@ -14,8 +14,8 @@ export function useStartSession() {
   const start = useSessionStore((s) => s.start);
 
   return useCallback(
-    (variantId: VariantId, plannedMinutes: number) => {
-      const session = start(variantId, plannedMinutes);
+    (colorId: ColorId, plannedMinutes: number) => {
+      const session = start(colorId, plannedMinutes);
       // Fire-and-forget: the session must start instantly even if the
       // permission prompt is still up or gets denied.
       void requestNotificationPermission().then((granted) => {

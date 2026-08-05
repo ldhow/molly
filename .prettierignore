@@ -30,3 +30,6 @@ src/db/migrations/
 *.svg
 *.ttf
 *.otf
+
+# Generated preview gallery
+src/docs/*.html

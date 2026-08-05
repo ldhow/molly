@@ -2,7 +2,7 @@ import Storage from "expo-sqlite/kv-store";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { VariantId } from "@/shared/fish/types";
+import type { ColorId, FishTraits } from "@/shared/fish/types";
 import { createId } from "@/shared/lib/id";
 
 import type { ActiveSession, SessionOutcome, SessionResult } from "../types";
@@ -15,11 +15,11 @@ interface SessionStore {
   /** In-memory — true right after surviving the grace period ("phew"). */
   graceRecovered: boolean;
 
-  start: (variantId: VariantId, plannedMinutes: number) => ActiveSession;
+  start: (colorId: ColorId, plannedMinutes: number) => ActiveSession;
   markBackgrounded: (now: number) => void;
   clearBackgrounded: () => void;
-  /** Clears the active session and records the result. */
-  finish: (outcome: SessionOutcome, endedAt: number) => void;
+  /** Clears the active session and records the result (traits already rolled). */
+  finish: (outcome: SessionOutcome, endedAt: number, traits: FishTraits) => void;
   acknowledgeResult: () => void;
   setGraceRecovered: (value: boolean) => void;
 }
@@ -41,10 +41,10 @@ export const useSessionStore = create<SessionStore>()(
       result: null,
       graceRecovered: false,
 
-      start: (variantId, plannedMinutes) => {
+      start: (colorId, plannedMinutes) => {
         const session: ActiveSession = {
           id: createId(),
-          variantId,
+          colorId,
           plannedMinutes,
           startedAt: Date.now(),
           backgroundedAt: null,
@@ -65,14 +65,15 @@ export const useSessionStore = create<SessionStore>()(
         set({ active: { ...active, backgroundedAt: null } });
       },
 
-      finish: (outcome, endedAt) => {
+      finish: (outcome, endedAt, traits) => {
         const active = get().active;
         if (!active) return;
         set({
           active: null,
           graceRecovered: false,
           result: {
-            variantId: active.variantId,
+            colorId: active.colorId,
+            traits,
             plannedMinutes: active.plannedMinutes,
             outcome,
             endedAt,
@@ -85,8 +86,23 @@ export const useSessionStore = create<SessionStore>()(
     }),
     {
       name: "activeSession",
+      version: 1,
       storage: createJSONStorage(() => syncKvStorage),
       partialize: (state) => ({ active: state.active }),
+      // v0 snapshots stored `variantId` — carry an in-flight session across
+      // the trait-system update instead of dropping it.
+      migrate: (persisted: unknown) => {
+        const state = persisted as {
+          active?: (ActiveSession & { variantId?: string }) | null;
+        } | null;
+        if (state?.active && !state.active.colorId && state.active.variantId) {
+          state.active = {
+            ...state.active,
+            colorId: state.active.variantId as ColorId,
+          };
+        }
+        return state as { active: ActiveSession | null };
+      },
     },
   ),
 );

@@ -4,29 +4,39 @@ import {
   Group,
   Image as SkiaImage,
   LinearGradient,
-  Oval,
   Paint,
   Path,
+  Skia,
   useClock,
   useImage,
   vec,
+  type SkPath,
   type Transforms3d,
 } from "@shopify/react-native-skia";
+import { useMemo } from "react";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
-import type { FishVariant, LifeStage } from "@/shared/fish/types";
-
 import { SAND_HEIGHT } from "@/shared/constants/tank";
+import { getColorDef } from "@/shared/fish/catalog";
+import {
+  bodyHalfHeightFor,
+  buildFishSpec,
+  STAGE_SQUISH,
+  type Paint as SpecPaint,
+  type Primitive,
+} from "@/shared/fish/render-spec";
+import type { FishTraits, LifeStage } from "@/shared/fish/types";
 import { useFishWander, type WanderBox } from "@/shared/hooks/use-fish-wander";
-import { fishGeometryFor } from "@/shared/lib/fish-geometry";
 import { spriteFor } from "@/shared/lib/sprites";
 
 const GRAYSCALE_MATRIX = [
   0.3, 0.55, 0.15, 0, 0.02, 0.3, 0.55, 0.15, 0, 0.02, 0.3, 0.55, 0.15, 0, 0.02, 0, 0, 0, 1, 0,
 ];
 
+const SILHOUETTE_COLOR = "#0a1b29";
+
 interface FishSpriteProps {
-  variant: FishVariant;
+  traits: FishTraits;
   stage: LifeStage;
   status: "alive" | "dead";
   bounds: { width: number; height: number };
@@ -38,9 +48,9 @@ interface FishSpriteProps {
   mode?: "tank" | "center";
 }
 
-/** One fish in the tank: sprite image when registered, vector fallback otherwise. */
+/** One fish in the tank: sprite image when registered, render-spec otherwise. */
 export function FishSprite({
-  variant,
+  traits,
   stage,
   status,
   bounds,
@@ -89,9 +99,8 @@ export function FishSprite({
 
   if (dead) {
     // Belly-up on the sand, drained of color — the reminder.
-    const geometry = fishGeometryFor(variant);
     const deadX = 70 + ((seed * 9973) % 1) * Math.max(1, bounds.width - 140);
-    const deadY = bounds.height - SAND_HEIGHT * 0.4 - geometry.bodyHalfHeight * scale;
+    const deadY = bounds.height - SAND_HEIGHT * 0.4 - bodyHalfHeightFor(traits.body) * scale;
     const deadTransform: Transforms3d = [
       { translateX: deadX },
       { translateY: deadY },
@@ -108,20 +117,20 @@ export function FishSprite({
           </Paint>
         }
       >
-        <FishBody variant={variant} stage={stage} clock={null} phase={phase} />
+        <FishBody traits={traits} stage={stage} clock={null} phase={phase} />
       </Group>
     );
   }
 
   return (
     <Group transform={liveTransform}>
-      <FishBody variant={variant} stage={stage} clock={clock} phase={phase} />
+      <FishBody traits={traits} stage={stage} clock={clock} phase={phase} />
     </Group>
   );
 }
 
 interface FishBodyProps {
-  variant: FishVariant;
+  traits: FishTraits;
   stage: LifeStage;
   /** null = no animation (dead fish, previews). */
   clock: SharedValue<number> | null;
@@ -130,13 +139,36 @@ interface FishBodyProps {
   silhouette?: boolean;
 }
 
+interface CompiledPrimitive {
+  prim: Primitive;
+  path: SkPath | null;
+}
+
 /**
  * The fish itself in local space (origin at body center, nose left).
- * Renders the registered sprite image when one exists, else vector paths.
+ * Renders the registered sprite image when one exists, else the shared
+ * render-spec — the exact drawing the HTML preview gallery shows.
  */
-export function FishBody({ variant, stage, clock, phase, silhouette }: FishBodyProps) {
-  const asset = spriteFor(variant.id, stage);
+export function FishBody({ traits, stage, clock, phase, silhouette }: FishBodyProps) {
+  const asset = spriteFor(traits.color, stage);
   const image = useImage(asset);
+
+  const compiled = useMemo(() => {
+    const spec = buildFishSpec(traits, getColorDef(traits.color));
+    const toCompiled = (prim: Primitive): CompiledPrimitive => ({
+      prim,
+      path: prim.kind === "path" ? Skia.Path.MakeFromSVGString(prim.d) : null,
+    });
+    return {
+      spec,
+      bodyClip: Skia.Path.MakeFromSVGString(spec.bodyPathD),
+      tail: spec.tail.map(toCompiled),
+      body: spec.body.map(toCompiled),
+      silhouettePaths: spec.silhouetteDs
+        .map((d) => Skia.Path.MakeFromSVGString(d))
+        .filter((p): p is SkPath => p !== null),
+    };
+  }, [traits]);
 
   const tailTransform = useDerivedValue<Transforms3d>(() => {
     const t = clock ? clock.value : 0;
@@ -146,6 +178,8 @@ export function FishBody({ variant, stage, clock, phase, silhouette }: FishBodyP
   if (stage === "egg") {
     return <EggBody silhouette={silhouette} />;
   }
+
+  const squish = STAGE_SQUISH[stage];
 
   if (asset != null && image) {
     const w = 110;
@@ -167,58 +201,88 @@ export function FishBody({ variant, stage, clock, phase, silhouette }: FishBodyP
     );
   }
 
-  const geometry = fishGeometryFor(variant);
-  const { colors } = variant;
-  const bodyColor = silhouette ? "#0a1b29" : colors.body;
-  const bellyColor = silhouette ? "#0a1b29" : colors.belly;
-  const finColor = silhouette ? "#0a1b29" : colors.fin;
-
-  // Fry are slimmer than a scaled-down adult.
-  const stageSquish = stage === "fry" ? 0.72 : stage === "juvenile" ? 0.88 : 1;
+  if (silhouette) {
+    return (
+      <Group transform={[{ scaleY: squish }]}>
+        {compiled.silhouettePaths.map((path, i) => (
+          <Path key={i} path={path} color={SILHOUETTE_COLOR} />
+        ))}
+      </Group>
+    );
+  }
 
   return (
-    <Group transform={[{ scaleY: stageSquish }]}>
-      <Group transform={tailTransform} origin={vec(geometry.tailPivot.x, geometry.tailPivot.y)}>
-        <Path path={geometry.tail} color={finColor} opacity={0.92} />
+    <Group transform={[{ scaleY: squish }]}>
+      <Group
+        transform={tailTransform}
+        origin={vec(compiled.spec.tailPivot.x, compiled.spec.tailPivot.y)}
+      >
+        {compiled.tail.map((c, i) => (
+          <PrimitiveNode key={i} compiled={c} bodyClip={compiled.bodyClip} />
+        ))}
       </Group>
-      <Path path={geometry.dorsal} color={finColor} opacity={0.92} />
-      <Path path={geometry.pelvic} color={finColor} opacity={0.9} />
-      <Path path={geometry.body}>
-        <LinearGradient
-          start={vec(0, -geometry.bodyHalfHeight)}
-          end={vec(0, geometry.bodyHalfHeight)}
-          colors={[bodyColor, bodyColor, bellyColor]}
-          positions={[0, 0.55, 1]}
-        />
-      </Path>
-      {!silhouette && variant.colors.spots ? (
-        <Group clip={geometry.body}>
-          {geometry.spots.map((s, i) => (
-            <Oval
-              key={i}
-              x={s.cx - s.rx}
-              y={s.cy - s.ry}
-              width={s.rx * 2}
-              height={s.ry * 2}
-              color={variant.colors.spots}
-              opacity={0.85}
-            />
-          ))}
-        </Group>
-      ) : null}
-      {!silhouette ? (
-        <>
-          <Circle cx={geometry.eye.cx} cy={geometry.eye.cy} r={geometry.eye.r} color="#10131a" />
-          <Circle cx={geometry.eye.cx + 1.1} cy={geometry.eye.cy - 1.1} r={1.1} color="#e8f2fa" />
-        </>
-      ) : null}
+      {compiled.body.map((c, i) => (
+        <PrimitiveNode key={i} compiled={c} bodyClip={compiled.bodyClip} />
+      ))}
     </Group>
   );
 }
 
+function gradientChild(paint: SpecPaint) {
+  if (paint.type !== "linear") return null;
+  return (
+    <LinearGradient
+      start={vec(paint.from.x, paint.from.y)}
+      end={vec(paint.to.x, paint.to.y)}
+      colors={paint.stops.map((s) => s.color)}
+      positions={paint.stops.map((s) => s.offset)}
+    />
+  );
+}
+
+function PrimitiveNode({
+  compiled,
+  bodyClip,
+}: {
+  compiled: CompiledPrimitive;
+  bodyClip: SkPath | null;
+}) {
+  const { prim, path } = compiled;
+  const opacity = prim.paint.opacity ?? 1;
+  const solidColor = prim.paint.type === "solid" ? prim.paint.color : undefined;
+
+  let node: React.JSX.Element | null = null;
+  if (prim.kind === "circle") {
+    node = (
+      <Circle cx={prim.cx} cy={prim.cy} r={prim.r} color={solidColor} opacity={opacity}>
+        {gradientChild(prim.paint)}
+      </Circle>
+    );
+  } else if (path) {
+    node = (
+      <Path
+        path={path}
+        color={solidColor}
+        opacity={opacity}
+        style={prim.stroke ? "stroke" : "fill"}
+        strokeWidth={prim.stroke?.width}
+        strokeCap="round"
+      >
+        {gradientChild(prim.paint)}
+      </Path>
+    );
+  }
+  if (!node) return null;
+
+  if (prim.kind === "path" && prim.clip === "body" && bodyClip) {
+    return <Group clip={bodyClip}>{node}</Group>;
+  }
+  return node;
+}
+
 function EggBody({ silhouette }: { silhouette?: boolean }) {
   if (silhouette) {
-    return <Circle cx={0} cy={0} r={12} color="#0a1b29" />;
+    return <Circle cx={0} cy={0} r={12} color={SILHOUETTE_COLOR} />;
   }
   return (
     <>
