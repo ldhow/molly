@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { useCallback } from "react";
 
-import { rollTraits, standardTraits } from "@/shared/fish/catalog";
+import { patternSeedOf, rollTraits, standardTraits } from "@/shared/fish/catalog";
 
 import { useSessionStore } from "../store/session-store";
 import type { SessionOutcome } from "../types";
@@ -25,9 +25,13 @@ export function useSettleSession() {
       if (!active) return false;
 
       // The reveal moment: rare body/tail/dorsal traits only come from
-      // completed sessions — a dead molly is always the plain kind.
-      const traits =
-        outcome === "completed" ? rollTraits(active.colorId) : standardTraits(active.colorId);
+      // completed sessions — a dead molly is always the plain kind. The
+      // pattern variant is derived from the session id so it's identical
+      // here and whenever this row is later re-read via traitsOfRow().
+      const traits = {
+        ...(outcome === "completed" ? rollTraits(active.colorId) : standardTraits(active.colorId)),
+        patternSeed: patternSeedOf(active.id),
+      };
       store.finish(outcome, endedAt, traits);
       endSession.mutate({ session: active, outcome, endedAt, traits });
       void cancelAllSessionNotifications();

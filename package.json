@@ -55,6 +55,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "fish:preview": "tsx scripts/fish-preview.ts",
+    "fish:colors": "tsx scripts/fish-color-editor.ts",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

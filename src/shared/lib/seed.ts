@@ -7,3 +7,12 @@ export function seedFromString(input: string): number {
   }
   return ((hash >>> 0) % 10_000) / 10_000;
 }
+
+/**
+ * Deterministic `[0, buckets)` integer from a string — e.g. picking a fish's
+ * procedural pattern variant from its (stable, unpersisted) session id, so
+ * the same id always lands on the same bucket without a DB column.
+ */
+export function bucketFromString(input: string, buckets: number): number {
+  return Math.floor(seedFromString(input) * buckets);
+}

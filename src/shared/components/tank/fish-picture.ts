@@ -310,7 +310,7 @@ function renderToPicture(
 export function getBakedFish(traits: FishTraits, stage: LifeStage): BakedFish | null {
   if (FISH_RENDER_MODE === "nodes") return null;
 
-  const key = `${traits.color}|${traits.body}|${traits.tail}|${traits.dorsal}|${stage}`;
+  const key = `${traits.color}|${traits.body}|${traits.tail}|${traits.dorsal}|${traits.patternSeed ?? 0}|${stage}`;
   const hit = cache.get(key);
   if (hit) {
     // Re-insert so this key becomes the most recently used.

@@ -17,6 +17,7 @@ npx expo start --port 8082 # dev server against the EAS dev build (8081 is taken
 npx expo start --web
 npx drizzle-kit generate   # after editing src/db/schema.ts — writes src/db/migrations/ (commit it)
 yarn fish:preview          # regenerate src/docs/fish-preview.html — the fish-art iteration loop
+yarn fish:colors           # local server + browser UI to live-tune palette/pattern colors per variety
 npm run verify             # typecheck + lint + format:check
 ```
 

@@ -43,7 +43,7 @@
 
 import { seedFromString } from "../lib/seed";
 
-import type { ColorDef, FishTraits, RarityTier, ShimmerKind } from "./types";
+import type { BodyId, ColorDef, FishTraits, RarityTier, ShimmerKind } from "./types";
 
 export interface XY {
   x: number;
@@ -234,6 +234,16 @@ function makeRng(key: string): () => number {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+/**
+ * Appends a per-fish pattern variant to an rng key, EXCEPT at seed 0 — so
+ * bucket 0 (the default for `standardTraits()` previews/Fishdex and ~1/8 of
+ * real fish) reproduces the exact same key, and therefore the exact same
+ * art, this file already shipped before per-fish variation existed.
+ */
+function seededKey(base: string, seed: number): string {
+  return seed === 0 ? base : `${base}-${seed}`;
 }
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -494,7 +504,7 @@ function tailGeom(tail: FishTraits["tail"], _geom: BodyGeom): FinShape {
   };
 }
 
-function dorsalGeom(dorsal: FishTraits["dorsal"], geom: BodyGeom): FinShape {
+function dorsalGeom(dorsal: FishTraits["dorsal"], body: BodyId, geom: BodyGeom): FinShape {
   const shape: FinShape =
     dorsal === "sailfin"
       ? // The showpiece: a banner running most of the back, twice the standard
@@ -519,7 +529,11 @@ function dorsalGeom(dorsal: FishTraits["dorsal"], geom: BodyGeom): FinShape {
   // fan()-generated dorsal used (`base = backPeakY + 7`) — so it rides
   // up/forward with a taller, rounder body like balloon, and the body fill
   // drawn after it always buries the seam.
-  return anchorFinRoot(shape, { x: geom.backPeak.x, y: geom.backPeak.y + 7 });
+  const desiredRoot = {
+    x: body === "balloon" ? geom.backPeak.x + 7 : geom.backPeak.x,
+    y: dorsal === "sailfin" ? geom.backPeak.y + 7 : geom.backPeak.y,
+  };
+  return anchorFinRoot(shape, desiredRoot);
 }
 
 // Pelvics, anal, and pectoral are hand-tuned to a fixed profile rather than
@@ -557,7 +571,7 @@ function analGeom(geom: BodyGeom): FinShape {
     tip: { x: 45.6, y: 30.0 },
     bbox: { x: 25.6, y: 8.0, width: 23.0, height: 20.5 },
   };
-  return anchorFinRoot(shape, { x: geom.bellyLow.x + 30, y: geom.bellyLow.y - 8 });
+  return anchorFinRoot(shape, { x: geom.bellyLow.x + 30, y: geom.bellyLow.y - 16 });
 }
 
 function pectoralGeom(geom: BodyGeom): FinShape {
@@ -569,16 +583,78 @@ function pectoralGeom(geom: BodyGeom): FinShape {
     bbox: { x: -17.2, y: -4.3, width: 18.5, height: 17.0 },
   };
   // Anchored to nose, same landmark the gill cover already scales off (`gx`).
-  return anchorFinRoot(shape, { x: geom.nose.x + 22, y: -1.4 });
+  return anchorFinRoot(shape, { x: geom.nose.x + 32, y: -1.4 });
 }
 
 // ---------------------------------------------------------------------------
 // Patterns.
 // ---------------------------------------------------------------------------
 
-function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): Primitive[] {
+/**
+ * Local "which way does the skin curve here" angle (degrees), treating the
+ * body as a squashed ellipse centered on its own bbox. Not literal geometry —
+ * a cheap directional cue so glints/highlights placed anywhere on the flank
+ * point the way real light would rake across curved scales, instead of every
+ * glint on the fish sharing one fixed angle range.
+ */
+function curvatureTangentDeg(geom: BodyGeom, cx: number, cy: number): number {
+  const cx0 = (geom.nose.x + geom.peduncleTop.x) / 2;
+  const cy0 = (geom.backPeak.y + geom.bellyLow.y) / 2;
+  const a = Math.max(1, (geom.peduncleTop.x - geom.nose.x) / 2);
+  const b = Math.max(1, geom.halfHeight);
+  const theta = Math.atan2((cy - cy0) / b, (cx - cx0) / a);
+  return (theta * 180) / Math.PI + 90;
+}
+
+/**
+ * Procedural metallic highlight streaks along the back, tangent to the local
+ * curvature at each point (electric blue). Replaces a fixed pair of
+ * hand-placed glow shapes with `count` rng-varied ones so the "iridescent"
+ * read is a scattered set of reflections, like light catching curved scales,
+ * rather than two fixed sparkle decals every electric blue fish shares.
+ */
+function curvatureHighlights(
+  geom: BodyGeom,
+  rng: () => number,
+  count: number,
+  opacityScale: number,
+): Primitive[] {
+  const bodyD = geom.d;
+  const span = geom.peduncleTop.x - geom.nose.x;
+  const archPeakT = (geom.backPeak.x - geom.nose.x) / span;
+  const out: Primitive[] = [];
+  for (let i = 0; i < count; i++) {
+    const t = lerp(0.1, 0.9, (i + rng()) / count);
+    const cx = lerp(geom.nose.x, geom.peduncleTop.x, t);
+    // Highest (closest to the back's own y) near the arch's peak, sinking
+    // toward mid-body at both the nose and peduncle ends.
+    const nearPeak = 1 - Math.min(1, Math.abs(t - archPeakT) / 0.6);
+    const cy = lerp(geom.backPeak.y * 0.35, geom.backPeak.y * 0.85, Math.max(0, nearPeak));
+    const angleDeg = curvatureTangentDeg(geom, cx, cy);
+    const len = lerp(6, 13, rng());
+    const dx = (Math.cos(toRad(angleDeg)) * len) / 2;
+    const dy = (Math.sin(toRad(angleDeg)) * len) / 2;
+    out.push({
+      kind: "path",
+      d: `M ${f(cx - dx)} ${f(cy - dy)} L ${f(cx + dx)} ${f(cy + dy)}`,
+      paint: { type: "solid", color: "#8ff7ff", opacity: lerp(0.32, 0.5, rng()) * opacityScale },
+      stroke: { width: lerp(1.6, 2.6, rng()) },
+      blend: "plusLighter",
+      blur: lerp(1.4, 2.4, rng()),
+      clip: bodyD,
+    });
+  }
+  return out;
+}
+
+function patternPrimitives(
+  def: ColorDef,
+  geom: BodyGeom,
+  material: Material,
+  seed: number,
+): Primitive[] {
   const pattern = def.pattern;
-  const rng = makeRng(`pattern-${def.id}`);
+  const rng = makeRng(seededKey(`pattern-${def.id}`, seed));
   const out: Primitive[] = [];
   const bodyD = geom.d;
   const solid = (color: string, opacity = 1): Paint => ({
@@ -595,15 +671,19 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
       return out;
 
     case "spots": {
+      const density = pattern.density ?? 1;
+      const scale = pattern.scale ?? 1;
+      const wobble = 0.45 * (pattern.randomness ?? 1);
       // Dalmatian: irregular blotches of mixed size, nothing over the face.
-      for (let i = 0; i < 13; i++) {
+      const count = Math.max(1, Math.round(13 * density));
+      for (let i = 0; i < count; i++) {
         const cx = lerp(geom.nose.x + 16, rear - 2, rng());
         const cy = lerp(top + 5, bot - 5, rng());
         if (cx < geom.nose.x + 24 && cy < 0) continue; // keep the face readable
-        const r = lerp(2.2, 5.6, rng() * rng() + 0.3);
+        const r = lerp(2.2, 5.6, rng() * rng() + 0.3) * scale;
         out.push({
           kind: "path",
-          d: blobPath(cx, cy, r, r * lerp(0.75, 1.15, rng()), 0.45, rng),
+          d: blobPath(cx, cy, r, r * lerp(0.75, 1.15, rng()), wobble, rng),
           paint: solid(pattern.color, 0.92),
           // Just enough softness to kill the die-cut vector edge; a dalmatian
           // spot is still meant to read as crisp.
@@ -613,13 +693,14 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
       }
       if (pattern.onFins) {
         // Blotches spilling onto the caudal fan (unclipped — they sit on the fin).
-        for (let i = 0; i < 5; i++) {
+        const finCount = Math.max(1, Math.round(5 * density));
+        for (let i = 0; i < finCount; i++) {
           const cx = lerp(rear + 6, rear + 22, rng());
           const cy = lerp(-14, 14, rng());
-          const r = lerp(1.6, 3.2, rng());
+          const r = lerp(1.6, 3.2, rng()) * scale;
           out.push({
             kind: "path",
-            d: blobPath(cx, cy, r, r, 0.45, rng),
+            d: blobPath(cx, cy, r, r, wobble, rng),
             paint: solid(pattern.color, 0.72),
             blur: 0.8,
           });
@@ -649,22 +730,25 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
           clip: bodyD,
         });
       }
+      const density = pattern.density ?? 1;
+      const scale = pattern.scale ?? 1;
+      const randomness = pattern.randomness ?? 1;
       const wide = pattern.spread === "body";
       const metallic = pattern.metallic === true;
       // Metallic varieties (Black Diamond) carry far fewer flecks than a
       // dusted pattern — the body needs to stay "primarily glossy black",
       // with icy fleck + reflected-light glints as an accent, not a coating.
-      const count = metallic ? 14 : wide ? 26 : 22;
+      const count = Math.max(1, Math.round((metallic ? 14 : wide ? 26 : 22) * density));
       const place = (i: number) => {
         // Rear-weighted unless the variety is dusted all over (Black Diamond).
         const t = wide ? rng() : Math.sqrt(rng());
         const cx = lerp(wide ? geom.nose.x + 18 : -14, rear - 2, t);
-        const span = lerp(bot - 2, 11, (cx - geom.nose.x) / (rear - geom.nose.x));
+        const span = lerp(bot - 2, 11, (cx - geom.nose.x) / (rear - geom.nose.x)) * randomness;
         return { cx, cy: lerp(-span, span, rng()), t };
       };
       for (let i = 0; i < count; i++) {
         const { cx, cy, t } = place(i);
-        const r = lerp(1, 2.4, rng());
+        const r = lerp(1, 2.4, rng()) * scale;
         out.push({
           kind: "circle",
           cx,
@@ -679,14 +763,16 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
       }
       if (metallic) {
         // Reflected-light glints instead of painted dots: short tinted
-        // streaks, plus-lighter blended, angled as if catching one light
-        // source — reads as glossy surface sheen rather than dusted pigment.
-        for (let i = 0; i < 9; i++) {
+        // streaks, plus-lighter blended, angled off the LOCAL body curvature
+        // (not one fixed range for the whole fish) — reads as light catching
+        // curved, reflective scales rather than dusted-on pigment.
+        const glintCount = Math.max(1, Math.round(9 * density));
+        for (let i = 0; i < glintCount; i++) {
           const { cx, cy } = place(i);
-          const len = lerp(2.5, 5.5, rng());
-          const ang = lerp(-32, 8, rng());
-          const dx = (Math.cos(toRad(ang)) * len) / 2;
-          const dy = (Math.sin(toRad(ang)) * len) / 2;
+          const len = lerp(2.5, 5.5, rng()) * scale;
+          const angleDeg = curvatureTangentDeg(geom, cx, cy) + lerp(-14, 14, rng()) * randomness;
+          const dx = (Math.cos(toRad(angleDeg)) * len) / 2;
+          const dy = (Math.sin(toRad(angleDeg)) * len) / 2;
           out.push({
             kind: "path",
             d: `M ${f(cx - dx)} ${f(cy - dy)} L ${f(cx + dx)} ${f(cy + dy)}`,
@@ -703,13 +789,14 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
       } else {
         // A sparse pass of tiny hard dots, added light. This is what makes
         // the dusting read as metallic rather than as printed pigment.
-        for (let i = 0; i < 10; i++) {
+        const dotCount = Math.max(1, Math.round(10 * density));
+        for (let i = 0; i < dotCount; i++) {
           const { cx, cy } = place(i);
           out.push({
             kind: "circle",
             cx,
             cy,
-            r: lerp(0.5, 1.1, rng()),
+            r: lerp(0.5, 1.1, rng()) * scale,
             paint: { type: "solid", color: "#ffffff", opacity: lerp(0.35, 0.75, rng()) },
             blend: "plusLighter",
           });
@@ -719,10 +806,17 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
     }
 
     case "stripes": {
+      const density = pattern.density ?? 1;
+      const scale = pattern.scale ?? 1;
+      const randomness = pattern.randomness ?? 1;
       const clean = pattern.style === "clean";
-      // A 7-bar skeleton, evenly spaced — then every bar's actual position,
-      // width, and lean are rolled independently, so no two bars match.
-      const skeleton = [-28, -18, -8, 2, 12, 22, 31];
+      // An evenly-spaced bar skeleton (7 by default, `density` scales the
+      // count) — then every bar's actual position, width, and lean are
+      // rolled independently, so no two bars match.
+      const barCount = Math.max(3, Math.round(7 * density));
+      const skeleton = Array.from({ length: barCount }, (_, i) =>
+        lerp(-28, 31, barCount === 1 ? 0.5 : i / (barCount - 1)),
+      );
       const hi = top - 5;
       const lo = bot + 5;
       // Each bar is drawn twice: a wide soft halo under a tighter core. A real
@@ -744,25 +838,27 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
       for (const baseX of skeleton) {
         // Zebra: gentle position jitter so spacing reads as natural, not
         // ruled-off. Tiger: a touch more, since tiger stripes are already
-        // meant to look irregular.
-        const x = baseX + lerp(clean ? -2 : -3, clean ? 2 : 3, rng());
+        // meant to look irregular. `randomness` scales both.
+        const jitterSpan = (clean ? 2 : 3) * randomness;
+        const x = baseX + lerp(-jitterSpan, jitterSpan, rng());
         // Wider width range than before — "some stripes thinner, some
         // thicker" — and tiger's black stays a shade lighter on average so
         // the orange base stays dominant.
-        const w = clean ? lerp(1.7, 4.3, rng()) : lerp(1.5, 3.9, rng());
-        const lean = lerp(-3.6, -0.6, rng());
+        const w = (clean ? lerp(1.7, 4.3, rng()) : lerp(1.5, 3.9, rng())) * scale;
+        const lean = lerp(-3.6, -0.6, rng()) * randomness;
 
         if (clean) {
           // Zebra stays clean and even most of the time; occasionally a bar
           // breaks naturally near the belly or the dorsal edge — never both,
-          // and never so wide it reads as "tiger".
-          if (rng() < 0.28) {
+          // and never so wide it reads as "tiger". `randomness` also nudges
+          // how often that happens.
+          if (rng() < Math.min(0.9, 0.28 * randomness)) {
             const nearTop = rng() < 0.5;
-            const gapSpan = lerp(3, 5.5, rng());
+            const gapSpan = lerp(3, 5.5, rng()) * randomness;
             const gapCenter = nearTop
               ? lerp(top * 0.7, top * 0.3, rng())
               : lerp(bot * 0.3, bot * 0.7, rng());
-            const jitter = lerp(-1.2, 1.2, rng());
+            const jitter = lerp(-1.2, 1.2, rng()) * randomness;
             bar(upperBar(x, w, lean, jitter, gapCenter - gapSpan / 2));
             bar(lowerBar(x, w, lean, jitter, gapCenter + gapSpan / 2));
           } else {
@@ -771,9 +867,9 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
         } else {
           // Tiger: always broken, and irregularly so — width, gap size, and
           // gap position all vary per bar instead of following one template.
-          const gapTop = lerp(-7.5, -1.5, rng());
-          const gapBottom = gapTop + lerp(4, 10, rng());
-          const jitter = lerp(-3, 3, rng());
+          const gapTop = lerp(-7.5, -1.5, rng()) * randomness;
+          const gapBottom = gapTop + lerp(4, 10, rng()) * randomness;
+          const jitter = lerp(-3, 3, rng()) * randomness;
           bar(upperBar(x, w, lean, jitter, gapTop));
           bar(lowerBar(x, w, lean, jitter, gapBottom));
         }
@@ -784,6 +880,14 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
     case "patches": {
       const [primary, secondary] = pattern.colors;
       const nx = geom.nose.x;
+      const scale = pattern.scale ?? 1;
+      const randomness = pattern.randomness ?? 1;
+      // `density` has no effect here — each style's patches are a fixed,
+      // hand-composed layout (koi head + 3 body patches, etc.), not a
+      // loop-generated scatter, so "how many" isn't a meaningful knob.
+      // `scale`/`randomness` still resize and reshape every patch below.
+      const blob = (cx: number, cy: number, rx: number, ry: number, wobble: number) =>
+        blobPath(cx, cy, rx * scale, ry * scale, wobble * randomness, rng);
       // Koi/calico patches are bold and near-hard-edged; "soft" (sakura) keeps
       // a soft transition but is toned down from a full blur wash so the
       // patches stay recognisable at small sizes instead of reading as a haze.
@@ -805,33 +909,62 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
         // that point lands around 35-39% even at the jitter extremes, safely
         // inside the 30-45% target with room for "approximately".)
         const bodyLen = rear - nx;
-        patch(
-          blobPath(nx + bodyLen * 0.2, -3, bodyLen * 0.17, bodyLen * 0.2, 0.16, rng),
-          primary,
-          0.82,
-        );
+        patch(blob(nx + bodyLen * 0.2, -3, bodyLen * 0.17, bodyLen * 0.2, 0.16), primary, 0.82);
         // Several medium, well-spaced black patches — balanced, not busy.
-        patch(blobPath(12, -16, 9, 7, 0.4, rng), secondary ?? "#1c1e24", 0.9);
-        patch(blobPath(-3, 4, 11, 9, 0.4, rng), secondary ?? "#1c1e24", 0.9);
-        patch(blobPath(27, 8, 9, 7, 0.4, rng), secondary ?? "#1c1e24", 0.9);
+        patch(blob(12, -16, 9, 7, 0.4), secondary ?? "#1c1e24", 0.9);
+        patch(blob(-3, 4, 11, 9, 0.4), secondary ?? "#1c1e24", 0.9);
+        patch(blob(27, 8, 9, 7, 0.4), secondary ?? "#1c1e24", 0.9);
         return out;
       }
       if (pattern.style === "calico") {
         // Trio: broad fields of orange and black over the white base, several
         // of them running off the edge of the body.
-        patch(blobPath(-22, -11, 14, 13, 0.55, rng), primary, 1);
-        patch(blobPath(19, -7, 12, 12, 0.55, rng), primary, 1);
-        patch(blobPath(0, 14, 11, 10, 0.55, rng), secondary ?? "#23262e", 0.96);
-        patch(blobPath(nx + 20, 8, 8, 8, 0.55, rng), secondary ?? "#23262e", 0.96);
-        patch(blobPath(32, -13, 8, 7, 0.55, rng), secondary ?? "#23262e", 0.9);
+        patch(blob(-22, -11, 14, 13, 0.55), primary, 1);
+        patch(blob(19, -7, 12, 12, 0.55), primary, 1);
+        patch(blob(0, 14, 11, 10, 0.55), secondary ?? "#23262e", 0.96);
+        patch(blob(nx + 20, 8, 8, 8, 0.55), secondary ?? "#23262e", 0.96);
+        patch(blob(32, -13, 8, 7, 0.55), secondary ?? "#23262e", 0.9);
         return out;
       }
       // soft (sakura) — tighter wobble than koi/calico so the patch edges read
       // as an intentional shape rather than a blob, even under the blur.
-      patch(blobPath(-15, -9, 13, 11, 0.3, rng), primary, 0.94);
-      patch(blobPath(14, 9, 12, 10, 0.3, rng), secondary ?? primary, 0.9);
-      patch(blobPath(28, -9, 9, 8, 0.3, rng), primary, 0.9);
-      patch(blobPath(nx + 18, 5, 8, 7, 0.3, rng), secondary ?? primary, 0.8);
+      patch(blob(-15, -9, 13, 11, 0.3), primary, 0.94);
+      patch(blob(14, 9, 12, 10, 0.3), secondary ?? primary, 0.9);
+      patch(blob(28, -9, 9, 8, 0.3), primary, 0.9);
+      patch(blob(nx + 18, 5, 8, 7, 0.3), secondary ?? primary, 0.8);
+      return out;
+    }
+
+    case "custom": {
+      // Hand-drawn shapes (yarn fish:colors) — literal, not procedural, so no
+      // rng/tuning involved. `blob` reuses blobPath with wobble 0 for a clean
+      // ellipse; `stroke` is a uniform-width line; `ribbon` is a pre-built
+      // tapered outline (already a closed fill shape, no stroke width).
+      for (const shape of pattern.shapes) {
+        if (shape.kind === "blob") {
+          out.push({
+            kind: "path",
+            d: blobPath(shape.cx, shape.cy, shape.rx, shape.ry, 0, () => 0),
+            paint: solid(shape.color, shape.opacity ?? 0.9),
+            clip: bodyD,
+          });
+        } else if (shape.kind === "stroke") {
+          out.push({
+            kind: "path",
+            d: shape.d,
+            paint: solid(shape.color, shape.opacity ?? 0.9),
+            stroke: { width: shape.width },
+            clip: bodyD,
+          });
+        } else {
+          out.push({
+            kind: "path",
+            d: shape.d,
+            paint: solid(shape.color, shape.opacity ?? 0.9),
+            clip: bodyD,
+          });
+        }
+      }
       return out;
     }
   }
@@ -851,7 +984,12 @@ interface Shimmer {
   accents: Primitive[];
 }
 
-function shimmerPrimitive(kind: ShimmerKind, geom: BodyGeom, material: Material): Shimmer {
+function shimmerPrimitive(
+  kind: ShimmerKind,
+  geom: BodyGeom,
+  material: Material,
+  seed: number,
+): Shimmer {
   const bodyD = geom.d;
   const stops =
     kind === "silver"
@@ -885,31 +1023,15 @@ function shimmerPrimitive(kind: ShimmerKind, geom: BodyGeom, material: Material)
   };
   if (kind !== "iridescent") return { base, accents: [] };
 
-  // Electric Blue: two extra targeted cyan highlights — along the dorsal
-  // ridge and over the peduncle/tail root — on top of the base diagonal
-  // sweep, so the "iridescent" read isn't just one sliver but a metallic
-  // body with brighter accents where a real fish would catch the light.
-  const dorsalGlow: Primitive = {
-    kind: "path",
-    d:
-      `M ${f(geom.backPeak.x - 14)} ${f(geom.backPeak.y + 5)} ` +
-      `Q ${f(geom.backPeak.x)} ${f(geom.backPeak.y - 5)} ${f(geom.backPeak.x + 17)} ${f(geom.backPeak.y + 3)}`,
-    paint: { type: "solid", color: "#7ff2ff", opacity: 0.5 * (material.bloom / 0.62) },
-    stroke: { width: 3 },
-    blend: "plusLighter",
-    blur: 2.2,
-    clip: bodyD,
-  };
-  const tailGlow: Primitive = {
-    kind: "path",
-    d: `M ${f(geom.peduncleTop.x - 10)} ${f(geom.peduncleTop.y + 3)} L ${f(geom.peduncleTop.x + 3)} 0`,
-    paint: { type: "solid", color: "#8ff7ff", opacity: 0.46 * (material.bloom / 0.62) },
-    stroke: { width: 2.6 },
-    blend: "plusLighter",
-    blur: 1.8,
-    clip: bodyD,
-  };
-  return { base, accents: [dorsalGlow, tailGlow] };
+  // Electric Blue: procedural cyan highlight streaks tangent to the body's
+  // own curvature, scaled to this fish's rarity finish, on top of the base
+  // diagonal sweep — so the "iridescent" read isn't two fixed decals every
+  // electric blue fish shares, but a scattered set of reflections that
+  // varies per fish while still tracking the back's curve.
+  const rng = makeRng(seededKey("shimmer-iridescent", seed));
+  const highlightBoost = material.bloom / 0.62;
+  const accents = curvatureHighlights(geom, rng, 3 + Math.floor(rng() * 3), highlightBoost);
+  return { base, accents };
 }
 
 /** 4-pointed sparkle/star outline, alternating outer/inner radius. */
@@ -936,9 +1058,9 @@ function sparkleStarPath(cx: number, cy: number, r: number, rotDeg: number): str
  * from body landmarks (not hardcoded), so this scales with balloon vs
  * standard body the same way the rest of the fin/gloss geometry does.
  */
-function sparklePrimitives(geom: BodyGeom, tier: RarityTier): Primitive[] {
+function sparklePrimitives(geom: BodyGeom, tier: RarityTier, seed: number): Primitive[] {
   if (tier !== "legendary") return [];
-  const rng = makeRng(`sparkle-${tier}`);
+  const rng = makeRng(seededKey(`sparkle-${tier}`, seed));
   const rear = geom.peduncleTop.x;
   const spots = [0.32, 0.5, 0.68].map((t) => ({
     x: lerp(geom.nose.x, rear, t),
@@ -978,11 +1100,14 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
   const geom = bodyGeom(traits.body);
   const bodyD = geom.d;
   const px = geom.peduncleTop.x;
+  // Which of this color's procedural pattern variants this individual fish
+  // rolls — see the `patternSeed` doc comment on FishTraits.
+  const seed = traits.patternSeed ?? 0;
   // Rarity-driven finish: how glossy/rim-lit/translucent-finned this fish
   // reads, and how "clean" its fin lobes are — see materialFor()'s header.
   const material = materialFor(def.rarity.tier);
   const tail = tailGeom(traits.tail, geom);
-  const dorsal = dorsalGeom(traits.dorsal, geom);
+  const dorsal = dorsalGeom(traits.dorsal, traits.body, geom);
   const p = def.palette;
   const belly = geom.bellyLow.y;
   const bp = geom.backPeak.y;
@@ -1091,12 +1216,12 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
   });
 
   // Pattern + shimmer sit directly on the base colour…
-  skin.push(...patternPrimitives(def, geom, material));
-  const shimmer = def.shimmer ? shimmerPrimitive(def.shimmer, geom, material) : null;
+  skin.push(...patternPrimitives(def, geom, material, seed));
+  const shimmer = def.shimmer ? shimmerPrimitive(def.shimmer, geom, material, seed) : null;
   if (shimmer) skin.push(shimmer.base);
 
   // Sparse scale scribbles across the flank.
-  const scaleRng = makeRng(`scales-${def.id}`);
+  const scaleRng = makeRng(seededKey(`scales-${def.id}`, seed));
   for (let i = 0; i < 8; i++) {
     const x = lerp(-18, 30, scaleRng());
     const y = lerp(-14, 14, scaleRng());
@@ -1259,7 +1384,7 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
   if (shimmer?.accents.length) body.push(...shimmer.accents);
 
   // Legendary-exclusive sparkle accent — see sparklePrimitives().
-  body.push(...sparklePrimitives(geom, def.rarity.tier));
+  body.push(...sparklePrimitives(geom, def.rarity.tier, seed));
 
   // Pectoral fin: a small translucent membrane just behind the gill cover,
   // angled down and back.
