@@ -34,6 +34,7 @@ export function FishdexCard({ def, unlocked }: Props) {
             clock={null}
             phase={0}
             silhouette={!unlocked}
+            vector
           />
         </Group>
       </Canvas>

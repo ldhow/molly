@@ -2,10 +2,13 @@
 // bakes a fish once and replays it as a flat image.
 //
 // Why this exists. The declarative <PrimitiveNode> tree in fish-sprite.tsx is
-// dozens of nodes per fish. At TANK_CAPACITY the tank would rebuild all of
-// that on EVERY frame, for art that never changes — only the fish's transform
-// does. So: draw the spec once into an offscreen surface, snapshot it, and let
-// the per-frame cost be a single textured quad.
+// ~84 nodes per fish, and Phase 2's shading needs ~7 offscreen layers per fish
+// (one per fin group, one for the skin) plus a dozen mask blurs. At
+// TANK_CAPACITY the tank would pay all of that on EVERY frame, for art that
+// never changes — only the fish's transform does.
+//
+// So: draw the spec once into an offscreen surface, snapshot it, and let the
+// per-frame cost be a single textured quad. Blur and layers are paid once.
 //
 // The tail is baked separately because it is the one part that animates
 // (it rotates about `tailPivot` every frame).
@@ -15,21 +18,32 @@
 // case fails the build here rather than silently rendering nothing.
 
 import {
+  BlendMode,
+  BlurStyle,
   ClipOp,
   FillType,
   PaintStyle,
   Skia,
   StrokeCap,
   StrokeJoin,
+  TileMode,
   type SkCanvas,
   type SkImage,
   type SkPaint,
   type SkPath,
   type SkPicture,
+  type SkShader,
 } from "@shopify/react-native-skia";
 
 import { getColorDef } from "@/shared/fish/catalog";
-import { buildFishSpec, STAGE_SQUISH, type Box, type Primitive } from "@/shared/fish/render-spec";
+import {
+  buildFishSpec,
+  STAGE_SQUISH,
+  type Blend,
+  type Box,
+  type Paint as SpecPaint,
+  type Primitive,
+} from "@/shared/fish/render-spec";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
 
 /**
@@ -62,13 +76,90 @@ function assertNever(x: never): never {
   throw new Error(`fish-picture: unhandled IR case ${JSON.stringify(x)}`);
 }
 
-function makePaint(prim: Extract<Primitive, { paint: { color: string } }>): SkPaint {
+function blendMode(blend: Blend): BlendMode {
+  switch (blend) {
+    case "srcOver":
+      return BlendMode.SrcOver;
+    case "multiply":
+      return BlendMode.Multiply;
+    case "screen":
+      return BlendMode.Screen;
+    case "overlay":
+      return BlendMode.Overlay;
+    case "softLight":
+      return BlendMode.SoftLight;
+    case "plusLighter":
+      // BlendMode.PlusLighter (1002) is a custom SkSL blender this package
+      // added on top of standard Skia — it only works if the native binary
+      // this app is running was built from a react-native-skia checkout that
+      // includes it. BlendMode.Plus (12) is a real, always-present SkBlendMode
+      // and the safer choice for this baked/imperative path, at the cost of a
+      // slightly different highlight look than the declarative and SVG
+      // backends (which both use "plusLighter" directly).
+      return BlendMode.Plus;
+    default:
+      return assertNever(blend);
+  }
+}
+
+function shaderFor(paint: SpecPaint): SkShader | null {
+  switch (paint.type) {
+    case "solid":
+      return null;
+    case "linear":
+      return Skia.Shader.MakeLinearGradient(
+        Skia.Point(paint.from.x, paint.from.y),
+        Skia.Point(paint.to.x, paint.to.y),
+        paint.stops.map((s) => Skia.Color(s.color)),
+        paint.stops.map((s) => s.offset),
+        TileMode.Clamp,
+      );
+    case "radial": {
+      // The elliptical variant is a uniform radial with a local matrix that
+      // scales about the centre — the same construction SVG expresses as
+      // gradientTransform, so the two backends agree exactly.
+      let localMatrix;
+      const s = paint.scale;
+      if (s && (s.x !== 1 || s.y !== 1)) {
+        localMatrix = Skia.Matrix();
+        localMatrix.translate(paint.center.x, paint.center.y);
+        localMatrix.scale(s.x, s.y);
+        localMatrix.translate(-paint.center.x, -paint.center.y);
+      }
+      return Skia.Shader.MakeRadialGradient(
+        Skia.Point(paint.center.x, paint.center.y),
+        paint.radius,
+        paint.stops.map((st) => Skia.Color(st.color)),
+        paint.stops.map((st) => st.offset),
+        TileMode.Clamp,
+        localMatrix,
+      );
+    }
+    default:
+      return assertNever(paint);
+  }
+}
+
+function makePaint(prim: Extract<Primitive, { paint: SpecPaint }>): SkPaint {
   const paint = Skia.Paint();
   paint.setAntiAlias(true);
-  paint.setColor(Skia.Color(prim.paint.color));
+
+  const shader = shaderFor(prim.paint);
+  if (shader) {
+    paint.setShader(shader);
+  } else if (prim.paint.type === "solid") {
+    paint.setColor(Skia.Color(prim.paint.color));
+  }
+  // `opacity` modulates whatever the colour or shader produced.
   paint.setAlphaf((prim.paint.opacity ?? 1) * paint.getAlphaf());
 
-  if (prim.stroke) {
+  if (prim.blend) paint.setBlendMode(blendMode(prim.blend));
+  // A primitive blur is a MASK filter: it softens this shape's own alpha in a
+  // single draw. `respectCTM: true` so the sigma scales with the bake factor.
+  if (prim.blur !== undefined && prim.blur > 0) {
+    paint.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, prim.blur, true));
+  }
+  if (prim.kind === "path" && prim.stroke) {
     paint.setStyle(PaintStyle.Stroke);
     paint.setStrokeWidth(prim.stroke.width);
     paint.setStrokeCap(StrokeCap.Round);
@@ -107,15 +198,17 @@ export function drawSpec(canvas: SkCanvas, prims: Primitive[], cache: PathCache)
     }
 
     if (prim.kind === "group") {
-      if (prim.opacity !== undefined && prim.opacity !== 1) {
-        const layerPaint = Skia.Paint();
-        layerPaint.setAlphaf(prim.opacity);
-        canvas.saveLayer(layerPaint);
-        drawSpec(canvas, prim.children, cache);
-        canvas.restore();
-      } else {
-        drawSpec(canvas, prim.children, cache);
+      // A group blur is an IMAGE filter, and `isolate` forces the same layer so
+      // children blend against the fish rather than the tank water behind it.
+      const layerPaint = Skia.Paint();
+      layerPaint.setAlphaf(prim.opacity ?? 1);
+      if (prim.blend) layerPaint.setBlendMode(blendMode(prim.blend));
+      if (prim.blur !== undefined && prim.blur > 0) {
+        layerPaint.setImageFilter(Skia.ImageFilter.MakeBlur(prim.blur, prim.blur, TileMode.Decal));
       }
+      canvas.saveLayer(layerPaint);
+      drawSpec(canvas, prim.children, cache);
+      canvas.restore();
     } else if (prim.kind === "circle") {
       canvas.drawCircle(prim.cx, prim.cy, prim.r, makePaint(prim));
     } else if (prim.kind === "path") {
@@ -171,18 +264,27 @@ function renderToImage(
 ): SkImage | null {
   const w = Math.ceil(bounds.width * BAKE_DPR);
   const h = Math.ceil(bounds.height * BAKE_DPR);
-  const surface = Skia.Surface.MakeOffscreen(w, h);
+  // A raster surface (not `MakeOffscreen`, which is GPU-backed): zeroed
+  // memory, no GPU context, and no thread affinity. This bake runs during
+  // React render (a useMemo), not inside a Skia draw pass, so there is no
+  // live GPU context to borrow — `MakeOffscreen` would silently stand up a
+  // second, thread-local one just to immediately read the pixels back.
+  const surface = Skia.Surface.Make(w, h);
   if (!surface) return null;
   const canvas = surface.getCanvas();
+  // Raster memory isn't guaranteed zeroed on every platform; clear explicitly
+  // before drawing partially-transparent content over it.
+  canvas.clear(Skia.Color("#00000000"));
   canvas.scale(BAKE_DPR, BAKE_DPR);
   // Local space has its origin at the body centre; shift so `bounds` maps to
   // the surface's top-left.
   canvas.translate(-bounds.x, -bounds.y);
   canvas.scale(1, squish);
   draw(canvas, paths);
+  // A raster surface's snapshot is already non-texture; no GPU detach needed.
   const image = surface.makeImageSnapshot();
-  // Detach from the surface so the texture survives the surface being freed.
-  return image.makeNonTextureImage() ?? image;
+  surface.dispose();
+  return image;
 }
 
 function renderToPicture(
@@ -235,8 +337,8 @@ export function getBakedFish(traits: FishTraits, stage: LifeStage): BakedFish | 
     }
   }
   if (!baked) {
-    // Either the mode asked for pictures, or MakeOffscreen was unavailable —
-    // pictures need no GPU surface, so they always succeed.
+    // Either the mode asked for pictures, or the raster surface allocation
+    // failed — pictures need no surface at all, so they always succeed.
     baked = {
       body: renderToPicture(bounds, squish, drawBody, paths),
       tail: renderToPicture(bounds, squish, drawTail, paths),
@@ -246,7 +348,10 @@ export function getBakedFish(traits: FishTraits, stage: LifeStage): BakedFish | 
     };
   }
 
-  // Pictures are command lists, not pixels; only textures are worth budgeting.
+  // Pictures are command lists, not pixels; only raster textures are worth
+  // budgeting. This is CPU RAM (raster surfaces), not VRAM — sized so
+  // TANK_CAPACITY (25) distinct combos fit: 25 × 2 halves × ~953KB/half at
+  // BAKE_DPR 3 ≈ 47.5MB. Changing BAKE_DPR must move this budget with it.
   const bytes =
     baked.kind === "image"
       ? Math.ceil(bounds.width * BAKE_DPR) * Math.ceil(bounds.height * BAKE_DPR) * 4 * 2

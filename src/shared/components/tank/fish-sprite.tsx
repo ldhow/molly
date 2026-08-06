@@ -1,11 +1,15 @@
 import {
+  Blur,
+  BlurMask,
   Circle,
   ColorMatrix,
   Group,
   Image as SkiaImage,
+  LinearGradient,
   Paint,
   Path,
   Picture,
+  RadialGradient,
   Skia,
   useClock,
   useImage,
@@ -29,7 +33,9 @@ import {
   eggSpec,
   SILHOUETTE_COLOR,
   STAGE_SQUISH,
+  type Blend,
   type Box,
+  type Paint as SpecPaint,
   type Primitive,
 } from "@/shared/fish/render-spec";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
@@ -147,6 +153,14 @@ interface FishBodyProps {
   phase: number;
   /** Draw as a flat dark silhouette (locked fishdex entries). */
   silhouette?: boolean;
+  /**
+   * Skip the baked-image cache and always draw the declarative node tree.
+   * Baking is cheap per fish but not free — worth it for the handful of fish
+   * animating every frame in the live tank, but a gallery/grid mounts many
+   * distinct fish at once and would evict the tank's own cached textures
+   * baking all of them too. Same art either way.
+   */
+  vector?: boolean;
 }
 
 interface CompiledPrimitive {
@@ -181,7 +195,7 @@ function compilePrimitive(prim: Primitive, clips: ClipCache): CompiledPrimitive 
  * Renders the registered sprite image when one exists, else the shared
  * render-spec — the exact drawing the HTML preview gallery shows.
  */
-export function FishBody({ traits, stage, clock, phase, silhouette }: FishBodyProps) {
+export function FishBody({ traits, stage, clock, phase, silhouette, vector }: FishBodyProps) {
   const asset = spriteFor(traits.color, stage);
   const image = useImage(asset);
 
@@ -202,8 +216,8 @@ export function FishBody({ traits, stage, clock, phase, silhouette }: FishBodyPr
   // The flattened bake. Every fish of the same traits+stage shares one, so this
   // is a module-level cache lookup, not per-instance work.
   const baked = useMemo(
-    () => (stage === "egg" || silhouette ? null : getBakedFish(traits, stage)),
-    [traits, stage, silhouette],
+    () => (stage === "egg" || silhouette || vector ? null : getBakedFish(traits, stage)),
+    [traits, stage, silhouette, vector],
   );
 
   const tailTransform = useDerivedValue<Transforms3d>(() => {
@@ -307,23 +321,99 @@ function assertNever(x: never): never {
 }
 
 /**
- * One IR primitive as Skia nodes. `clip` is applied here rather than by
- * callers so the tree structure matches the SVG emitter one-for-one.
+ * The IR's `Blend` names are deliberately spelled as Skia's own blendMode prop
+ * strings, so this is the identity apart from dropping the default. The
+ * `switch` (rather than a passthrough) is what actually enforces that
+ * correspondence — `assertNever` fails the build if `Blend` ever gains a name
+ * Skia's declarative `blendMode` prop doesn't recognise.
+ */
+function skiaBlend(blend: Blend): Exclude<Blend, "srcOver"> | undefined {
+  switch (blend) {
+    case "srcOver":
+      return undefined;
+    case "multiply":
+    case "screen":
+    case "overlay":
+    case "softLight":
+    case "plusLighter":
+      return blend;
+    default:
+      return assertNever(blend);
+  }
+}
+
+function paintChild(paint: SpecPaint) {
+  switch (paint.type) {
+    case "solid":
+      return null;
+    case "linear":
+      return (
+        <LinearGradient
+          start={vec(paint.from.x, paint.from.y)}
+          end={vec(paint.to.x, paint.to.y)}
+          colors={paint.stops.map((s) => s.color)}
+          positions={paint.stops.map((s) => s.offset)}
+        />
+      );
+    case "radial": {
+      // `scale` gives an elliptical falloff; Skia applies it as a transform
+      // about the centre, exactly as SVG's gradientTransform does.
+      const s = paint.scale;
+      return (
+        <RadialGradient
+          c={vec(paint.center.x, paint.center.y)}
+          r={paint.radius}
+          colors={paint.stops.map((st) => st.color)}
+          positions={paint.stops.map((st) => st.offset)}
+          origin={vec(paint.center.x, paint.center.y)}
+          transform={s ? [{ scaleX: s.x }, { scaleY: s.y }] : undefined}
+        />
+      );
+    }
+    default:
+      return assertNever(paint);
+  }
+}
+
+/**
+ * One IR primitive as Skia nodes. Clip/blur/blend are applied here rather than
+ * by callers so the tree structure matches the SVG emitter one-for-one.
  */
 function PrimitiveNode({ compiled, clips }: { compiled: CompiledPrimitive; clips: ClipCache }) {
   const { prim } = compiled;
 
   if (prim.kind === "group") {
-    return (
-      <Group clip={prim.clip ? clips.get(prim.clip) : undefined} opacity={prim.opacity ?? 1}>
+    const inner = (
+      <>
         {compiled.children!.map((c, i) => (
           <PrimitiveNode key={i} compiled={c} clips={clips} />
         ))}
+      </>
+    );
+    // A group blur is an IMAGE filter — it blurs the composited result, so it
+    // needs a layer. `isolate` forces that same layer so children blending
+    // against "the backdrop" see the fish, not the tank water behind it.
+    const hasBlur = prim.blur !== undefined && prim.blur > 0;
+    const needsLayer = prim.isolate || hasBlur || prim.blend !== undefined;
+    const layer = needsLayer ? (
+      <Paint opacity={prim.opacity ?? 1} blendMode={prim.blend ? skiaBlend(prim.blend) : undefined}>
+        {prim.blur !== undefined && prim.blur > 0 ? <Blur blur={prim.blur} /> : null}
+      </Paint>
+    ) : undefined;
+    return (
+      <Group clip={prim.clip ? clips.get(prim.clip) : undefined} layer={layer}>
+        {needsLayer ? inner : <Group opacity={prim.opacity ?? 1}>{inner}</Group>}
       </Group>
     );
   }
 
   const opacity = prim.paint.opacity ?? 1;
+  const solidColor = prim.paint.type === "solid" ? prim.paint.color : undefined;
+  const blendMode = prim.blend ? skiaBlend(prim.blend) : undefined;
+  // A primitive blur is a MASK filter: it softens this shape's own alpha in a
+  // single draw, with no offscreen allocation.
+  const maskBlur =
+    prim.blur !== undefined && prim.blur > 0 ? <BlurMask blur={prim.blur} style="normal" /> : null;
 
   let node: React.JSX.Element | null = null;
   if (prim.kind === "circle") {
@@ -332,24 +422,30 @@ function PrimitiveNode({ compiled, clips }: { compiled: CompiledPrimitive; clips
         cx={prim.cx}
         cy={prim.cy}
         r={prim.r}
-        color={prim.paint.color}
+        color={solidColor}
         opacity={opacity}
-        style={prim.stroke ? "stroke" : "fill"}
-        strokeWidth={prim.stroke?.width}
-      />
+        blendMode={blendMode}
+      >
+        {paintChild(prim.paint)}
+        {maskBlur}
+      </Circle>
     );
   } else if (prim.kind === "path") {
     if (!compiled.path) return null;
     node = (
       <Path
         path={compiled.path}
-        color={prim.paint.color}
+        color={solidColor}
         opacity={opacity}
         style={prim.stroke ? "stroke" : "fill"}
         strokeWidth={prim.stroke?.width}
         strokeCap="round"
         strokeJoin="round"
-      />
+        blendMode={blendMode}
+      >
+        {paintChild(prim.paint)}
+        {maskBlur}
+      </Path>
     );
   } else {
     return assertNever(prim);

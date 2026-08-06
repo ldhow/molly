@@ -6,12 +6,16 @@ import { EmptyState } from "@/shared/components/empty-state";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 
 import { TankCanvas } from "@/shared/components/tank/tank-canvas";
+import { useAddDevFishMutation } from "../api/use-add-dev-fish-mutation";
 import { useOwnedFish } from "../api/use-owned-fish";
+import { useRemoveDevFishMutation } from "../api/use-remove-dev-fish-mutation";
 
 export function TankScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { fish, totalCount, aliveCount, holdingCount } = useOwnedFish();
+  const addDevFish = useAddDevFishMutation();
+  const removeDevFish = useRemoveDevFishMutation();
 
   return (
     <View style={styles.root}>
@@ -36,6 +40,24 @@ export function TankScreen() {
           <Pressable style={styles.manageButton} onPress={() => router.push("/holding-tank")}>
             <Text style={styles.manageButtonText}>Manage tank</Text>
           </Pressable>
+          {__DEV__ ? (
+            <View style={styles.devRow}>
+              <Pressable
+                style={styles.devButton}
+                onPress={() => addDevFish.mutate()}
+                disabled={addDevFish.isPending}
+              >
+                <Text style={styles.devButtonText}>DEV: add a fish</Text>
+              </Pressable>
+              <Pressable
+                style={styles.devButton}
+                onPress={() => removeDevFish.mutate()}
+                disabled={removeDevFish.isPending || fish.length === 0}
+              >
+                <Text style={styles.devButtonText}>DEV: remove a fish</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       </View>
       {totalCount === 0 ? (
@@ -74,6 +96,20 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   manageButtonText: { color: palette.textFaint, fontSize: 11, fontWeight: "600" },
+  devRow: {
+    flexDirection: "row",
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+  },
+  devButton: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  devButtonText: { color: palette.textFaint, fontSize: 11, fontWeight: "600" },
   emptyOverlay: {
     position: "absolute",
     top: 0,

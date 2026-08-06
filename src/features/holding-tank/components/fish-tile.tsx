@@ -21,10 +21,10 @@ interface Props {
 }
 
 /**
- * Static preview card for the Holding Tank grid. Deliberately renders via the
- * declarative `FishBody` node path — not `fish-picture.ts`'s baked cache —
- * so browsing a large archive here never evicts the textures the live Tank
- * scene depends on.
+ * Static preview card for the Holding Tank grid. Passes `vector` so it draws
+ * via `FishBody`'s declarative node path instead of `fish-picture.ts`'s baked
+ * cache — a large archive can mount many distinct fish at once, and each one
+ * baking to its own GPU offscreen texture corrupts rendering.
  */
 export function FishTile({ row, selected, onPress }: Props) {
   const alive = row.outcome === "completed";
@@ -42,7 +42,7 @@ export function FishTile({ row, selected, onPress }: Props) {
             { scale: PREVIEW_SCALE * STAGE_SCALE[stage] },
           ]}
         >
-          <FishBody traits={traits} stage={stage} clock={null} phase={0} />
+          <FishBody traits={traits} stage={stage} clock={null} phase={0} vector />
         </Group>
       </Canvas>
       <Text style={styles.name}>{colorDef.name}</Text>

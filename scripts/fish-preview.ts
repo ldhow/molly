@@ -23,6 +23,8 @@ import {
   maxFishBounds,
   SILHOUETTE_COLOR,
   STAGE_SQUISH,
+  type Blend,
+  type Paint,
   type Primitive,
 } from "../src/shared/fish/render-spec";
 import type { ColorDef, FishTraits, UnlockRule } from "../src/shared/fish/types";
@@ -52,17 +54,18 @@ function deadFilter(id: string): string {
 let uid = 0;
 
 /**
- * Per-<svg> emitter state. Clip paths are memoised by content so a body clip
- * reused by 30 primitives costs one <clipPath>, matching how the Skia backend
- * compiles one SkPath per unique `d`.
+ * Per-<svg> emitter state. Clip paths and blur filters are memoised by content
+ * so a body clip reused by 30 primitives costs one <clipPath>, matching how the
+ * Skia backend compiles one SkPath per unique `d`.
  */
 interface SvgCtx {
   defs: string[];
   clips: Map<string, string>;
+  blurs: Map<number, string>;
 }
 
 function newCtx(): SvgCtx {
-  return { defs: [], clips: new Map() };
+  return { defs: [], clips: new Map(), blurs: new Map() };
 }
 
 function clipRef(ctx: SvgCtx, d: string): string {
@@ -75,33 +78,118 @@ function clipRef(ctx: SvgCtx, d: string): string {
   return id;
 }
 
+/**
+ * A Gaussian blur filter. The oversized region is mandatory: SVG defaults a
+ * filter to the bbox ±10%, which silently crops anything soft — a bug that
+ * would show up ONLY in the preview and quietly break app/preview parity.
+ */
+function blurRef(ctx: SvgCtx, sigma: number): string {
+  let id = ctx.blurs.get(sigma);
+  if (!id) {
+    id = `blur${uid++}`;
+    ctx.blurs.set(sigma, id);
+    ctx.defs.push(
+      `<filter id="${id}" x="-50%" y="-50%" width="200%" height="200%" ` +
+        `color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="${sigma}"/></filter>`,
+    );
+  }
+  return id;
+}
+
+function paintAttrs(paint: Paint, ctx: SvgCtx): { fill: string; opacity: number } {
+  const opacity = paint.opacity ?? 1;
+  if (paint.type === "solid") return { fill: paint.color, opacity };
+
+  const id = `g${uid++}`;
+  const stops = paint.stops
+    .map((s) => `<stop offset="${s.offset}" stop-color="${s.color}"/>`)
+    .join("");
+
+  if (paint.type === "linear") {
+    ctx.defs.push(
+      `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${paint.from.x}" y1="${paint.from.y}" x2="${paint.to.x}" y2="${paint.to.y}">${stops}</linearGradient>`,
+    );
+    return { fill: `url(#${id})`, opacity };
+  }
+
+  if (paint.type === "radial") {
+    const { x: cx, y: cy } = paint.center;
+    // Elliptical falloff: scale about the centre. Skia expresses the identical
+    // thing as a `transform` on the gradient node.
+    const s = paint.scale;
+    const gt =
+      s && (s.x !== 1 || s.y !== 1)
+        ? ` gradientTransform="translate(${f(cx)} ${f(cy)}) scale(${s.x} ${s.y}) translate(${f(-cx)} ${f(-cy)})"`
+        : "";
+    ctx.defs.push(
+      `<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="${f(cx)}" cy="${f(cy)}" r="${f(paint.radius)}"${gt}>${stops}</radialGradient>`,
+    );
+    return { fill: `url(#${id})`, opacity };
+  }
+
+  return assertNever(paint);
+}
+
 function assertNever(x: never): never {
   throw new Error(`fish-preview: unhandled IR case ${JSON.stringify(x)}`);
+}
+
+function cssBlend(blend: Blend): string {
+  switch (blend) {
+    case "srcOver":
+      return "normal";
+    case "multiply":
+      return "multiply";
+    case "screen":
+      return "screen";
+    case "overlay":
+      return "overlay";
+    case "softLight":
+      return "soft-light";
+    case "plusLighter":
+      return "plus-lighter";
+    default:
+      return assertNever(blend);
+  }
+}
+
+/** Shared attributes for anything drawable: clip, blur, blend, isolation. */
+function commonAttrs(
+  ctx: SvgCtx,
+  o: { clip?: string; blend?: Blend; blur?: number; isolate?: boolean },
+): string {
+  let out = "";
+  if (o.clip) out += ` clip-path="url(#${clipRef(ctx, o.clip)})"`;
+  if (o.blur !== undefined && o.blur > 0) out += ` filter="url(#${blurRef(ctx, o.blur)})"`;
+  const style: string[] = [];
+  if (o.blend && o.blend !== "srcOver") style.push(`mix-blend-mode:${cssBlend(o.blend)}`);
+  // `isolation:isolate` makes children blend against this group's own contents
+  // rather than the water behind the fish — SVG's answer to Skia's
+  // <Group layer={<Paint/>}>.
+  if (o.isolate) style.push("isolation:isolate");
+  if (style.length) out += ` style="${style.join(";")}"`;
+  return out;
 }
 
 function primitiveSvg(prim: Primitive, ctx: SvgCtx): string {
   if (prim.kind === "group") {
     const inner = prim.children.map((c) => primitiveSvg(c, ctx)).join("");
-    const attrs =
-      prim.opacity !== undefined && prim.opacity !== 1 ? ` opacity="${prim.opacity}"` : "";
-    const clip = prim.clip ? ` clip-path="url(#${clipRef(ctx, prim.clip)})"` : "";
-    return `<g${attrs}${clip}>${inner}</g>`;
+    let attrs = commonAttrs(ctx, prim);
+    if (prim.opacity !== undefined && prim.opacity !== 1) attrs += ` opacity="${prim.opacity}"`;
+    return `<g${attrs}>${inner}</g>`;
   }
 
-  const { color, opacity = 1 } = prim.paint;
-  const clip = prim.clip ? ` clip-path="url(#${clipRef(ctx, prim.clip)})"` : "";
+  const { fill, opacity } = paintAttrs(prim.paint, ctx);
+  const attrs = commonAttrs(ctx, prim);
 
   if (prim.kind === "circle") {
-    if (prim.stroke) {
-      return `<circle cx="${prim.cx}" cy="${prim.cy}" r="${prim.r}" fill="none" stroke="${color}" stroke-width="${prim.stroke.width}" opacity="${opacity}"${clip}/>`;
-    }
-    return `<circle cx="${prim.cx}" cy="${prim.cy}" r="${prim.r}" fill="${color}" opacity="${opacity}"${clip}/>`;
+    return `<circle cx="${prim.cx}" cy="${prim.cy}" r="${prim.r}" fill="${fill}" opacity="${opacity}"${attrs}/>`;
   }
   if (prim.kind === "path") {
     if (prim.stroke) {
-      return `<path d="${prim.d}" fill="none" stroke="${color}" stroke-width="${prim.stroke.width}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"${clip}/>`;
+      return `<path d="${prim.d}" fill="none" stroke="${fill}" stroke-width="${prim.stroke.width}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"${attrs}/>`;
     }
-    return `<path d="${prim.d}" fill="${color}" opacity="${opacity}"${clip}/>`;
+    return `<path d="${prim.d}" fill="${fill}" opacity="${opacity}"${attrs}/>`;
   }
   return assertNever(prim);
 }

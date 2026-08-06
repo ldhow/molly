@@ -70,8 +70,6 @@ Rendering is capped at `TANK_CAPACITY` (25, [tank-membership.ts](src/shared/lib/
 
 [render-spec.ts](src/shared/fish/render-spec.ts) is the single source of truth. It builds a renderer-agnostic list of primitives (SVG path strings + paint descriptors) for a trait combination, and **must stay free of React/React Native/Skia imports** — it runs under plain Node so the preview gallery can use it.
 
-Art style is **flat vector clip-art** (bold uniform outlines, flat colour, no gradients/blur/blend modes) — a deliberate pivot from an earlier airbrushed/gradient version. The IR reflects that: `Paint` is just `{color, opacity?}`, not a union. Rolled traits carry the visual drama — `tail:"lyretail"` + `dorsal:"sailfin"` is the showy veiltail silhouette, the common `standard`/`round` roll stays calmer — and rarity shows via fin tint, shadow/shine strength, and (rare+) a coloured eye-ring in the variety's `accentColor`.
-
 There are **three backends over that one IR**, and they must be changed together:
 
 | Backend          | File                                                                          | Role                                 |
@@ -82,6 +80,10 @@ There are **three backends over that one IR**, and they must be changed together
 
 Each is a `switch` over the same union with an exhaustive `default` that throws, so **adding an IR case fails `npm run typecheck` until all three handle it.** That is the mechanism keeping the preview honest — do not weaken it.
 
-`yarn fish:preview` regenerates [src/docs/fish-preview.html](src/docs/fish-preview.html): every colour × life stage, plus dead and locked, from the exact code the app runs. **This is the iteration loop for art work — no device needed.** Only add IR features both Skia and SVG can express; the header comment in `render-spec.ts` carries the mapping table and the list of deliberately-excluded features (gradients, blur, blend modes — the whole airbrushed style this pivoted away from) with reasons.
+For a function-by-function map of where each part (body, tail, dorsal, pelvic/anal/pectoral, patterns, shimmer, shading, eye/mouth) lives in `render-spec.ts`, see [src/docs/fish-art-guide.md](src/docs/fish-art-guide.md).
+
+`yarn fish:preview` regenerates [src/docs/fish-preview.html](src/docs/fish-preview.html): every colour × life stage, plus dead and locked, from the exact code the app runs. **This is the iteration loop for art work — no device needed.** Only add IR features both Skia and SVG can express; the header comment in `render-spec.ts` carries the mapping table and the list of deliberately-excluded features (sweep gradients, Perlin noise, SkSL) with reasons.
+
+[scripts/fish-path-editor.html](scripts/fish-path-editor.html) is a hand-drawing tool for the body/fin Bézier shapes themselves — open it directly in a browser, no build step. Draw or drag points, load what's currently shipping as a starting point, and it exports `d` strings and landmark/pivot objects shaped to paste directly into `render-spec.ts`.
 
 Fish are **generated, not authored**: ~480 trait combinations, so there is no sprite sheet. `FISH_RENDER_MODE` in `fish-picture.ts` selects `"image"` (default — bake once to a texture, one quad per frame), `"picture"`, or `"nodes"`; each degrades to the next automatically. The `<Image>` sprite path and the empty manifest in [sprites.ts](src/shared/lib/sprites.ts) survive as a per-colour override. Dead fish are the same drawing with a grayscale `ColorMatrix`, flipped, resting on the sand — there is no separate dead artwork.

@@ -20,4 +20,4 @@ Domain notes: the single `sessions` table is the source of truth — tank fish, 
 
 Use `npx expo start --port 8082` (8081 is occupied on this machine) against the **EAS development build** — the project has moved off Expo Go, so packages with native code are allowed now. Android: AVD `molly`. Never `expo run:ios` (SDK 57 needs a newer Xcode than this machine has).
 
-Fish art needs no device: `yarn fish:preview` renders every variety to `src/docs/fish-preview.html` from the same render-spec the app uses. See the "How a fish is drawn" section of CLAUDE.md before changing anything under `src/shared/fish/`.
+Fish art needs no device: `yarn fish:preview` renders every variety to `src/docs/fish-preview.html` from the same render-spec the app uses, and `scripts/fish-path-editor.html` (open directly in a browser) is a visual editor for drawing/reshaping the body and fin Bézier curves by hand and exporting code to paste in. See the "How a fish is drawn" section of CLAUDE.md before changing anything under `src/shared/fish/`.

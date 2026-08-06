@@ -1,3 +1,4 @@
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
   Alert,
@@ -21,6 +22,7 @@ import { useSwapTankFishMutation } from "../api/use-swap-tank-fish-mutation";
 import { FishTile } from "../components/fish-tile";
 
 export function HoldingTankScreen() {
+  const router = useRouter();
   const { inTank, holding, isLoading } = useFishCollection();
   const swap = useSwapTankFishMutation();
   const [pickingReplacementFor, setPickingReplacementFor] = useState<string | null>(null);
@@ -64,6 +66,12 @@ export function HoldingTankScreen() {
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <View style={styles.header}>
+          <Button
+            label="‹ Back"
+            variant="ghost"
+            onPress={() => router.back()}
+            style={styles.backButton}
+          />
           <Text style={styles.title}>Holding Tank</Text>
           <Text style={styles.subtitle}>
             {inTank.length}/{TANK_CAPACITY} in tank · {holding.length} in holding
@@ -128,6 +136,11 @@ export function HoldingTankScreen() {
 const styles = StyleSheet.create({
   content: { paddingBottom: spacing.xl },
   header: { gap: spacing.xs, paddingBottom: spacing.md },
+  backButton: {
+    alignSelf: "flex-start",
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+  },
   title: { color: palette.text, fontSize: 28, fontWeight: "700", marginTop: spacing.sm },
   subtitle: { color: palette.textDim, fontSize: 14 },
   sectionTitle: {
