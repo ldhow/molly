@@ -64,7 +64,7 @@ When changing session logic, put the decision in `machine.ts` as a pure function
 
 [tank-canvas.tsx](src/shared/components/tank/tank-canvas.tsx) composes water, sand, plants, bubbles, and fish; the same canvas renders the tank (many fish) and the in-session view (one centered growing fish) via the `mode` prop. Animation uses Skia `useClock()` + Reanimated `useDerivedValue` passed straight into Skia props — use Skia's `interpolateColors`, not Reanimated's `interpolateColor`.
 
-Rendering is capped at `MAX_RENDERED_FISH` (25) with a "+N more" count.
+Rendering is capped at `TANK_CAPACITY` (25, [tank-membership.ts](src/shared/lib/tank-membership.ts)). Which fish occupy those 25 slots is explicit, not just "newest": `sessions.inTank` (0/1) marks tank membership, and fish beyond capacity live in the **Holding Tank** ([holding-tank](src/features/holding-tank) feature, `/holding-tank` route) — a screen where the user swaps fish in and out. A dead fish's corpse also disappears from view (though its `inTank` flag and row are untouched) 24h after `endedAt` (`DEAD_FISH_TTL_MS`), which is what lets a slot free itself for the next completed session to auto-join without any write.
 
 ### How a fish is drawn — read this before touching fish art
 

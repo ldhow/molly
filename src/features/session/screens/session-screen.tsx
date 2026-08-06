@@ -1,10 +1,11 @@
 import { useKeepAwake } from "expo-keep-awake";
 import { Redirect } from "expo-router";
 import { useEffect } from "react";
-import { Alert, StyleSheet, Text, View } from "react-native";
+import { Alert, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { standardTraits } from "@/shared/fish/catalog";
+import { stageForProgress } from "@/shared/fish/life-stage";
 import type { LifeStage } from "@/shared/fish/types";
 import { TankCanvas } from "@/shared/components/tank/tank-canvas";
 import { seedFromString } from "@/shared/lib/seed";
@@ -36,13 +37,6 @@ export function SessionScreen() {
   return <Redirect href="/(tabs)" />;
 }
 
-function stageForProgress(progress: number): LifeStage {
-  if (progress < 0.1) return "egg";
-  if (progress < 0.4) return "fry";
-  if (progress < 0.75) return "juvenile";
-  return "adult";
-}
-
 const STAGE_LABEL: Record<LifeStage, string> = {
   egg: "An egg rests in the current…",
   fry: "A tiny fry hatched!",
@@ -52,6 +46,7 @@ const STAGE_LABEL: Record<LifeStage, string> = {
 
 function ActiveSessionView({ session }: { session: ActiveSession }) {
   const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   const now = useNow(1000);
   const settle = useSettleSession();
   const graceRecovered = useSessionStore((s) => s.graceRecovered);
@@ -95,13 +90,24 @@ function ActiveSessionView({ session }: { session: ActiveSession }) {
         ]}
       />
 
-      <View style={[styles.top, { paddingTop: insets.top + spacing.md }]}>
+      <View
+        style={[
+          styles.top,
+          {
+            paddingTop: insets.top + spacing.md,
+            paddingLeft: insets.left + spacing.lg,
+            paddingRight: insets.right + spacing.lg,
+          },
+        ]}
+      >
         {graceRecovered ? (
           <View style={styles.graceBanner}>
             <Text style={styles.graceText}>Phew — your molly barely survived. Stay here!</Text>
           </View>
         ) : null}
-        <Text style={styles.clock}>{formatClock(secondsLeftOf(session, now))}</Text>
+        <Text style={[styles.clock, { fontSize: height < 420 ? 40 : 56 }]}>
+          {formatClock(secondsLeftOf(session, now))}
+        </Text>
         <Text style={styles.stageLabel}>{STAGE_LABEL[stage]}</Text>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { flex: progress }]} />
@@ -109,7 +115,18 @@ function ActiveSessionView({ session }: { session: ActiveSession }) {
         </View>
       </View>
 
-      <View style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}>
+      <View style={{ flex: 1 }} />
+
+      <View
+        style={[
+          styles.bottom,
+          {
+            paddingBottom: insets.bottom + spacing.lg,
+            paddingLeft: insets.left + spacing.lg,
+            paddingRight: insets.right + spacing.lg,
+          },
+        ]}
+      >
         <Button label="Give up" variant="ghost" onPress={confirmGiveUp} />
       </View>
     </View>
@@ -120,7 +137,6 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.waterBottom },
   top: {
     alignItems: "center",
-    paddingHorizontal: spacing.lg,
     gap: spacing.sm,
   },
   graceBanner: {
@@ -149,11 +165,5 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   progressFill: { backgroundColor: palette.accent },
-  bottom: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: spacing.lg,
-  },
+  bottom: {},
 });

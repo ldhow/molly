@@ -2,7 +2,7 @@
 // bakes a fish once and replays it as a flat image.
 //
 // Why this exists. The declarative <PrimitiveNode> tree in fish-sprite.tsx is
-// dozens of nodes per fish. At MAX_RENDERED_FISH the tank would rebuild all of
+// dozens of nodes per fish. At TANK_CAPACITY the tank would rebuild all of
 // that on EVERY frame, for art that never changes — only the fish's transform
 // does. So: draw the spec once into an offscreen surface, snapshot it, and let
 // the per-frame cost be a single textured quad.

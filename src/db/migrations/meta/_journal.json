@@ -15,6 +15,13 @@
       "when": 1785925762825,
       "tag": "0001_talented_mattie_franklin",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785952990056,
+      "tag": "0002_spooky_spectrum",
+      "breakpoints": true
     }
   ]
 }

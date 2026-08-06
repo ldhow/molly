@@ -12,8 +12,19 @@ type Props = PropsWithChildren<{
 
 export function ScreenContainer({ children, edgeToEdge, style }: Props) {
   const insets = useSafeAreaInsets();
+  const gutter = edgeToEdge ? 0 : spacing.md;
   return (
-    <View style={[styles.root, { paddingTop: insets.top }, !edgeToEdge && styles.padded, style]}>
+    <View
+      style={[
+        styles.root,
+        {
+          paddingTop: insets.top,
+          paddingLeft: insets.left + gutter,
+          paddingRight: insets.right + gutter,
+        },
+        style,
+      ]}
+    >
       {children}
     </View>
   );
@@ -23,8 +34,5 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: palette.bg,
-  },
-  padded: {
-    paddingHorizontal: spacing.md,
   },
 });

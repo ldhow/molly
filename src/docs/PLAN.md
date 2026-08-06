@@ -2,7 +2,7 @@
 
 ## Context
 
-Build a focus/productivity app in the fresh Expo SDK 57 starter at this repo, modeled on Forest but themed as an aquarium: start a focus session and a molly fish grows from egg → fry → juvenile → adult; complete it and the fish joins your tank permanently; leave the app mid-session (beyond a ~10s grace period) and the fish dies — and the dead fish stays in the tank as a visible reminder. V1 also includes stats/history/streaks and multiple molly variants unlocked by session length and streaks. Rendering via Skia canvas. Targets iOS + Android equally.
+Build a focus/productivity app in the fresh Expo SDK 57 starter at this repo, modeled on Forest but themed as an aquarium: start a focus session and a molly fish grows from egg → fry → juvenile → adult; complete it and the fish joins your tank permanently; leave the app mid-session (beyond a ~10s grace period) and the fish dies — the dead fish stays visible in the tank for 24h as a reminder, then fades from view (the session record itself is never deleted). The tank holds a hard-capped 25 fish at a time; anything beyond that lives in a Holding Tank the user can browse and swap fish in from. V1 also includes stats/history/streaks and multiple molly variants unlocked by session length and streaks. Rendering via Skia canvas. Targets iOS + Android equally.
 
 **Technical stack (user-mandated)**: feature-based architecture · **Zustand** for state · **React Query** for data fetching/caching · **Drizzle ORM** over expo-sqlite.
 
@@ -97,7 +97,7 @@ src/
 
 ## Data model
 
-Single drizzle table `sessions` is the source of truth for tank, stats, streaks, unlocks. `OwnedFish` derives 1:1 from sessions (completed → alive, failed/abandoned → dead). Tank renders the most recent ~25 fish (perf cap) with "+N more".
+Single drizzle table `sessions` is the source of truth for tank, stats, streaks, unlocks. `OwnedFish` derives 1:1 from sessions (completed → alive, failed/abandoned → dead). Tank renders up to `TANK_CAPACITY` (25, perf cap) fish; which ones is explicit via the `sessions.inTank` flag, not just recency — fish beyond capacity sit in the Holding Tank, a screen where the user chooses which archived fish to swap into the tank. A dead fish's corpse also drops out of the "in tank" view 24h after `endedAt` (`isVisibleInTank`, `src/shared/lib/tank-membership.ts`), freeing its slot for auto-fill without needing a write.
 
 ```ts
 // db/schema.ts (drizzle sqlite)
@@ -125,7 +125,7 @@ interface ActiveSession { id; variantId; plannedMinutes; startedAt: number; back
 - **APP_FOREGROUND** (same logic on cold relaunch when the rehydrated store has a snapshot), judged in order:
   1. `backgroundedAt >= startedAt + plannedMs` → **completed** (finished before leaving).
   2. `now - backgroundedAt <= 10_000` → survived: clear `backgroundedAt`, cancel dying notif, "phew" toast.
-  3. else → **failed** (fish dies, stays in tank).
+  3. else → **failed** (fish dies; corpse stays visible for 24h, then fades — the session row is permanent).
   - Crash edge (snapshot with `backgroundedAt === null` on cold start): lenient — completed if past planned end, else failed.
 - **TICK**: UI-only (`useNow`); completion is derived (`now >= startedAt + plannedMs`) so throttled timers can't miss it.
 - **Terminal**: clear store snapshot; `useEndSession` mutation inserts the SessionRecord and invalidates `['sessions']`; cancel pending notifications.

@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import { StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { TankCanvas } from "@/shared/components/tank/tank-canvas";
@@ -68,43 +68,60 @@ export function SessionResultSheet({ result }: { result: SessionResult }) {
           },
         ]}
       />
-      <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}>
-        <Text style={styles.emoji}>{copy.emoji}</Text>
-        <Text style={styles.title}>{copy.title}</Text>
-        <Text style={styles.body}>
-          {completed
-            ? `${formatMinutes(result.plannedMinutes)} of focus raised a healthy ${colorDef.name} molly. It's swimming in your tank now.`
-            : result.outcome === "failed"
-              ? `You left mid-session and the ${colorDef.name} molly couldn't hold on. It rests in your tank as a reminder.`
-              : `You gave up this time. The ${colorDef.name} molly rests in your tank as a reminder.`}
-        </Text>
+      <View
+        style={[
+          styles.sheet,
+          {
+            paddingLeft: insets.left + spacing.lg,
+            paddingRight: insets.right + spacing.lg,
+            maxHeight: "85%",
+          },
+        ]}
+      >
+        <ScrollView
+          contentContainerStyle={[
+            styles.sheetContent,
+            { paddingBottom: insets.bottom + spacing.lg },
+          ]}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.emoji}>{copy.emoji}</Text>
+          <Text style={styles.title}>{copy.title}</Text>
+          <Text style={styles.body}>
+            {completed
+              ? `${formatMinutes(result.plannedMinutes)} of focus raised a healthy ${colorDef.name} molly. It's swimming in your tank now.`
+              : result.outcome === "failed"
+                ? `You left mid-session and the ${colorDef.name} molly couldn't hold on. It rests in your tank as a reminder.`
+                : `You gave up this time. The ${colorDef.name} molly rests in your tank as a reminder.`}
+          </Text>
 
-        {reveals.length > 0 ? (
-          <View style={styles.reveals}>
-            {reveals.map((item) => {
-              const color = RARITY_COLORS[item.rarity.tier];
-              return (
-                <View key={item.label} style={[styles.revealChip, { borderColor: color }]}>
-                  <Text style={[styles.revealText, { color }]}>
-                    ✨ {formatRarity(item.rarity)} — {item.label}!
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        ) : completed ? (
-          <Text style={styles.plainRoll}>A classic round-tailed molly this time.</Text>
-        ) : null}
-
-        <View style={styles.buttons}>
-          <Button
-            label={completed ? "See your tank" : "Back home"}
-            onPress={() => leave(completed ? "/(tabs)/tank" : "/(tabs)")}
-          />
-          {!completed ? (
-            <Button label="Try again" variant="ghost" onPress={() => leave("/(tabs)")} />
+          {reveals.length > 0 ? (
+            <View style={styles.reveals}>
+              {reveals.map((item) => {
+                const color = RARITY_COLORS[item.rarity.tier];
+                return (
+                  <View key={item.label} style={[styles.revealChip, { borderColor: color }]}>
+                    <Text style={[styles.revealText, { color }]}>
+                      ✨ {formatRarity(item.rarity)} — {item.label}!
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          ) : completed ? (
+            <Text style={styles.plainRoll}>A classic round-tailed molly this time.</Text>
           ) : null}
-        </View>
+
+          <View style={styles.buttons}>
+            <Button
+              label={completed ? "See your tank" : "Back home"}
+              onPress={() => leave(completed ? "/(tabs)/tank" : "/(tabs)")}
+            />
+            {!completed ? (
+              <Button label="Try again" variant="ghost" onPress={() => leave("/(tabs)")} />
+            ) : null}
+          </View>
+        </ScrollView>
       </View>
     </View>
   );
@@ -120,7 +137,9 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(4, 18, 29, 0.92)",
     borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg,
-    padding: spacing.lg,
+  },
+  sheetContent: {
+    paddingTop: spacing.lg,
     gap: spacing.sm,
     alignItems: "center",
   },

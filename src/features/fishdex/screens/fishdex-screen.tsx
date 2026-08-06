@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { ScreenContainer } from "@/shared/components/screen-container";
 import { palette, radius, spacing } from "@/shared/constants/theme";
@@ -24,6 +24,8 @@ export function FishdexScreen() {
   const { entries, unlockedIds, grantedColors } = useUnlocks();
   const { data: rows } = useSessionsQuery();
   const toggleGrant = useToggleColorGrantMutation();
+  const { width } = useWindowDimensions();
+  const numColumns = width >= 700 ? 4 : 2;
 
   const traitEntries = useMemo<TraitEntry[]>(() => {
     const collected = {
@@ -55,9 +57,10 @@ export function FishdexScreen() {
   return (
     <ScreenContainer>
       <FlatList
+        key={numColumns}
         data={entries}
         keyExtractor={(entry) => entry.def.id}
-        numColumns={2}
+        numColumns={numColumns}
         columnWrapperStyle={styles.column}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={

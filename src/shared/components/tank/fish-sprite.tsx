@@ -18,7 +18,7 @@ import {
 import { useMemo } from "react";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
-import { SAND_HEIGHT } from "@/shared/constants/tank";
+import { sandHeightFor } from "@/shared/constants/tank";
 import { getColorDef } from "@/shared/fish/catalog";
 import {
   bodyHalfHeightFor,
@@ -65,6 +65,12 @@ export function FishSprite({
   const phase = seed * Math.PI * 2;
   const dead = status === "dead";
 
+  // Tank-mode margins as fractions of the canvas so they hold up in landscape
+  // (fixed pixel insets used to collapse the swimmable band on a short canvas).
+  const insetX = Math.min(48, bounds.width * 0.1);
+  const insetTop = Math.min(40, bounds.height * 0.08);
+  const insetBottom = Math.min(30, bounds.height * 0.06);
+
   const box: WanderBox =
     mode === "center"
       ? {
@@ -74,10 +80,10 @@ export function FishSprite({
           maxY: bounds.height * 0.62,
         }
       : {
-          minX: 60,
-          maxX: Math.max(61, bounds.width - 60),
-          minY: 50,
-          maxY: Math.max(51, bounds.height - SAND_HEIGHT - 40),
+          minX: insetX,
+          maxX: Math.max(insetX + 1, bounds.width - insetX),
+          minY: insetTop,
+          maxY: Math.max(insetTop + 1, bounds.height - sandHeightFor(bounds.height) - insetBottom),
         };
 
   const wander = useFishWander({
@@ -102,8 +108,9 @@ export function FishSprite({
 
   if (dead) {
     // Belly-up on the sand, drained of color — the reminder.
-    const deadX = 70 + ((seed * 9973) % 1) * Math.max(1, bounds.width - 140);
-    const deadY = bounds.height - SAND_HEIGHT * 0.4 - bodyHalfHeightFor(traits.body) * scale;
+    const deadX = insetX + ((seed * 9973) % 1) * Math.max(1, bounds.width - insetX * 2);
+    const deadY =
+      bounds.height - sandHeightFor(bounds.height) * 0.4 - bodyHalfHeightFor(traits.body) * scale;
     const deadTransform: Transforms3d = [
       { translateX: deadX },
       { translateY: deadY },

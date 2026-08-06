@@ -3,7 +3,7 @@
     "name": "molly",
     "slug": "molly",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "molly",
     "userInterfaceStyle": "automatic",

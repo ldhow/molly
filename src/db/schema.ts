@@ -16,6 +16,9 @@ export const sessions = sqliteTable("sessions", {
     enum: ["completed", "failed", "abandoned"],
   }).notNull(),
   localDate: text("local_date").notNull(),
+  /** 1 = rendered in the tank, 0 = archived to the Holding Tank. Nullable only
+   *  until the backfill migration runs; treat null as 0 defensively. */
+  inTank: integer("in_tank"),
 });
 
 export type SessionRow = typeof sessions.$inferSelect;

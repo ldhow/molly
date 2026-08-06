@@ -3,7 +3,7 @@ import { useMemo } from "react";
 
 import { palette } from "@/shared/constants/theme";
 
-import { SAND_HEIGHT } from "@/shared/constants/tank";
+import { sandHeightFor } from "@/shared/constants/tank";
 
 interface Props {
   width: number;
@@ -16,7 +16,7 @@ export function WaterBackground({ width, height }: Props) {
       [0.18, 0.42, 0.68].flatMap((f, i) => {
         const topX = width * f;
         const w = 46 + i * 22;
-        const drift = 90 + i * 40;
+        const drift = height * (0.14 + i * 0.06);
         const path = Skia.Path.MakeFromSVGString(
           `M ${topX} -10 L ${topX + w} -10 L ${topX + w + drift} ${height} L ${topX + drift} ${height} Z`,
         );
@@ -45,21 +45,22 @@ export function WaterBackground({ width, height }: Props) {
 }
 
 export function Sand({ width, height }: Props) {
+  const sandHeight = sandHeightFor(height);
   const path = useMemo(() => {
-    const top = height - SAND_HEIGHT;
+    const top = height - sandHeight;
     return Skia.Path.MakeFromSVGString(
-      `M 0 ${height} L 0 ${top + SAND_HEIGHT * 0.35} ` +
-        `Q ${width * 0.28} ${top} ${width * 0.55} ${top + SAND_HEIGHT * 0.3} ` +
-        `Q ${width * 0.8} ${top + SAND_HEIGHT * 0.55} ${width} ${top + SAND_HEIGHT * 0.2} ` +
+      `M 0 ${height} L 0 ${top + sandHeight * 0.35} ` +
+        `Q ${width * 0.28} ${top} ${width * 0.55} ${top + sandHeight * 0.3} ` +
+        `Q ${width * 0.8} ${top + sandHeight * 0.55} ${width} ${top + sandHeight * 0.2} ` +
         `L ${width} ${height} Z`,
     );
-  }, [width, height]);
+  }, [width, height, sandHeight]);
 
   if (!path) return null;
   return (
     <Path path={path}>
       <LinearGradient
-        start={vec(0, height - SAND_HEIGHT)}
+        start={vec(0, height - sandHeight)}
         end={vec(0, height)}
         colors={[palette.sand, palette.sandShadow]}
       />

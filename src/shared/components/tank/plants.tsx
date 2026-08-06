@@ -2,7 +2,7 @@ import { Group, Path, Skia, useClock, vec, type SkPath } from "@shopify/react-na
 import { useMemo } from "react";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
-import { SAND_HEIGHT } from "@/shared/constants/tank";
+import { sandHeightFor } from "@/shared/constants/tank";
 
 interface Props {
   width: number;
@@ -14,11 +14,14 @@ const PLANT_COLORS = ["#2e7d57", "#256b4a", "#35906a"];
 export function Plants({ width, height }: Props) {
   const clock = useClock();
   const plants = useMemo(() => {
-    const baseY = height - SAND_HEIGHT * 0.55;
+    const baseY = height - sandHeightFor(height) * 0.55;
+    // Scale plant height down on short (landscape) canvases so a 150px plant
+    // doesn't cover half the tank.
+    const k = Math.min(1, height / 640);
     return [
-      { x: width * 0.12, h: 120, blades: 3 },
-      { x: width * 0.82, h: 150, blades: 4 },
-      { x: width * 0.68, h: 80, blades: 3 },
+      { x: width * 0.12, h: 120 * k, blades: 3 },
+      { x: width * 0.82, h: 150 * k, blades: 4 },
+      { x: width * 0.68, h: 80 * k, blades: 3 },
     ].map((p, i) => ({
       ...p,
       baseY,
