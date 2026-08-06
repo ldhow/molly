@@ -307,15 +307,23 @@ function blobPath(
   ry: number,
   wobble: number,
   rng: () => number,
+  /** Rotates the blob's rx/ry axes about its centre — lets a patch's long
+   * axis align with the body contour instead of always sitting axis-aligned. */
+  rotateDeg = 0,
 ): string {
   const points: XY[] = [];
   const n = 7;
+  const rot = toRad(rotateDeg);
+  const cosR = Math.cos(rot);
+  const sinR = Math.sin(rot);
   for (let i = 0; i < n; i++) {
     const angle = (i / n) * Math.PI * 2;
     const jitter = 1 - wobble / 2 + rng() * wobble;
+    const ex = Math.cos(angle) * rx * jitter;
+    const ey = Math.sin(angle) * ry * jitter;
     points.push({
-      x: cx + Math.cos(angle) * rx * jitter,
-      y: cy + Math.sin(angle) * ry * jitter,
+      x: cx + ex * cosR - ey * sinR,
+      y: cy + ex * sinR + ey * cosR,
     });
   }
   let d = `M ${f(points[0].x)} ${f(points[0].y)}`;
@@ -323,6 +331,46 @@ function blobPath(
     const p0 = points[(i - 1) % n];
     const p1 = points[i % n];
     d += ` Q ${f(p0.x)} ${f(p0.y)} ${f((p0.x + p1.x) / 2)} ${f((p0.y + p1.y) / 2)}`;
+  }
+  return d + " Z";
+}
+
+// ---------------------------------------------------------------------------
+// Smooth closed outlines: anchor + tangent nodes, so every joint is
+// G1-continuous by construction instead of by hand-tuned coincidence. A
+// "corner" (buried fin roots, tail tips) is opt-in via `tIn`.
+// ---------------------------------------------------------------------------
+
+interface SmoothNode {
+  /** Anchor point ON the curve. */
+  p: XY;
+  /** Tangent DIRECTION leaving this node (magnitude doesn't matter). */
+  t: XY;
+  /** Arriving tangent, if this node is a deliberate corner. Defaults to `t`. */
+  tIn?: XY;
+  /** Handle length before the anchor. */
+  hIn: number;
+  /** Handle length after the anchor. Defaults to `hIn`. */
+  hOut?: number;
+}
+
+function norm(v: XY): XY {
+  const len = Math.hypot(v.x, v.y) || 1;
+  return { x: v.x / len, y: v.y / len };
+}
+
+/** Closed cubic path through `nodes`, G1-continuous except where `tIn` is set. */
+function smoothClosedPath(nodes: SmoothNode[]): string {
+  const n = nodes.length;
+  let d = `M ${f(nodes[0].p.x)} ${f(nodes[0].p.y)}`;
+  for (let i = 0; i < n; i++) {
+    const a = nodes[i];
+    const b = nodes[(i + 1) % n];
+    const outDir = norm(a.t);
+    const inDir = norm(b.tIn ?? b.t);
+    const c1 = { x: a.p.x + outDir.x * (a.hOut ?? a.hIn), y: a.p.y + outDir.y * (a.hOut ?? a.hIn) };
+    const c2 = { x: b.p.x - inDir.x * b.hIn, y: b.p.y - inDir.y * b.hIn };
+    d += ` C ${f(c1.x)} ${f(c1.y)} ${f(c2.x)} ${f(c2.y)} ${f(b.p.x)} ${f(b.p.y)}`;
   }
   return d + " Z";
 }
@@ -446,58 +494,61 @@ interface BodyGeom {
 function bodyGeom(body: FishTraits["body"]): BodyGeom {
   if (body === "balloon") {
     // Short and deep-bellied — the balloon molly of the reference sheet — but
-    // a stretched oval, not a circle: ~1.5:1 length-to-depth, with a longer,
-    // more gradual approach into both the head and the caudal peduncle (extra
-    // control points throughout, no single sharp transition) and a peduncle
-    // wide enough that the tail has real material to grow out of.
+    // a stretched oval, not a circle: ~1.5:1 length-to-depth. Built from
+    // anchor+tangent nodes (smoothClosedPath) rather than hand-tuned control
+    // points, so every joint is G1-continuous by construction — including the
+    // rear taper into the peduncle, which used to kink where the approach
+    // curve met the rounded bulge. Two extra nodes there (taper-mid, on each
+    // side) spread that transition out instead of easing sharply.
+    const halfHeight = 30;
     return {
-      d:
-        "M -48 -1 " +
-        "C -49 -9 -46 -17 -38 -22 " +
-        "C -28 -28 -14 -30 0 -29 " +
-        "C 14 -28 26 -24 34 -18 " +
-        "C 39 -15 42 -11 46 -6 " +
-        "C 47 -2 47 3 46 7 " +
-        "C 45 12 42 16 35 21 " +
-        "C 27 26 14 30 0 31 " +
-        "C -14 32 -28 30 -38 24 " +
-        "C -46 19 -49 11 -48 -1 Z",
+      d: smoothClosedPath([
+        { p: { x: -48, y: -1 }, t: { x: 0, y: 1 }, hIn: 9.4, hOut: 8.2 },
+        { p: { x: -38, y: -22 }, t: { x: 1, y: -0.18 }, hIn: 8.2, hOut: 13.5 },
+        { p: { x: 0, y: -29 }, t: { x: 1, y: 0 }, hIn: 13.5, hOut: 11 },
+        { p: { x: 30, y: -20 }, t: { x: 0.85, y: 0.4 }, hIn: 11, hOut: 5 },
+        { p: { x: 42, y: -12 }, t: { x: 0.6, y: 0.7 }, hIn: 5, hOut: 4.7 },
+        { p: { x: 48, y: 0 }, t: { x: 0, y: 1 }, hIn: 4.7, hOut: 4.7 },
+        { p: { x: 42, y: 12 }, t: { x: -0.6, y: 0.7 }, hIn: 4.7, hOut: 5 },
+        { p: { x: 30, y: 20 }, t: { x: -0.85, y: 0.4 }, hIn: 5, hOut: 11 },
+        { p: { x: 0, y: 31 }, t: { x: -1, y: 0 }, hIn: 11, hOut: 13.5 },
+        { p: { x: -38, y: 24 }, t: { x: -1, y: -0.18 }, hIn: 13.5, hOut: 9.4 },
+      ]),
       nose: { x: -48, y: -1 },
       backPeak: { x: 0, y: -29 },
       bellyLow: { x: 0, y: 31 },
-      peduncleTop: { x: 47, y: -8 },
-      peduncleBottom: { x: 47, y: 9 },
-      halfHeight: 32,
-      bbox: { x: -49, y: -32, width: 96, height: 64 },
+      peduncleTop: { x: 48, y: -12 },
+      peduncleBottom: { x: 48, y: 12 },
+      halfHeight,
+      bbox: { x: -51, y: -32, width: 102, height: 66 },
     };
   }
   // Standard: ~2.25:1 length-to-depth — elongated enough to read as a molly
   // rather than a goldfish/pufferfish silhouette. A blunt rounded snout, a
   // back that crests just ahead of centre, a belly carrying the volume, and a
-  // full, gently-tapering rear that bulges into a wide, ROUNDED caudal
-  // peduncle — no straight wall and no corner where the taper meets it (the
-  // previous version had both, and they poked out as a visible notch once
-  // the tail's own hub-based root sat inside it). The peduncle reads as one
-  // smooth continuation of the belly curve, wide enough that the tail has
-  // real material to grow out of.
+  // full rear that bulges into a wide, rounded caudal peduncle. Same
+  // anchor+tangent construction as balloon — the previous hand-tuned version
+  // had a measurable 32° tangent kink exactly where the taper met the
+  // peduncle bulge; a single shared tangent there removes it by construction
+  // rather than by eye.
   return {
-    d:
-      "M -61 -4 " +
-      "C -60 -12 -53 -16 -43 -18 " +
-      "C -29 -22 -10 -23 6 -22 " +
-      "C 20 -20 32 -16 40 -11 " +
-      "C 44 -11 46 -8 46 -1 " +
-      "C 46 6 44 11 39 13 " +
-      "C 32 18 20 20 6 22 " +
-      "C -13 23 -32 20 -45 12 " +
-      "C -54 9 -60 3 -61 -4 Z",
+    d: smoothClosedPath([
+      { p: { x: -61, y: -4 }, t: { x: 0, y: 1 }, hIn: 7.9, hOut: 8 },
+      { p: { x: -43, y: -18 }, t: { x: 1, y: -0.1 }, hIn: 8, hOut: 17.2 },
+      { p: { x: 6, y: -22 }, t: { x: 1, y: 0 }, hIn: 17.2, hOut: 12.5 },
+      { p: { x: 40, y: -11 }, t: { x: 0.9, y: 0.35 }, hIn: 12.5, hOut: 4.1 },
+      { p: { x: 46, y: -1 }, t: { x: 0, y: 1 }, hIn: 4.1, hOut: 5.5 },
+      { p: { x: 39, y: 13 }, t: { x: -0.9, y: 0.35 }, hIn: 5.5, hOut: 12 },
+      { p: { x: 6, y: 22 }, t: { x: -1, y: 0 }, hIn: 12, hOut: 18.2 },
+      { p: { x: -45, y: 12 }, t: { x: -1, y: -0.12 }, hIn: 18.2, hOut: 7.9 },
+    ]),
     nose: { x: -61, y: -4 },
-    backPeak: { x: -3, y: -22 },
-    bellyLow: { x: -5, y: 22 },
-    peduncleTop: { x: 46, y: -8 },
-    peduncleBottom: { x: 46, y: 9 },
-    halfHeight: 23,
-    bbox: { x: -61, y: -23, width: 107, height: 46 },
+    backPeak: { x: 6, y: -22 },
+    bellyLow: { x: 6, y: 22 },
+    peduncleTop: { x: 46, y: -11 },
+    peduncleBottom: { x: 46, y: 13 },
+    halfHeight: 22,
+    bbox: { x: -64, y: -25, width: 113, height: 50 },
   };
 }
 
@@ -516,40 +567,45 @@ function tailGeom(
   // in buildFishSpec), so the hidden portion never swings out from cover.
   const hx = px - 11;
   if (tail === "lyretail") {
-    // Two long flowing points with a deep, soft V between them — sized down
-    // ~16% from the previous pass (it was reading as oversized) and rebuilt
-    // with extra control points throughout so every vertex is a gentle curve
-    // rather than a hard corner: both tips round off instead of coming to a
-    // sharp triangle, and the waist gets its own short easing curve instead
-    // of being a single cusp where the two lobes meet.
-    const q = (dx: number) => f(px + dx);
-    const h = (dx: number) => f(hx + dx);
+    // ONE continuous fin with a broad visible membrane, not two spikes joined
+    // at a point: the fork only cuts ~40% of the tail's reach (notch at
+    // px+20, tips at px+35), so the leading two-thirds reads as a fanned
+    // membrane before it splits. Built on smoothClosedPath: every joint is
+    // G1-continuous, the tips are explicitly short-handled for a rounded cap
+    // instead of a sharp triangle, and the notch is a shallow SMOOTH dip
+    // (single tangent, not a corner) — the earlier deep sharp-cusp waist was
+    // exactly what made it read as "two isolated spikes". The hub is the only
+    // deliberate corner (`tIn`), and it's buried under the body regardless.
+    const q = (dx: number, dy: number): XY => ({ x: px + dx, y: dy });
+    const hub: XY = { x: hx, y: 0 };
     return {
-      d:
-        `M ${h(0)} 0 ` +
-        `C ${q(1)} -14 ${q(13)} -27 ${q(21)} -34 ` +
-        `C ${q(27)} -39 ${q(31)} -41 ${q(32)} -38 ` +
-        `C ${q(31)} -35 ${q(27)} -30 ${q(20)} -22 ` +
-        `C ${q(14)} -15 ${q(9)} -8 ${q(7)} -1 ` +
-        `C ${q(6.5)} 0 ${q(6.5)} 1 ${q(7)} 2 ` +
-        `C ${q(9)} 9 ${q(14)} 16 ${q(20)} 23 ` +
-        `C ${q(27)} 31 ${q(31)} 36 ${q(32)} 39 ` +
-        `C ${q(31)} 42 ${q(27)} 40 ${q(21)} 35 ` +
-        `C ${q(13)} 28 ${q(1)} 15 ${h(0)} 0 Z`,
-      rays: [
-        `M ${h(0)} 0 C ${q(2)} -15 ${q(13)} -27 ${q(25)} -35`,
-        `M ${h(0)} 0 C ${q(2)} -7 ${q(8)} -12 ${q(13)} -18`,
-        `M ${h(0)} 0 C ${q(2)} -1 ${q(7)} -1 ${q(12)} -1`,
-        `M ${h(0)} 0 C ${q(2)} 7 ${q(8)} 12 ${q(13)} 18`,
-        `M ${h(0)} 0 C ${q(2)} 15 ${q(13)} 27 ${q(25)} 35`,
-      ],
-      pivot: { x: hx, y: 0 },
-      tip: { x: px + 32, y: -1 },
-      // The lyre's two rounded points are the extreme reach of the literal.
-      bbox: boxOfPoints([
-        { x: hx, y: -42 },
-        { x: px + 32, y: 42 },
+      d: smoothClosedPath([
+        // Hub: the one deliberate corner — buried under the body, so a cusp
+        // here is invisible and is what lets the two lobes converge cleanly.
+        { p: hub, t: { x: 0.72, y: -0.69 }, tIn: { x: -0.72, y: -0.69 }, hIn: 9.3, hOut: 9.3 },
+        { p: q(10, -20), t: { x: 0.8, y: -0.6 }, hIn: 9.3, hOut: 9.7 },
+        // Upper tip: short handles on both sides round it into a soft cap
+        // instead of the sharp triangle a single long control point gives.
+        { p: q(35, -37), t: { x: 0.77, y: 0.64 }, hIn: 3.5, hOut: 3.5 },
+        { p: q(24, -14), t: { x: -0.35, y: 0.93 }, hIn: 8.2, hOut: 4.7 },
+        // Notch: a shallow SMOOTH dip (one tangent, no corner) — this is what
+        // keeps the membrane reading as continuous rather than as two fins
+        // joined at a point.
+        { p: q(20, 0), t: { x: 0, y: 1 }, hIn: 4.7, hOut: 4.7 },
+        { p: q(24, 14), t: { x: 0.35, y: 0.93 }, hIn: 4.7, hOut: 8.2 },
+        { p: q(35, 37), t: { x: -0.77, y: 0.64 }, hIn: 3.5, hOut: 3.5 },
+        { p: q(10, 20), t: { x: -0.8, y: -0.6 }, hIn: 3.5, hOut: 9.3 },
       ]),
+      rays: [
+        `M ${f(hub.x)} ${f(hub.y)} C ${f(q(4, -12).x)} -12 ${f(q(18, -25).x)} -25 ${f(q(30, -33).x)} -33`,
+        `M ${f(hub.x)} ${f(hub.y)} C ${f(q(4, -6).x)} -6 ${f(q(12, -11).x)} -11 ${f(q(19, -13).x)} -13`,
+        `M ${f(hub.x)} ${f(hub.y)} C ${f(q(4, -1).x)} -1 ${f(q(11, -1).x)} -1 ${f(q(17, -1).x)} -1`,
+        `M ${f(hub.x)} ${f(hub.y)} C ${f(q(4, 6).x)} 6 ${f(q(12, 11).x)} 11 ${f(q(19, 13).x)} 13`,
+        `M ${f(hub.x)} ${f(hub.y)} C ${f(q(4, 12).x)} 12 ${f(q(18, 25).x)} 25 ${f(q(30, 33).x)} 33`,
+      ],
+      pivot: hub,
+      tip: { x: px + 35, y: 0 },
+      bbox: boxOfPoints([hub, q(35, -37), q(35, 37)], 3),
     };
   }
   // Round: the big scalloped paddle of the reference art, hubbed the same way
@@ -598,12 +654,16 @@ function dorsalGeom(
     ].map((p) => jitterPt(p, jitter, rng));
     return {
       d:
-        `M -30 ${f(base + 2)} ` +
-        `C -30 ${f(base - 16)} -27 ${f(base - 28)} ${f(notches[0].x)} ${f(notches[0].y)} ` +
+        // Wide, shallow root: the leading edge leaves near-tangent to the
+        // back curve (mostly horizontal at first) before sweeping up into
+        // the crest, so the fin reads as grown off the back rather than
+        // cutting across it.
+        `M -34 ${f(base + 2)} ` +
+        `C -25 ${f(base - 1)} -21 ${f(base - 29)} ${f(notches[0].x)} ${f(notches[0].y)} ` +
         lobedEdge(notches, pivot, 3.6) +
-        ` L 25 ${f(base + 3)} Z`,
+        ` L 29 ${f(base + 3)} Z`,
       bbox: boxOfPoints(
-        [...notches, { x: -30, y: base + 3 }, { x: 25, y: base + 3 }],
+        [...notches, { x: -34, y: base + 3 }, { x: 29, y: base + 3 }],
         3.6 * 2 + (jitter ?? 0) * 8,
       ),
       rays: [
@@ -858,7 +918,7 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
         //
         // (rear = geom.peduncleTop.x, i.e. nose-to-peduncle body length is
         // `rear - nx`; the blob's rightmost point is cx + rx*jitter, jitter
-        // in [0.91, 1.09] for wobble 0.18 — center + radius are picked so
+        // in [0.92, 1.08] for wobble 0.16 — center + radius are picked so
         // that point lands around 35-39% even at the jitter extremes, safely
         // inside the 30-45% target with room for "approximately".)
         const bodyLen = rear - nx;
@@ -867,10 +927,13 @@ function patternPrimitives(def: ColorDef, geom: BodyGeom, material: Material): P
           primary,
           0.82,
         );
-        // Several medium, well-spaced black patches — balanced, not busy.
-        patch(blobPath(12, -16, 9, 7, 0.4, rng), secondary ?? "#1c1e24", 0.9);
-        patch(blobPath(-3, 4, 11, 9, 0.4, rng), secondary ?? "#1c1e24", 0.9);
-        patch(blobPath(27, 8, 9, 7, 0.4, rng), secondary ?? "#1c1e24", 0.9);
+        // Several black patches, sized unevenly and rotated to align their
+        // long axis with the body's local curvature — reads as wrapping
+        // around the fish rather than sitting flat on top of it. Wobble
+        // raised for softer, less die-cut edges.
+        patch(blobPath(12, -17, 7.5, 6, 0.5, rng, -8), secondary ?? "#1c1e24", 0.9);
+        patch(blobPath(-3, 5, 13, 9, 0.5, rng, 6), secondary ?? "#1c1e24", 0.9);
+        patch(blobPath(28, 9, 6.5, 8.5, 0.5, rng, 24), secondary ?? "#1c1e24", 0.9);
         return out;
       }
       if (pattern.style === "calico") {
