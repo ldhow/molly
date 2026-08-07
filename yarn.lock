@@ -2295,6 +2295,11 @@ ansi-styles@^5.0.0:
   resolved "https://registry.yarnpkg.com/ansi-styles/-/ansi-styles-5.2.0.tgz#07449690ad45777d1924ac2abb2fc8895dba836b"
   integrity sha512-Cxwpt2SfTzTtXcfOlzGEee8O+c+MmUgGrNiBcXnuWxuFJHe6a5Hz7qwhwe5OgaSYI0IJvkLqWX1ASG+cJOkEiA==
 
+arg@^4.1.0:
+  version "4.1.3"
+  resolved "https://registry.yarnpkg.com/arg/-/arg-4.1.3.tgz#269fc7ad5b8e42cb63c896d5666017261c144089"
+  integrity sha512-58S9QDqG0Xx27YwPSt9fJxivjYl432YCwfDMfZ+71RAqUrZef7LrKQZ3LHLOwCS4FLNBplP533Zx895SeOCHvA==
+
 arg@^5.0.2:
   version "5.0.2"
   resolved "https://registry.yarnpkg.com/arg/-/arg-5.0.2.tgz#c81433cc427c92c4dcf4865142dbca6f15acd59c"
@@ -3256,35 +3261,7 @@ esbuild@^0.25.4:
     "@esbuild/win32-ia32" "0.25.12"
     "@esbuild/win32-x64" "0.25.12"
 
-esbuild@~0.18.20:
-  version "0.18.20"
-  resolved "https://registry.yarnpkg.com/esbuild/-/esbuild-0.18.20.tgz#4709f5a34801b43b799ab7d6d82f7284a9b7a7a6"
-  integrity sha512-ceqxoedUrcayh7Y7ZX6NdbbDzGROiyVBgC4PriJThBKSVPWnnFHZAkfI1lJT8QFkOwH4qOS2SJkS4wvpGl8BpA==
-  optionalDependencies:
-    "@esbuild/android-arm" "0.18.20"
-    "@esbuild/android-arm64" "0.18.20"
-    "@esbuild/android-x64" "0.18.20"
-    "@esbuild/darwin-arm64" "0.18.20"
-    "@esbuild/darwin-x64" "0.18.20"
-    "@esbuild/freebsd-arm64" "0.18.20"
-    "@esbuild/freebsd-x64" "0.18.20"
-    "@esbuild/linux-arm" "0.18.20"
-    "@esbuild/linux-arm64" "0.18.20"
-    "@esbuild/linux-ia32" "0.18.20"
-    "@esbuild/linux-loong64" "0.18.20"
-    "@esbuild/linux-mips64el" "0.18.20"
-    "@esbuild/linux-ppc64" "0.18.20"
-    "@esbuild/linux-riscv64" "0.18.20"
-    "@esbuild/linux-s390x" "0.18.20"
-    "@esbuild/linux-x64" "0.18.20"
-    "@esbuild/netbsd-x64" "0.18.20"
-    "@esbuild/openbsd-x64" "0.18.20"
-    "@esbuild/sunos-x64" "0.18.20"
-    "@esbuild/win32-arm64" "0.18.20"
-    "@esbuild/win32-ia32" "0.18.20"
-    "@esbuild/win32-x64" "0.18.20"
-
-esbuild@~0.28.0:
+esbuild@^0.28.1, esbuild@~0.28.0:
   version "0.28.1"
   resolved "https://registry.yarnpkg.com/esbuild/-/esbuild-0.28.1.tgz#ef45b4634c9c9d97a296aea4114a5f9840f95578"
   integrity sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==
@@ -3315,6 +3292,34 @@ esbuild@~0.28.0:
     "@esbuild/win32-arm64" "0.28.1"
     "@esbuild/win32-ia32" "0.28.1"
     "@esbuild/win32-x64" "0.28.1"
+
+esbuild@~0.18.20:
+  version "0.18.20"
+  resolved "https://registry.yarnpkg.com/esbuild/-/esbuild-0.18.20.tgz#4709f5a34801b43b799ab7d6d82f7284a9b7a7a6"
+  integrity sha512-ceqxoedUrcayh7Y7ZX6NdbbDzGROiyVBgC4PriJThBKSVPWnnFHZAkfI1lJT8QFkOwH4qOS2SJkS4wvpGl8BpA==
+  optionalDependencies:
+    "@esbuild/android-arm" "0.18.20"
+    "@esbuild/android-arm64" "0.18.20"
+    "@esbuild/android-x64" "0.18.20"
+    "@esbuild/darwin-arm64" "0.18.20"
+    "@esbuild/darwin-x64" "0.18.20"
+    "@esbuild/freebsd-arm64" "0.18.20"
+    "@esbuild/freebsd-x64" "0.18.20"
+    "@esbuild/linux-arm" "0.18.20"
+    "@esbuild/linux-arm64" "0.18.20"
+    "@esbuild/linux-ia32" "0.18.20"
+    "@esbuild/linux-loong64" "0.18.20"
+    "@esbuild/linux-mips64el" "0.18.20"
+    "@esbuild/linux-ppc64" "0.18.20"
+    "@esbuild/linux-riscv64" "0.18.20"
+    "@esbuild/linux-s390x" "0.18.20"
+    "@esbuild/linux-x64" "0.18.20"
+    "@esbuild/netbsd-x64" "0.18.20"
+    "@esbuild/openbsd-x64" "0.18.20"
+    "@esbuild/sunos-x64" "0.18.20"
+    "@esbuild/win32-arm64" "0.18.20"
+    "@esbuild/win32-ia32" "0.18.20"
+    "@esbuild/win32-x64" "0.18.20"
 
 escalade@^3.1.1, escalade@^3.2.0:
   version "3.2.0"
@@ -3586,6 +3591,11 @@ expo-device@~57.0.1:
   dependencies:
     ua-parser-js "^0.7.33"
 
+expo-eas-client@~57.0.1:
+  version "57.0.1"
+  resolved "https://registry.yarnpkg.com/expo-eas-client/-/expo-eas-client-57.0.1.tgz#2a43792be26c688f99c4e51f1696c565b533477a"
+  integrity sha512-4w51+zsl/ziUHQMJgLgUdgsNhRPAwHBfySpPB1hpWU21X74QS9T4SqDftaRnrDagn/DfcrXUMJvHbDQUxLPJNA==
+
 expo-file-system@~57.0.1:
   version "57.0.1"
   resolved "https://registry.yarnpkg.com/expo-file-system/-/expo-file-system-57.0.1.tgz#920792f0e5e1c1a98da80d511dc5c131ab302651"
@@ -3615,6 +3625,11 @@ expo-image@~57.0.2:
   dependencies:
     sf-symbols-typescript "^2.2.0"
 
+expo-json-utils@~57.0.1:
+  version "57.0.1"
+  resolved "https://registry.yarnpkg.com/expo-json-utils/-/expo-json-utils-57.0.1.tgz#1635b80ccb124e2635765611957ac4e825880130"
+  integrity sha512-cgTe1NqzQdYs/WN+3nIY5IZg8s0pb0xaTUbhYvxQDn137GbwRfHoGM2se3m3Vsl4Qu+B9G4RPEK5WJDEU2Do7g==
+
 expo-keep-awake@~57.0.1:
   version "57.0.1"
   resolved "https://registry.yarnpkg.com/expo-keep-awake/-/expo-keep-awake-57.0.1.tgz#75dfd3d6faeb0f32eb8b670d6b736375fdf2cdb8"
@@ -3627,6 +3642,13 @@ expo-linking@~57.0.5:
   dependencies:
     expo-constants "~57.0.9"
     invariant "^2.2.4"
+
+expo-manifests@~57.0.1:
+  version "57.0.1"
+  resolved "https://registry.yarnpkg.com/expo-manifests/-/expo-manifests-57.0.1.tgz#4596d35f82d65293570fcd8b636b51c5d9696dc4"
+  integrity sha512-qB/mDG2dYdl+EvUeQuqP8KFYCFgFCQjJYdWIHo8SFBgDzMYmdF286DFY2M1M9Okr99wkb5M4tgA3aCcwv3aEQA==
+  dependencies:
+    expo-json-utils "~57.0.1"
 
 expo-modules-autolinking@~57.0.9:
   version "57.0.9"
@@ -3724,6 +3746,11 @@ expo-status-bar@~57.0.1:
   resolved "https://registry.yarnpkg.com/expo-status-bar/-/expo-status-bar-57.0.1.tgz#0a8ec1657fcd0987f9612ca411a0c3d002f0eaf0"
   integrity sha512-Xwaq1gAoVRWx5dPG5VhT5RSbnI9OilhZnO5qoPBnUaBAa5VzRzfdS8q0/bsPt0jR2DKLtGuP0bQ6efMJ4RIMDg==
 
+expo-structured-headers@~57.0.0:
+  version "57.0.0"
+  resolved "https://registry.yarnpkg.com/expo-structured-headers/-/expo-structured-headers-57.0.0.tgz#6ea65c3089501e8718cd5aaa1f96fc6740033f0c"
+  integrity sha512-//t9UNPbJSEysc2x4VKJG/u7Osvv5DYJWsET5bqt/B+qcD1by/JXvSQzX3Q/YAgA96xFPontrz6OAPLbO4JKEA==
+
 expo-symbols@^57.0.1, expo-symbols@~57.0.1:
   version "57.0.1"
   resolved "https://registry.yarnpkg.com/expo-symbols/-/expo-symbols-57.0.1.tgz#3f420b1f1749da4df1deebb7bdbfc82131a262a2"
@@ -3739,6 +3766,32 @@ expo-system-ui@~57.0.2:
   dependencies:
     "@react-native/normalize-colors" "0.86.2"
     debug "^4.3.2"
+
+expo-updates-interface@~57.0.1:
+  version "57.0.1"
+  resolved "https://registry.yarnpkg.com/expo-updates-interface/-/expo-updates-interface-57.0.1.tgz#2ff8a65f9ec139743b9b29273e42f2888420db00"
+  integrity sha512-+LUWwJ0gf/TEKMVdQAw/Gjih4dvrk+URgy24X9qEGKuuMDZqjBRm9T4yQyBVALGL5TTdPUaB6ILxx3lshm3pwQ==
+
+expo-updates@~57.0.12:
+  version "57.0.12"
+  resolved "https://registry.yarnpkg.com/expo-updates/-/expo-updates-57.0.12.tgz#14ff256c7a2f3b04d28ba36fbee135a6de10cd8f"
+  integrity sha512-ZFsW8Mi9qFrrYPSXF++1FXejjflRdgbVPzaSJJATuHelVmIIb3D98gCO9sIsaLPHO1RCQVj1ltkj51VnwVL+4g==
+  dependencies:
+    "@expo/code-signing-certificates" "^0.0.6"
+    "@expo/plist" "^0.8.1"
+    "@expo/spawn-async" "^1.8.0"
+    arg "^4.1.0"
+    chalk "^4.1.2"
+    debug "^4.3.4"
+    expo-eas-client "~57.0.1"
+    expo-manifests "~57.0.1"
+    expo-structured-headers "~57.0.0"
+    expo-updates-interface "~57.0.1"
+    getenv "^2.0.0"
+    glob "^13.0.0"
+    ignore "^5.3.1"
+    nullthrows "^1.1.1"
+    resolve-from "^5.0.0"
 
 expo-web-browser@~57.0.2:
   version "57.0.2"
