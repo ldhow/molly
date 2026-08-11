@@ -3,9 +3,10 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { EmptyState } from "@/shared/components/empty-state";
+import { TankView } from "@/shared/components/tank/tank-view";
 import { palette, radius, spacing } from "@/shared/constants/theme";
+import { useRenderModeStore } from "@/shared/store/render-mode-store";
 
-import { TankCanvas } from "@/shared/components/tank/tank-canvas";
 import { useAddDevFishMutation } from "../api/use-add-dev-fish-mutation";
 import { useOwnedFish } from "../api/use-owned-fish";
 import { useRemoveDevFishMutation } from "../api/use-remove-dev-fish-mutation";
@@ -16,10 +17,12 @@ export function TankScreen() {
   const { fish, totalCount, aliveCount, holdingCount } = useOwnedFish();
   const addDevFish = useAddDevFishMutation();
   const removeDevFish = useRemoveDevFishMutation();
+  const renderMode = useRenderModeStore((s) => s.renderMode);
+  const setRenderMode = useRenderModeStore((s) => s.setRenderMode);
 
   return (
     <View style={styles.root}>
-      <TankCanvas fish={fish} style={StyleSheet.absoluteFill as never} />
+      <TankView fish={fish} style={StyleSheet.absoluteFill as never} />
       <View
         style={[
           styles.overlay,
@@ -37,9 +40,19 @@ export function TankScreen() {
             {totalCount - aliveCount > 0 ? ` · ${totalCount - aliveCount} lost` : ""}
             {holdingCount > 0 ? ` · ${holdingCount} in holding tank` : ""}
           </Text>
-          <Pressable style={styles.manageButton} onPress={() => router.push("/holding-tank")}>
-            <Text style={styles.manageButtonText}>Manage tank</Text>
-          </Pressable>
+          <View style={styles.actionsRow}>
+            <Pressable style={styles.manageButton} onPress={() => router.push("/holding-tank")}>
+              <Text style={styles.manageButtonText}>Manage tank</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.manageButton, renderMode === "3d" && styles.manageButtonActive]}
+              onPress={() => setRenderMode(renderMode === "3d" ? "2d" : "3d")}
+            >
+              <Text style={styles.manageButtonText}>
+                3D fish: {renderMode === "3d" ? "On" : "Off"}
+              </Text>
+            </Pressable>
+          </View>
           {__DEV__ ? (
             <View style={styles.devRow}>
               <Pressable
@@ -55,6 +68,9 @@ export function TankScreen() {
                 disabled={removeDevFish.isPending || fish.length === 0}
               >
                 <Text style={styles.devButtonText}>DEV: remove a fish</Text>
+              </Pressable>
+              <Pressable style={styles.devButton} onPress={() => router.push("/tank-preview")}>
+                <Text style={styles.devButtonText}>DEV: preview animation</Text>
               </Pressable>
             </View>
           ) : null}
@@ -86,6 +102,11 @@ const styles = StyleSheet.create({
   },
   title: { color: palette.text, fontSize: 20, fontWeight: "700" },
   subtitle: { color: palette.textDim, fontSize: 13 },
+  actionsRow: {
+    flexDirection: "row",
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+  },
   manageButton: {
     alignSelf: "flex-start",
     borderWidth: 1,
@@ -93,7 +114,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
-    marginTop: spacing.xs,
+  },
+  manageButtonActive: {
+    backgroundColor: palette.accentDark,
+    borderColor: palette.accent,
   },
   manageButtonText: { color: palette.textFaint, fontSize: 11, fontWeight: "600" },
   devRow: {

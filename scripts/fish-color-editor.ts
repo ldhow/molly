@@ -1,5 +1,5 @@
 // Interactive tool for tuning fish colors: a tiny local server + browser UI
-// that renders each of the 15 varieties (both body types) live from the
+// that renders each variety (both body types) live from the
 // SAME buildFishSpec() the app uses, so what you see is exactly what ships.
 // Edits never touch disk — use the "Copy code" button to paste the result
 // back into src/shared/fish/catalog.ts, then `yarn fish:preview` to confirm

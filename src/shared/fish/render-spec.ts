@@ -41,7 +41,8 @@
 // snout, a deep belly, a narrow peduncle, a broad scalloped caudal fan, ray
 // lines on every fin, a dark outline, and a glossy band along the upper flank.
 
-import { seedFromString } from "../lib/seed";
+import { darken, lighten, rgba } from "../lib/color";
+import { makeRng } from "../lib/rng";
 
 import type { BodyId, ColorDef, FishTraits, RarityTier, ShimmerKind } from "./types";
 
@@ -129,6 +130,22 @@ export interface FishRenderSpec {
   tailPivot: XY;
   /** Fins, body, shading, patterns, eye — in draw order. */
   body: Primitive[];
+  /**
+   * Drawn last: the pectoral fin, animated as a group rotating around
+   * pectoralPivot. Separate from `body` because it's the one other fin worth
+   * animating (a flutter that sculls harder at low speed) — see the pectoral
+   * fin bake note in fish-picture.ts.
+   */
+  front: Primitive[];
+  pectoralPivot: XY;
+  /**
+   * The skin's PIGMENT only — base gradient, pattern, shimmer and scale
+   * detail, with no volume shading, gloss, outline or rim baked in. It is the
+   * leading run of what `body` composites, so 2D gets it for free; 3D uses it
+   * as an albedo texture and supplies real lighting instead of inheriting 2D's
+   * painted-on highlights.
+   */
+  skinAlbedo: Primitive[];
   /** Body silhouette path (used for clipping and locked-silhouette mode). */
   bodyPathD: string;
   /** All outline paths (body + fins + tail) for silhouette rendering. */
@@ -141,6 +158,10 @@ export interface FishRenderSpec {
    * blurred edges clip at the boundary.
    */
   bounds: Box;
+  /** Tight local-space extent of just `tail`, inflated like `bounds`. */
+  tailBounds: Box;
+  /** Tight local-space extent of just `front`, inflated like `bounds`. */
+  frontBounds: Box;
 }
 
 /** Vertical squish per life stage, shared by both renderers. */
@@ -223,18 +244,9 @@ export function bodyHalfHeightFor(body: FishTraits["body"]): number {
 
 // ---------------------------------------------------------------------------
 // Deterministic pseudo-random (no Math.random — stable art per color).
+// `makeRng` lives in shared/lib/rng.ts so the 3D generators use the identical
+// stream; the sequence is unchanged from when it was defined here.
 // ---------------------------------------------------------------------------
-
-function makeRng(key: string): () => number {
-  let state = Math.floor(seedFromString(key) * 4294967296) || 1;
-  return () => {
-    state |= 0;
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /**
  * Appends a per-fish pattern variant to an rng key, EXCEPT at seed 0 — so
@@ -249,38 +261,6 @@ function seededKey(base: string, seed: number): string {
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const f = (n: number) => n.toFixed(1);
 const toRad = (deg: number) => (deg * Math.PI) / 180;
-
-// ---------------------------------------------------------------------------
-// Color helpers — the reference art shades every fin off its own base hue.
-// ---------------------------------------------------------------------------
-
-function parseHex(hex: string): [number, number, number] | null {
-  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return null;
-  const n = parseInt(m[1], 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
-function mix(hex: string, target: readonly [number, number, number], t: number): string {
-  const rgb = parseHex(hex);
-  if (!rgb) return hex;
-  const hx = rgb
-    .map((v, i) =>
-      Math.round(v + (target[i] - v) * t)
-        .toString(16)
-        .padStart(2, "0"),
-    )
-    .join("");
-  return `#${hx}`;
-}
-
-const darken = (hex: string, t: number) => mix(hex, [0, 0, 0], t);
-const lighten = (hex: string, t: number) => mix(hex, [255, 255, 255], t);
-
-function rgba(hex: string, alpha: number): string {
-  const rgb = parseHex(hex) ?? [255, 255, 255];
-  return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
-}
 
 // ---------------------------------------------------------------------------
 // Rarity material — how "premium" a fish's finish reads, independent of its
@@ -1092,6 +1072,77 @@ function sparklePrimitives(geom: BodyGeom, tier: RarityTier, seed: number): Prim
   return out;
 }
 
+/**
+ * A grid of overlapping scallop arcs across the flank — real fish-scale rows,
+ * not the placeholder it replaces (8 random near-invisible scribbles). Rows
+ * run nose→tail offset like brick coursing (real scale rows overlap the same
+ * way), and every scale is rotated to the body's local curvature via
+ * `curvatureTangentDeg` — the same primitive the metallic speckle/shimmer
+ * glints already use for the same reason — so rows sweep with the silhouette
+ * instead of sitting flat against a curved body.
+ *
+ * Universal, not a `FishPattern` catalog trait: every fish has scales, so
+ * this always runs, layered under whichever pattern/shimmer a colour defines
+ * (matching how the scribble hack it replaces was always-on too).
+ */
+function scalePrimitives(def: ColorDef, geom: BodyGeom, bodyD: string, seed: number): Primitive[] {
+  const rng = makeRng(seededKey(`scales-${def.id}`, seed));
+  const { x: bx, y: by, width: bw, height: bh } = geom.bbox;
+
+  // ~16 columns / ~7 rows across the body regardless of body variant, so
+  // balloon (short, tall) and standard (long, shallow) both read as scaled
+  // rather than one being sparse and the other dense.
+  const cols = 16;
+  const rows = 7;
+  const colW = bw / cols;
+  const rowH = bh / rows;
+  // Depth of each scale's arc bulge — shallow, so it reads as a fine ripple
+  // rather than a bold wave.
+  const depth = rowH * 0.16;
+
+  const out: Primitive[] = [];
+  for (let r = 0; r < rows; r++) {
+    const cy0 = by + rowH * (r + 0.5);
+    // Half-column offset on odd rows: the brick-course overlap real scale
+    // rows have, not a plain grid.
+    const rowOffset = r % 2 === 0 ? 0 : colW / 2;
+    for (let c = -1; c <= cols; c++) {
+      const cx = bx + colW * (c + 0.5) + rowOffset;
+      const cy = cy0 + lerp(-1, 1, rng()) * rowH * 0.08;
+      const w = colW * lerp(0.85, 1.05, rng());
+      const d = depth * lerp(0.75, 1.25, rng());
+
+      // Rotate the canonical flat scallop — a shallow up-then-down double
+      // arc spanning `w`, matching the shape (not just the intent) of the
+      // scribble hack this replaces — to the body's local curvature so scale
+      // rows sweep with the silhouette instead of sitting flat against it.
+      const angle = toRad(curvatureTangentDeg(geom, cx, cy));
+      const cosA = Math.cos(angle);
+      const sinA = Math.sin(angle);
+      const rot = (lx: number, ly: number): XY => ({
+        x: cx + lx * cosA - ly * sinA,
+        y: cy + lx * sinA + ly * cosA,
+      });
+      const p0 = rot(-w / 2, 0);
+      const c1 = rot(-w / 4, -d);
+      const p1 = rot(0, 0);
+      const c2 = rot(w / 4, d);
+      const p2 = rot(w / 2, 0);
+
+      out.push({
+        kind: "path",
+        d:
+          `M ${f(p0.x)} ${f(p0.y)} Q ${f(c1.x)} ${f(c1.y)} ${f(p1.x)} ${f(p1.y)} ` +
+          `Q ${f(c2.x)} ${f(c2.y)} ${f(p2.x)} ${f(p2.y)}`,
+        paint: { type: "solid", color: "#000000", opacity: lerp(0.045, 0.07, rng()) },
+        stroke: { width: w * 0.11 },
+        clip: bodyD,
+      });
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // The spec builder.
 // ---------------------------------------------------------------------------
@@ -1197,10 +1248,16 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
   // a correctness requirement, not an optimisation: `overlay`/`softLight`/
   // `multiply` composite against their backdrop, and without a layer that
   // backdrop is the tank water, not the fish.
-  const skin: Primitive[] = [];
+  //
+  // The leading run of that group is also the fish's ALBEDO — its pigment,
+  // with no lighting baked in. `skinAlbedo` captures exactly that run so the
+  // 3D renderer can use it as a texture map and light it for real, instead of
+  // inheriting 2D's painted-on highlights. Everything appended after the
+  // `skin.push(...skinAlbedo)` below is volume/lighting and is 2D-only.
+  const skinAlbedo: Primitive[] = [];
 
   // The base colour: back→belly gradient.
-  skin.push({
+  skinAlbedo.push({
     kind: "path",
     d: geom.d,
     paint: {
@@ -1216,23 +1273,16 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
   });
 
   // Pattern + shimmer sit directly on the base colour…
-  skin.push(...patternPrimitives(def, geom, material, seed));
+  skinAlbedo.push(...patternPrimitives(def, geom, material, seed));
   const shimmer = def.shimmer ? shimmerPrimitive(def.shimmer, geom, material, seed) : null;
-  if (shimmer) skin.push(shimmer.base);
+  if (shimmer) skinAlbedo.push(shimmer.base);
 
-  // Sparse scale scribbles across the flank.
-  const scaleRng = makeRng(seededKey(`scales-${def.id}`, seed));
-  for (let i = 0; i < 8; i++) {
-    const x = lerp(-18, 30, scaleRng());
-    const y = lerp(-14, 14, scaleRng());
-    skin.push({
-      kind: "path",
-      d: `M ${f(x)} ${f(y)} q 1.8 -2.2 3.6 0 q 1.8 2.2 3.6 0`,
-      paint: { type: "solid", color: "#000000", opacity: 0.055 },
-      stroke: { width: 0.7 },
-      clip: bodyD,
-    });
-  }
+  skinAlbedo.push(...scalePrimitives(def, geom, bodyD, seed));
+
+  // Everything above is pigment. Hand it to the 2D skin stack unchanged, then
+  // pile the volume/lighting on top — 2D output is identical to before the
+  // albedo was split out, because this is the same sequence in the same order.
+  const skin: Primitive[] = [...skinAlbedo];
 
   // …and the volume goes over the top of all of it.
   //
@@ -1387,9 +1437,11 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
   body.push(...sparklePrimitives(geom, def.rarity.tier, seed));
 
   // Pectoral fin: a small translucent membrane just behind the gill cover,
-  // angled down and back.
+  // angled down and back. Drawn separately from `body` (see `front` on
+  // FishRenderSpec) so it can be baked and animated on its own.
   const pectoral = pectoralGeom(geom);
-  pushFin(body, pectoral, 0.6, 0.26);
+  const front: Primitive[] = [];
+  pushFin(front, pectoral, 0.6, 0.26);
 
   // The little upturned molly mouth, right at the snout tip: a dark crease
   // with a lip highlight above it.
@@ -1453,10 +1505,15 @@ export function buildFishSpec(traits: FishTraits, def: ColorDef): FishRenderSpec
     tail: tailPrimitives,
     tailPivot: { x: px, y: 1 },
     body,
+    front,
+    pectoralPivot: pectoral.pivot,
+    skinAlbedo,
     bodyPathD: geom.d,
     silhouetteDs: [tail.d, dorsal.d, pelvicFar.d, pelvic.d, anal.d, geom.d, pectoral.d],
     bodyHalfHeight: geom.halfHeight,
     bounds,
+    tailBounds: inflateBox(tail.bbox, BOUNDS_PAD),
+    frontBounds: inflateBox(pectoral.bbox, BOUNDS_PAD),
   };
 }
 

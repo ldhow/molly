@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "dependencies": {
     "@expo/ui": "~57.0.9",
+    "@react-three/fiber": "^9.7.0",
     "@shopify/react-native-skia": "2.6.2",
     "@tanstack/react-query": "^5.101.4",
     "drizzle-orm": "^0.45.2",
@@ -11,6 +12,7 @@
     "expo-constants": "~57.0.9",
     "expo-device": "~57.0.1",
     "expo-font": "~57.0.1",
+    "expo-gl": "~57.0.2",
     "expo-glass-effect": "~57.0.1",
     "expo-haptics": "~57.0.1",
     "expo-image": "~57.0.2",
@@ -34,11 +36,13 @@
     "react-native-screens": "~4.26.0",
     "react-native-web": "~0.21.0",
     "react-native-worklets": "0.10.1",
+    "three": "^0.185.1",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
     "@types/react": "~19.2.2",
+    "@types/three": "^0.185.4",
     "babel-plugin-inline-import": "^3.0.0",
     "drizzle-kit": "^0.31.10",
     "esbuild": "^0.28.1",
@@ -59,11 +63,15 @@
     "fish:preview": "tsx scripts/fish-preview.ts",
     "fish:colors": "tsx scripts/fish-color-editor.ts",
     "fish:tank-preview": "tsx scripts/fish-tank-preview.ts",
+    "fish:3d-demo": "tsx scripts/fish-3d-demo.ts",
+    "fish:skin-preview": "tsx scripts/fish-skin-preview.ts",
+    "verify:3d": "tsx scripts/verify-fish-3d.ts",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm run lint && npm run format:check"
+    "verify": "npm run typecheck && npm run lint && npm run format:check",
+    "tank:design": "tsx scripts/tank-design-editor.ts"
   },
   "private": true
 }

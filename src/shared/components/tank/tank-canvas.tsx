@@ -25,10 +25,20 @@ interface Props {
   style?: ViewStyle;
 }
 
+/** Deterministic [0,1) "how far back" a fish sits — same seed, different prime. */
+function depthOf(seed: number): number {
+  return (seed * 31.7) % 1;
+}
+
 export function TankCanvas({ fish, mode = "tank", style }: Props) {
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const alive = fish.filter((f) => f.status === "alive");
   const dead = fish.filter((f) => f.status === "dead");
+  // Far fish drawn first so nearer ones overlap them, smaller and fogged —
+  // a cheap depth illusion with no per-fish blur or extra draw passes.
+  const alive = fish
+    .filter((f) => f.status === "alive")
+    .map((f) => ({ ...f, depth: depthOf(f.seed) }))
+    .sort((a, b) => a.depth - b.depth);
 
   return (
     <View
@@ -64,6 +74,7 @@ export function TankCanvas({ fish, mode = "tank", style }: Props) {
               scale={f.scale}
               seed={f.seed}
               mode={mode}
+              depth={f.depth}
             />
           ))}
           <Bubbles width={size.width} height={size.height} />

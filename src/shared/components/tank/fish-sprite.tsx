@@ -34,15 +34,20 @@ import {
   SILHOUETTE_COLOR,
   STAGE_SQUISH,
   type Blend,
-  type Box,
   type Paint as SpecPaint,
   type Primitive,
 } from "@/shared/fish/render-spec";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
-import { useFishWander, type WanderBox } from "@/shared/hooks/use-fish-wander";
+import { useFishSwim, type WanderBox } from "@/shared/hooks/use-fish-swim";
 import { spriteFor } from "@/shared/lib/sprites";
+import { waveDy } from "@/shared/lib/swim-model";
 
-import { getBakedFish, type BakedFish } from "./fish-picture";
+import { getBakedFish, type BakedFish, type BakedLayer as BakedLayerArt } from "./fish-picture";
+import { UndulatingBody } from "./undulating-body";
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
 
 interface FishSpriteProps {
   traits: FishTraits;
@@ -55,6 +60,13 @@ interface FishSpriteProps {
   seed: number;
   /** "center": session mode — slow drift near the middle of the tank. */
   mode?: "tank" | "center";
+  /**
+   * [0,1) "how far back" this fish sits — tank mode only. Nearer (1) fish
+   * render bigger and fully opaque; farther (0) fish shrink, fog slightly,
+   * and sit a touch higher, so the tank reads as a volume instead of a flat
+   * row of sprites.
+   */
+  depth?: number;
 }
 
 /** One fish in the tank: sprite image when registered, render-spec otherwise. */
@@ -66,10 +78,12 @@ export function FishSprite({
   scale,
   seed,
   mode = "tank",
+  depth,
 }: FishSpriteProps) {
   const clock = useClock();
   const phase = seed * Math.PI * 2;
   const dead = status === "dead";
+  const hasDepth = mode === "tank" && depth !== undefined;
 
   // Tank-mode margins as fractions of the canvas so they hold up in landscape
   // (fixed pixel insets used to collapse the swimmable band on a short canvas).
@@ -89,26 +103,33 @@ export function FishSprite({
           minX: insetX,
           maxX: Math.max(insetX + 1, bounds.width - insetX),
           minY: insetTop,
-          maxY: Math.max(insetTop + 1, bounds.height - sandHeightFor(bounds.height) - insetBottom),
+          maxY:
+            Math.max(insetTop + 1, bounds.height - sandHeightFor(bounds.height) - insetBottom) -
+            (hasDepth ? (1 - depth) * bounds.height * 0.06 : 0),
         };
 
-  const wander = useFishWander({
+  const swim = useFishSwim({
     box,
     seed,
     speedFactor: mode === "center" ? 0.45 : 1,
     enabled: !dead,
   });
 
+  const depthScale = hasDepth ? scale * lerp(0.82, 1.08, depth) : scale;
+  const depthOpacity = hasDepth ? lerp(0.78, 1, depth) : 1;
+
   const liveTransform = useDerivedValue<Transforms3d>(() => {
     const t = clock.value;
     const bob = Math.sin(t / 900 + phase) * 3;
-    const stroke = 1 - 0.035 * Math.abs(Math.sin(t / 280 + phase));
+    const stroke = 1 - 0.02 * Math.abs(Math.sin(swim.beatPhase.value * 0.5));
     return [
-      { translateX: wander.x.value },
-      { translateY: wander.y.value + bob },
-      { rotate: wander.tilt.value },
-      { scaleX: wander.heading.value * scale * stroke },
-      { scaleY: scale },
+      { translateX: swim.x.value },
+      { translateY: swim.y.value + bob },
+      { rotate: swim.tilt.value + swim.bank.value },
+      { perspective: 550 },
+      { rotateY: swim.yaw.value },
+      { scaleX: depthScale * stroke },
+      { scaleY: depthScale },
     ];
   });
 
@@ -139,10 +160,22 @@ export function FishSprite({
   }
 
   return (
-    <Group transform={liveTransform}>
-      <FishBody traits={traits} stage={stage} clock={clock} phase={phase} />
+    <Group transform={liveTransform} opacity={depthOpacity}>
+      <FishBody
+        traits={traits}
+        stage={stage}
+        clock={clock}
+        phase={phase}
+        motion={{ beatPhase: swim.beatPhase, speedNorm: swim.speedNorm }}
+      />
     </Group>
   );
+}
+
+/** Shared values driving beat-coupled animation — absent for static surfaces. */
+export interface FishMotion {
+  beatPhase: SharedValue<number>;
+  speedNorm: SharedValue<number>;
 }
 
 interface FishBodyProps {
@@ -161,6 +194,13 @@ interface FishBodyProps {
    * baking all of them too. Same art either way.
    */
   vector?: boolean;
+  /**
+   * Present only for live tank fish: drives the tail's speed-coupled beat and
+   * (in "image" bake mode) a traveling body-wave mesh. Absent everywhere else
+   * (fishdex, holding tank, focus home, dead fish) — those render the exact
+   * rest pose the fish-preview gallery shows.
+   */
+  motion?: FishMotion;
 }
 
 interface CompiledPrimitive {
@@ -195,7 +235,15 @@ function compilePrimitive(prim: Primitive, clips: ClipCache): CompiledPrimitive 
  * Renders the registered sprite image when one exists, else the shared
  * render-spec — the exact drawing the HTML preview gallery shows.
  */
-export function FishBody({ traits, stage, clock, phase, silhouette, vector }: FishBodyProps) {
+export function FishBody({
+  traits,
+  stage,
+  clock,
+  phase,
+  silhouette,
+  vector,
+  motion,
+}: FishBodyProps) {
   const asset = spriteFor(traits.color, stage);
   const image = useImage(asset);
 
@@ -207,6 +255,7 @@ export function FishBody({ traits, stage, clock, phase, silhouette, vector }: Fi
       clips,
       tail: spec.tail.map((p) => compilePrimitive(p, clips)),
       body: spec.body.map((p) => compilePrimitive(p, clips)),
+      front: spec.front.map((p) => compilePrimitive(p, clips)),
       silhouettePaths: spec.silhouetteDs
         .map((d) => Skia.Path.MakeFromSVGString(d))
         .filter((p): p is SkPath => p !== null),
@@ -220,9 +269,37 @@ export function FishBody({ traits, stage, clock, phase, silhouette, vector }: Fi
     [traits, stage, silhouette, vector],
   );
 
+  // Normalized head(0)→tail(1) position of the tail pivot within the spec's
+  // own bounds — the same coordinate space `waveDy` operates in, so the tail
+  // rotation below evaluates the body wave at exactly the point the mesh's
+  // rearmost column also evaluates it. Identical inputs, so the seam can't
+  // drift apart.
+  const tailPivotU = useMemo(
+    () => (compiled.spec.tailPivot.x - compiled.spec.bounds.x) / compiled.spec.bounds.width,
+    [compiled],
+  );
+
   const tailTransform = useDerivedValue<Transforms3d>(() => {
-    const t = clock ? clock.value : 0;
-    return [{ rotate: clock ? Math.sin(t / 190 + phase) * 0.22 : 0 }];
+    if (!clock) return [{ rotate: 0 }];
+    if (motion) {
+      const dy = waveDy(tailPivotU, motion.beatPhase.value, motion.speedNorm.value, phase);
+      const tailAmp = 0.16 + 0.14 * motion.speedNorm.value;
+      const rot = tailAmp * Math.sin(motion.beatPhase.value - 4.8 * tailPivotU + phase - 0.4);
+      return [{ translateY: dy }, { rotate: rot }];
+    }
+    const t = clock.value;
+    return [{ rotate: Math.sin(t / 190 + phase) * 0.22 }];
+  });
+
+  // The pectoral fin sculls harder at a hover than at full speed — the same
+  // beat drives it, just inverted against `speedNorm`, so a fish that's
+  // barely moving still reads as alive.
+  const pectoralTransform = useDerivedValue<Transforms3d>(() => {
+    if (!motion) return [{ rotate: 0 }];
+    const s = motion.speedNorm.value;
+    const rot =
+      (0.1 + 0.14 * (1 - Math.min(1, s))) * Math.sin(motion.beatPhase.value * 1.7 + phase + 1.3);
+    return [{ rotate: rot }];
   });
 
   if (stage === "egg") {
@@ -261,17 +338,37 @@ export function FishBody({ traits, stage, clock, phase, silhouette, vector }: Fi
     );
   }
 
-  // Baked path: two draws per fish instead of ~84 nodes, with every blur and
-  // offscreen layer already resolved. The stage squish is baked in, so this
-  // branch deliberately does NOT wrap in the squish Group below.
+  // Baked path: three draws per fish instead of ~84 nodes, with every blur
+  // and offscreen layer already resolved. The stage squish is baked in, so
+  // this branch deliberately does NOT wrap in the squish Group below.
   if (baked) {
-    const { bounds } = baked;
+    // The undulation mesh only has something to ride when the bake produced
+    // an actual texture — "picture" mode gets the rigid body + coupled tail
+    // instead, which is still a real liveliness upgrade over the old constant
+    // tail metronome.
+    const canUndulate = motion && baked.kind === "image";
     return (
       <>
         <Group transform={tailTransform} origin={vec(baked.tailPivot.x, baked.tailPivot.y)}>
-          <BakedLayer art={baked.tail} kind={baked.kind} bounds={bounds} />
+          <BakedLayer layer={baked.tail} kind={baked.kind} />
         </Group>
-        <BakedLayer art={baked.body} kind={baked.kind} bounds={bounds} />
+        {canUndulate ? (
+          <UndulatingBody
+            image={baked.body.art as SkImage}
+            bounds={baked.body.bounds}
+            beatPhase={motion.beatPhase}
+            speedNorm={motion.speedNorm}
+            phase={phase}
+          />
+        ) : (
+          <BakedLayer layer={baked.body} kind={baked.kind} />
+        )}
+        <Group
+          transform={pectoralTransform}
+          origin={vec(baked.pectoralPivot.x, baked.pectoralPivot.y)}
+        >
+          <BakedLayer layer={baked.front} kind={baked.kind} />
+        </Group>
       </>
     );
   }
@@ -289,24 +386,25 @@ export function FishBody({ traits, stage, clock, phase, silhouette, vector }: Fi
       {compiled.body.map((c, i) => (
         <PrimitiveNode key={i} compiled={c} clips={compiled.clips} />
       ))}
+      <Group
+        transform={pectoralTransform}
+        origin={vec(compiled.spec.pectoralPivot.x, compiled.spec.pectoralPivot.y)}
+      >
+        {compiled.front.map((c, i) => (
+          <PrimitiveNode key={i} compiled={c} clips={compiled.clips} />
+        ))}
+      </Group>
     </Group>
   );
 }
 
-/** One baked half of a fish — a texture blit, or a recorded command replay. */
-function BakedLayer({
-  art,
-  kind,
-  bounds,
-}: {
-  art: BakedFish["body"];
-  kind: BakedFish["kind"];
-  bounds: Box;
-}) {
-  if (kind === "picture") return <Picture picture={art as SkPicture} />;
+/** One baked fin/body layer — a texture blit, or a recorded command replay. */
+function BakedLayer({ layer, kind }: { layer: BakedLayerArt; kind: BakedFish["kind"] }) {
+  if (kind === "picture") return <Picture picture={layer.art as SkPicture} />;
+  const { bounds } = layer;
   return (
     <SkiaImage
-      image={art as SkImage}
+      image={layer.art as SkImage}
       x={bounds.x}
       y={bounds.y}
       width={bounds.width}

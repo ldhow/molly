@@ -2,7 +2,7 @@ import { useRouter } from "expo-router";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { TankCanvas } from "@/shared/components/tank/tank-canvas";
+import { TankView } from "@/shared/components/tank/tank-view";
 import { Button } from "@/shared/components/button";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 import { BODY_DEFS, DORSAL_DEFS, getColorDef, TAIL_DEFS } from "@/shared/fish/catalog";
@@ -54,7 +54,7 @@ export function SessionResultSheet({ result }: { result: SessionResult }) {
 
   return (
     <View style={styles.root}>
-      <TankCanvas
+      <TankView
         mode="center"
         style={StyleSheet.absoluteFill as never}
         fish={[

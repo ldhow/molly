@@ -21,7 +21,8 @@ export type ColorId =
   | "caramelZebra"
   | "electricBlue"
   | "blackDiamond"
-  | "sanke";
+  | "sanke"
+  | "shadowVeil";
 
 export type BodyId = "standard" | "balloon";
 export type TailId = "round" | "lyretail";

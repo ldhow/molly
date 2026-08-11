@@ -81,7 +81,7 @@ src/
       components/               # TankCanvas.tsx (water/sand/plants/bubbles/fish scene),
                                 # FishSprite.tsx, Bubbles.tsx, Plants.tsx
       hooks/                    # useOwnedFish.ts (RQ over drizzle select -> OwnedFish[]),
-                                # useFishWander.ts (per-fish Reanimated wander)
+                                # useFishSwim.ts (per-fish Reanimated swim model)
       utils/                    # sprites.ts — variant×stage asset manifest + size/anchor metadata
       constants/                # tank layout, max rendered fish (25), bubble/plant params
     stats/
@@ -139,7 +139,7 @@ interface ActiveSession { id; variantId; plannedMinutes; startedAt: number; back
 - **Bubbles**: ~12 circles, `y = canvasH - ((t*speed + phase) % canvasH)`.
 - **Fish** (`FishSprite.tsx`): Skia `<Image>` (loaded with `useImage` from bundled PNGs) inside a `Group` with transform `[{translateX},{translateY},{scaleX: heading-flip},{rotate: tilt},{scale: size}]`. Motion realism from animation, not frames: heading flip on direction change, tilt toward vertical motion (~±12°), sin bob, subtle `scaleX` oscillation (~1.0↔0.96) as a swim-stroke illusion. If per-variant swim frames are generated, cycle 2–3 frames; single-frame fallback still looks alive with the transforms above.
 - **Sprite manifest** (`tank/utils/sprites.ts`): static `require()` map `variantId × lifeStage → asset`, plus per-variant size/anchor metadata.
-- **Wander** (`useFishWander`): random target every 3–8s, `withTiming` toward it (duration ∝ distance), flip on direction, sin bob. ≤25 fish is fine; escape hatch if needed: Skia Atlas API.
+- **Swim** (`useFishSwim`, `src/shared/lib/swim-model.ts`): a continuously-steered particle — cruise/glide/hover/burst modes, turn-rate-limited heading, speed eased toward a per-mode target (never a dead stop), soft-wall steering. Turns are a `perspective`+`rotateY` sweep through depth rather than a mirror flip. Body wave + tail beat frequency scale with speed via a shared `beatPhase`. ≤25 fish is fine; escape hatch if needed: Skia Atlas API.
 - **Dead fish**: same sprite with a Skia `ColorMatrix` grayscale/desaturate filter + reduced opacity, `scaleY: -1`, lying on sand, no wander — no separate dead artwork needed.
 - **Growth in session**: stage from progress (egg <10%, fry <40%, juvenile <75%, adult ≥75%); scale ~0.25→1.0 continuously; on stage boundary crossfade (opacity) between stage sprites + scale-pop. Session screen reuses TankCanvas with one centered fish.
 

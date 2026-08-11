@@ -168,6 +168,31 @@ export interface FishSvgOpts {
   silhouette?: boolean;
 }
 
+/**
+ * Same art as `fishSvg`, but with tail/body/front kept as separate markup
+ * strings instead of one flattened `<svg>` — what an animated preview needs
+ * to rotate the tail and pectoral independently, the same way `fish-sprite.tsx`
+ * splits them into separately-transformed Skia groups. Adult scale only
+ * (stage squish/scale is the caller's problem, same as the app applies it as
+ * an outer transform around these three groups).
+ */
+export function fishSvgLayers(traits: FishTraits, def: ColorDef) {
+  const ctx = newCtx();
+  const spec = buildFishSpec(traits, def);
+  const tailHtml = spec.tail.map((p) => primitiveSvg(p, ctx)).join("");
+  const bodyHtml = spec.body.map((p) => primitiveSvg(p, ctx)).join("");
+  const frontHtml = spec.front.map((p) => primitiveSvg(p, ctx)).join("");
+  return {
+    defsHtml: ctx.defs.join(""),
+    tailHtml,
+    bodyHtml,
+    frontHtml,
+    tailPivot: spec.tailPivot,
+    pectoralPivot: spec.pectoralPivot,
+    bounds: spec.bounds,
+  };
+}
+
 /** Renders one fish to a standalone <svg>...</svg> string, exactly as the app draws it. */
 export function fishSvg(traits: FishTraits, def: ColorDef, opts: FishSvgOpts = {}): string {
   const stage = opts.stage ?? "adult";
@@ -189,7 +214,8 @@ export function fishSvg(traits: FishTraits, def: ColorDef, opts: FishSvgOpts = {
     } else {
       content =
         spec.tail.map((p) => primitiveSvg(p, ctx)).join("") +
-        spec.body.map((p) => primitiveSvg(p, ctx)).join("");
+        spec.body.map((p) => primitiveSvg(p, ctx)).join("") +
+        spec.front.map((p) => primitiveSvg(p, ctx)).join("");
     }
   }
 

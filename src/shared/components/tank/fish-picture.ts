@@ -43,6 +43,7 @@ import {
   type Box,
   type Paint as SpecPaint,
   type Primitive,
+  type XY,
 } from "@/shared/fish/render-spec";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
 
@@ -226,14 +227,21 @@ export function drawSpec(canvas: SkCanvas, prims: Primitive[], cache: PathCache)
 // Baking + cache.
 // ---------------------------------------------------------------------------
 
-export interface BakedFish {
-  /** Everything except the tail, already squished for the life stage. */
-  body: SkImage | SkPicture;
-  /** Drawn under a Group that rotates about `tailPivot`. */
-  tail: SkImage | SkPicture;
-  tailPivot: { x: number; y: number };
-  /** Local-space rect the images occupy; feed straight to <Image x y w h>. */
+export interface BakedLayer {
+  art: SkImage | SkPicture;
+  /** Local-space rect this layer occupies; feed straight to <Image x y w h>. */
   bounds: Box;
+}
+
+export interface BakedFish {
+  /** Everything except the tail and pectoral, already squished for the life stage. */
+  body: BakedLayer;
+  /** Drawn under a Group that rotates about `tailPivot`. */
+  tail: BakedLayer;
+  /** Drawn last, under a Group that rotates about `pectoralPivot`. */
+  front: BakedLayer;
+  tailPivot: XY;
+  pectoralPivot: XY;
   kind: "image" | "picture";
 }
 
@@ -321,40 +329,57 @@ export function getBakedFish(traits: FishTraits, stage: LifeStage): BakedFish | 
 
   const spec = buildFishSpec(traits, getColorDef(traits.color));
   const squish = STAGE_SQUISH[stage];
-  const { bounds } = spec;
+  const { bounds, tailBounds, frontBounds } = spec;
   const paths: PathCache = new Map();
 
   const drawBody = (c: SkCanvas, pc: PathCache) => drawSpec(c, spec.body, pc);
   const drawTail = (c: SkCanvas, pc: PathCache) => drawSpec(c, spec.tail, pc);
+  const drawFront = (c: SkCanvas, pc: PathCache) => drawSpec(c, spec.front, pc);
 
   let baked: BakedFish | null = null;
 
   if (FISH_RENDER_MODE === "image") {
+    // Body stays at the full union bounds (its shading/gradients are clipped
+    // to the body silhouette, not any one fin, so there's no single tight box
+    // to shrink to). Tail and pectoral each get their own tight box — they're
+    // small, separately-drawn shapes, and this is most of where the 3-layer
+    // split earns back the memory a 2-layer bake would have spent on them.
     const body = renderToImage(bounds, squish, drawBody, paths);
-    const tail = body ? renderToImage(bounds, squish, drawTail, paths) : null;
-    if (body && tail) {
-      baked = { body, tail, tailPivot: spec.tailPivot, bounds, kind: "image" };
+    const tail = body ? renderToImage(tailBounds, squish, drawTail, paths) : null;
+    const front = tail ? renderToImage(frontBounds, squish, drawFront, paths) : null;
+    if (body && tail && front) {
+      baked = {
+        body: { art: body, bounds },
+        tail: { art: tail, bounds: tailBounds },
+        front: { art: front, bounds: frontBounds },
+        tailPivot: spec.tailPivot,
+        pectoralPivot: spec.pectoralPivot,
+        kind: "image",
+      };
     }
   }
   if (!baked) {
     // Either the mode asked for pictures, or the raster surface allocation
     // failed — pictures need no surface at all, so they always succeed.
     baked = {
-      body: renderToPicture(bounds, squish, drawBody, paths),
-      tail: renderToPicture(bounds, squish, drawTail, paths),
+      body: { art: renderToPicture(bounds, squish, drawBody, paths), bounds },
+      tail: { art: renderToPicture(tailBounds, squish, drawTail, paths), bounds: tailBounds },
+      front: { art: renderToPicture(frontBounds, squish, drawFront, paths), bounds: frontBounds },
       tailPivot: spec.tailPivot,
-      bounds,
+      pectoralPivot: spec.pectoralPivot,
       kind: "picture",
     };
   }
 
   // Pictures are command lists, not pixels; only raster textures are worth
   // budgeting. This is CPU RAM (raster surfaces), not VRAM — sized so
-  // TANK_CAPACITY (25) distinct combos fit: 25 × 2 halves × ~953KB/half at
-  // BAKE_DPR 3 ≈ 47.5MB. Changing BAKE_DPR must move this budget with it.
+  // TANK_CAPACITY (25) distinct combos fit. Body still costs ~953KB/combo at
+  // BAKE_DPR 3, but tail (tight box) and front (small pectoral box) together
+  // now cost noticeably less than the old full-bounds tail alone did.
+  const layerBytes = (b: Box) => Math.ceil(b.width * BAKE_DPR) * Math.ceil(b.height * BAKE_DPR) * 4;
   const bytes =
     baked.kind === "image"
-      ? Math.ceil(bounds.width * BAKE_DPR) * Math.ceil(bounds.height * BAKE_DPR) * 4 * 2
+      ? layerBytes(bounds) + layerBytes(tailBounds) + layerBytes(frontBounds)
       : 0;
   cache.set(key, { baked, bytes });
   cacheBytes += bytes;

@@ -117,6 +117,22 @@ module.exports = defineConfig([
   },
 
   // ---------------------------------------------------------------------------
+  // R3F components (src/shared/components/tank/*-3d.tsx) — react/no-unknown-property
+  // only knows DOM/RN element props by default; these are three.js/@react-three/fiber
+  // JSX props (a mesh's `position`, a light's `intensity`, `args` for constructor
+  // params, `attach` for scene.background/fog, etc.), not typos.
+  // ---------------------------------------------------------------------------
+  {
+    files: ["src/shared/components/tank/*-3d.tsx"],
+    rules: {
+      "react/no-unknown-property": [
+        "error",
+        { ignore: ["args", "attach", "object", "position", "rotation", "intensity", "roughness"] },
+      ],
+    },
+  },
+
+  // ---------------------------------------------------------------------------
   // src/db/** — persistence infra. Imports drizzle/expo-sqlite, nothing app-side.
   // ---------------------------------------------------------------------------
   {

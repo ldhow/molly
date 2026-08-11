@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { standardTraits } from "@/shared/fish/catalog";
 import { stageForProgress } from "@/shared/fish/life-stage";
 import type { LifeStage } from "@/shared/fish/types";
-import { TankCanvas } from "@/shared/components/tank/tank-canvas";
+import { TankView } from "@/shared/components/tank/tank-view";
 import { seedFromString } from "@/shared/lib/seed";
 import { Button } from "@/shared/components/button";
 import { palette, radius, spacing } from "@/shared/constants/theme";
@@ -75,7 +75,7 @@ function ActiveSessionView({ session }: { session: ActiveSession }) {
 
   return (
     <View style={styles.root}>
-      <TankCanvas
+      <TankView
         mode="center"
         style={StyleSheet.absoluteFill as never}
         fish={[

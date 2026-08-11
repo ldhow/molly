@@ -67,6 +67,10 @@ const showcases: { label: string; traits: FishTraits }[] = [
     label: "All rare rolls (Sanke)",
     traits: { color: "sanke", body: "balloon", tail: "lyretail", dorsal: "sailfin" },
   },
+  {
+    label: "Shadow Veil, lyretail + sailfin",
+    traits: { ...standardTraits("shadowVeil"), tail: "lyretail", dorsal: "sailfin" },
+  },
 ];
 
 const showcaseCells = showcases

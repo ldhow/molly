@@ -18,6 +18,8 @@ npx expo start --web
 npx drizzle-kit generate   # after editing src/db/schema.ts — writes src/db/migrations/ (commit it)
 yarn fish:preview          # regenerate src/docs/fish-preview.html — the fish-art iteration loop
 yarn fish:colors           # local server + browser UI to live-tune palette/pattern colors per variety
+yarn tank:design           # local server + live 3D scene to tune the whole 3D tank (writes tank-design.ts)
+yarn verify:3d             # headless 3D checks — geometry, patterns, bake budget, drift fingerprints
 npm run verify             # typecheck + lint + format:check
 ```
 
@@ -88,3 +90,9 @@ For a function-by-function map of where each part (body, tail, dorsal, pelvic/an
 [scripts/fish-path-editor.html](scripts/fish-path-editor.html) is a hand-drawing tool for the body/fin Bézier shapes themselves — open it directly in a browser, no build step. Draw or drag points, load what's currently shipping as a starting point, and it exports `d` strings and landmark/pivot objects shaped to paste directly into `render-spec.ts`.
 
 Fish are **generated, not authored**: ~480 trait combinations, so there is no sprite sheet. `FISH_RENDER_MODE` in `fish-picture.ts` selects `"image"` (default — bake once to a texture, one quad per frame), `"picture"`, or `"nodes"`; each degrades to the next automatically. The `<Image>` sprite path and the empty manifest in [sprites.ts](src/shared/lib/sprites.ts) survive as a per-colour override. Dead fish are the same drawing with a grayscale `ColorMatrix`, flipped, resting on the sand — there is no separate dead artwork.
+
+### The 3D tank
+
+There is a **second, opt-in renderer**: real three.js geometry behind a persisted 2D/3D toggle on the Tank screen ([render-mode-store.ts](src/shared/store/render-mode-store.ts), switched by [tank-view.tsx](src/shared/components/tank/tank-view.tsx)). It is not a port of the 2D art — the mesh is authored separately — but the two share their **pigment**: `raster.ts` is a fourth backend over the same IR, rasterizing `spec.skinAlbedo` into a texture the 3D body wears, so a colour or pattern edit lands in both renderers at once. Lighting is deliberately _excluded_ from that texture; 3D lights it for real.
+
+Every tunable value in the 3D scene lives in one place, [tank-design.ts](src/shared/components/tank/tank-design.ts), which the app, the browser preview and the editor all read — that shared module is what stops the preview drifting from the device. **Read [src/docs/tank-3d-guide.md](src/docs/tank-3d-guide.md) before changing anything 3D**, and use `yarn tank:design` rather than editing constants by hand. `expo-gl` is a native module, so 3D changes need a real `eas build` before an `eas update` can carry them.

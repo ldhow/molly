@@ -22,7 +22,7 @@ export function patternSeedOf(id: string): number {
 }
 
 /**
- * The 15 color/pattern varieties, in unlock order (user-specified table).
+ * The 16 color/pattern varieties, in unlock order (user-specified table).
  * Palettes are back→mid→belly gradient stops; patterns layer on top.
  */
 export const COLOR_DEFS: readonly ColorDef[] = [
@@ -2428,6 +2428,25 @@ export const COLOR_DEFS: readonly ColorDef[] = [
       ],
     },
     unlock: { type: "streakOrGrant", days: 30 },
+  },
+  {
+    id: "shadowVeil",
+    order: 16,
+    name: "Shadow Veil",
+    description:
+      "Deep iridescent black-green body with a pale, ghost-white veil fin — no other dark variety pairs a black body with a contrasting pale fin.",
+    rarity: { tier: "legendary" },
+    accentColor: "#8fd6b0",
+    palette: {
+      back: "#0b1410",
+      mid: "#16261d",
+      belly: "#3f5049",
+      fin: "#eef2ea",
+      finRay: "#c7d2c5",
+    },
+    pattern: { type: "solid" },
+    shimmer: "iridescent",
+    unlock: { type: "totalHours", hours: 150 },
   },
 ] as const;
 
