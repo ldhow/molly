@@ -128,6 +128,24 @@ export function pumpSkinQueue(): boolean {
   return true;
 }
 
+/**
+ * Drop one fish's cached/queued skin bake so its next `requestSkin()` call
+ * re-bakes from scratch instead of reusing a stale texture. `skinMapKey` is
+ * keyed on traits alone, not on a `ColorDef`'s content — dev tools that
+ * mutate a def's palette/pattern in place (e.g. the 3D preview in
+ * `yarn fish:colors`) need this to make an edit visible; nothing in the
+ * shipped app calls it.
+ */
+export function invalidateSkin(traits: FishTraits): void {
+  const key = skinMapKey(traits);
+  const hit = cache.get(key);
+  if (hit) {
+    hit.skin.texture.dispose();
+    cache.delete(key);
+  }
+  queue.delete(key);
+}
+
 function release(key: string): void {
   const hit = cache.get(key);
   if (!hit) return;

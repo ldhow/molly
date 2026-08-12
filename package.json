@@ -42,6 +42,7 @@
   "devDependencies": {
     "@types/node": "^26.1.2",
     "@types/react": "~19.2.2",
+    "@types/react-dom": "~19.2.2",
     "@types/three": "^0.185.4",
     "babel-plugin-inline-import": "^3.0.0",
     "drizzle-kit": "^0.31.10",
@@ -56,14 +57,15 @@
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
     "fish:preview": "tsx scripts/fish-preview.ts",
     "fish:colors": "tsx scripts/fish-color-editor.ts",
     "fish:tank-preview": "tsx scripts/fish-tank-preview.ts",
     "fish:3d-demo": "tsx scripts/fish-3d-demo.ts",
+    "fish:3d-orient": "tsx scripts/fish-3d-orient.ts",
     "fish:skin-preview": "tsx scripts/fish-skin-preview.ts",
     "verify:3d": "tsx scripts/verify-fish-3d.ts",
     "lint:fix": "eslint . --fix",
@@ -71,7 +73,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm run lint && npm run format:check",
-    "tank:design": "tsx scripts/tank-design-editor.ts"
+    "tank:design": "tsx scripts/tank-design-editor.ts",
+    "tank:3d-react": "tsx scripts/tank-3d-react-harness.ts"
   },
   "private": true
 }

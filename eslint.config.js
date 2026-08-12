@@ -123,11 +123,25 @@ module.exports = defineConfig([
   // params, `attach` for scene.background/fog, etc.), not typos.
   // ---------------------------------------------------------------------------
   {
-    files: ["src/shared/components/tank/*-3d.tsx"],
+    files: ["src/shared/components/tank/*-3d.tsx", "scripts/lib/fish-3d-orient-entry.tsx"],
     rules: {
       "react/no-unknown-property": [
         "error",
-        { ignore: ["args", "attach", "object", "position", "rotation", "intensity", "roughness"] },
+        {
+          ignore: [
+            "args",
+            "attach",
+            "object",
+            "position",
+            "rotation",
+            "intensity",
+            "roughness",
+            "geometry",
+            "wireframe",
+            "side",
+            "flatShading",
+          ],
+        },
       ],
     },
   },

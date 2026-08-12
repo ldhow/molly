@@ -195,6 +195,10 @@ export function stepSwim(
 
   // Desired heading toward the target, biased away from the tank edges.
   let thetaD = Math.atan2(s.targetY - s.y, s.targetX - s.x);
+  // qx/qy: how far *into* each axis's wall margin the fish currently is —
+  // 0 while clear of both walls on that axis, rising to 1 right at (or past)
+  // whichever wall is closer. q is the worse of the two axes, so a fish in a
+  // corner reacts to whichever wall it's closest to violating.
   const qx = Math.max(
     1 - (s.x - box.minX) / WALL_MARGIN_X,
     1 - (box.maxX - s.x) / WALL_MARGIN_X,
@@ -210,6 +214,11 @@ export function stepSwim(
     const cx = (box.minX + box.maxX) / 2;
     const cy = (box.minY + box.maxY) / 2;
     const inward = Math.atan2(cy - s.y, cx - s.x);
+    // w: 0..0.85, quadratic in q so the bias only kicks in noticeably once
+    // the fish is genuinely close to a wall, not the instant it crosses the
+    // margin. Blend the two headings as unit vectors (sin/cos), not as raw
+    // angles — angles wrap at ±π, so averaging them directly would send a
+    // fish heading near due-west the wrong way around the circle.
     const w = q * q * 0.85;
     const sinB = Math.sin(thetaD) * (1 - w) + Math.sin(inward) * w;
     const cosB = Math.cos(thetaD) * (1 - w) + Math.cos(inward) * w;
@@ -236,6 +245,11 @@ export function stepSwim(
   s.y = clamp(s.y + vy * dt, box.minY, box.maxY);
 
   // Pitch toward the direction of travel; decays to level in a hover.
+  // `f` un-mirrors vy so tilt reads correctly regardless of which way the
+  // sprite/model is currently facing. `+4` in the atan2 denominator damps the
+  // pitch when forward speed (vx) is small, so a nearly-vertical dart doesn't
+  // snap to a near-90° nose-up/down tilt; the 0.85 and the final clamp keep
+  // the result inside a plausible, non-comical range.
   const f = s.facingRight ? 1 : -1;
   const tiltTarget =
     s.mode === "hover" ? 0 : clamp(f * Math.atan2(vy, Math.abs(vx) + 4) * 0.85, -0.5, 0.5);

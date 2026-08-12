@@ -7,7 +7,7 @@ import type { FishTraits, LifeStage } from "@/shared/fish/types";
 import { FishSprite } from "./fish-sprite";
 import { Bubbles } from "./bubbles";
 import { Plants } from "./plants";
-import { Sand, WaterBackground } from "./water-background";
+import { Rocks, Sand, WaterBackground } from "./water-background";
 
 export interface TankFish {
   key: string;
@@ -52,6 +52,7 @@ export function TankCanvas({ fish, mode = "tank", style }: Props) {
         <Canvas style={StyleSheet.absoluteFill}>
           <WaterBackground width={size.width} height={size.height} />
           <Sand width={size.width} height={size.height} />
+          <Rocks width={size.width} height={size.height} />
           <Plants width={size.width} height={size.height} />
           {dead.map((f) => (
             <FishSprite

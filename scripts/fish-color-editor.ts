@@ -8,14 +8,39 @@
 // Run: yarn fish:colors   (defaults to http://127.0.0.1:5477, override with PORT=)
 
 import { createServer, type IncomingMessage } from "node:http";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import * as esbuild from "esbuild";
 
 import { COLOR_DEFS, PATTERN_SEED_BUCKETS, standardTraits } from "../src/shared/fish/catalog";
 import { RARITY_COLORS, formatRarity } from "../src/shared/fish/rarity";
 import type { BodyId, ColorDef } from "../src/shared/fish/types";
 import { fishSvg } from "./lib/fish-svg";
+import { tank3dAlias } from "./lib/tank-3d-alias";
 
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, "..");
 const PORT = Number(process.env.PORT) || 5477;
 const BODIES: BodyId[] = ["standard", "balloon"];
+
+/** Bundle the 3D preview pane fresh on every request, matching the rest of
+ *  this file's "edits never touch disk, refresh to pick up code changes"
+ *  convention — see fish-color-3d-entry.tsx for what it mounts. */
+function build3DClient(): string {
+  const out = esbuild.buildSync({
+    entryPoints: [join(here, "lib/fish-color-3d-entry.tsx")],
+    bundle: true,
+    write: false,
+    format: "iife",
+    platform: "browser",
+    target: "es2020",
+    jsx: "automatic",
+    alias: tank3dAlias(root, join(here, "lib")),
+  });
+  return out.outputFiles[0].text;
+}
 
 function readJson(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -78,6 +103,10 @@ const HTML = `<!doctype html>
   .preview svg { display:block; width:220px; height:auto; }
   #prev-balloon svg { width:340px; }
   #prev-balloon.drawing svg { cursor:crosshair; }
+  #root3d-wrap { width:220px; height:220px; position:relative; background:#04121c; border-radius:10px; overflow:hidden; }
+  .preview3d-controls { display:flex; justify-content:center; gap:10px; margin-top:6px; align-items:center; }
+  .preview3d-controls select { background:#0b2436; color:#eaf6ff; border:1px solid rgba(255,255,255,.2); border-radius:4px; padding:3px 6px; font:inherit; }
+  .preview3d-controls label { display:flex; align-items:center; gap:4px; color:#8fb3cc; font-size:11px; }
   .shape-list { max-height:160px; overflow-y:auto; margin-top:6px; }
   .shape-row { display:flex; align-items:center; gap:8px; padding:3px 0; }
   .shape-row .swatch { width:14px; height:14px; border-radius:3px; flex-shrink:0; border:1px solid rgba(255,255,255,.3); }
@@ -104,6 +133,7 @@ const HTML = `<!doctype html>
   .hint { color:#54788f; font-size:11px; }
 </style></head>
 <body>
+<script src="/client3d.js" defer></script>
 <aside id="sidebar"></aside>
 <main>
   <h1 id="title">—</h1>
@@ -113,6 +143,19 @@ const HTML = `<!doctype html>
   <div class="previews">
     <div class="preview"><div id="prev-balloon"></div><div class="label">Balloon — draw here (bigger canvas; Standard follows the same shapes)</div></div>
     <div class="preview"><div id="prev-standard"></div><div class="label">Standard</div></div>
+    <div class="preview">
+      <div id="root3d-wrap"><div id="root3d"></div></div>
+      <div class="label">3D (imported model — what actually ships)</div>
+      <div class="preview3d-controls">
+        <select id="stage3d">
+          <option value="egg">egg</option>
+          <option value="fry">fry</option>
+          <option value="juvenile">juvenile</option>
+          <option value="adult" selected>adult</option>
+        </select>
+        <label><input type="checkbox" id="dead3d"> dead</label>
+      </div>
+    </div>
   </div>
 
   <h2>Pattern variant <span class="hint">— preview of the ${PATTERN_SEED_BUCKETS} per-fish rolls this variety's own settings produce</span></h2>
@@ -573,7 +616,17 @@ function RARITY_LABEL(def) {
   return SIDEBAR.find((d) => d.id === def.id).rarityLabel;
 }
 
+// Bridge to the separately-bundled 3D preview (fish-color-3d-entry.tsx,
+// served as /client3d.js) — it polls this rather than us calling into it
+// directly, so there's no dependency on which script happens to load first.
 function scheduleRender() {
+  window.__colorPreviewVersion = (window.__colorPreviewVersion || 0) + 1;
+  window.__colorPreviewState = {
+    def: current,
+    patternSeed,
+    stage: document.getElementById("stage3d").value,
+    status: document.getElementById("dead3d").checked ? "dead" : "alive",
+  };
   clearTimeout(renderTimer);
   renderTimer = setTimeout(doRender, 60);
 }
@@ -643,6 +696,9 @@ document.getElementById("copy").addEventListener("click", async () => {
   }
 });
 
+document.getElementById("stage3d").addEventListener("change", scheduleRender);
+document.getElementById("dead3d").addEventListener("change", scheduleRender);
+
 renderSidebar();
 selectVariety(selectedId);
 </script>
@@ -652,6 +708,29 @@ const server = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(HTML);
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/client3d.js") {
+    try {
+      res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+      res.end(build3DClient());
+    } catch (err) {
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end(`3D bundle failed:\n\n${(err as Error).message}`);
+    }
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/short_molly.glb") {
+    try {
+      const bytes = readFileSync(join(root, "assets/models/short_molly.glb"));
+      res.writeHead(200, { "content-type": "model/gltf-binary" });
+      res.end(bytes);
+    } catch (err) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end(`short_molly.glb not found: ${(err as Error).message}`);
+    }
     return;
   }
 

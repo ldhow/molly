@@ -659,25 +659,261 @@ function pcaAxes(positions: Float64Array): PcaAxes {
 
 /**
  * Per-model sign correction for `pcaAxes()` — PCA finds the three axes but
- * not which end/face is which. Determined empirically, not assumed: rendered
- * short_molly.glb wearing the `goldDust` variety (whose whole identity is a
- * black head washing back into gold, so its own texture answers "which end
- * is the nose" directly) and checked which side the dark head landed on. It
- * was the mesh's +length side, so `zSign: -1` maps that to −Z, matching this
- * rig's nose-at−Z convention. `xSign: -1` keeps `(thickness, height, length)`
- * a right-handed basis once mapped onto this rig's own right-handed
- * (X, Y, Z) — two sign flips, not one, so it's still a proper rotation
- * rather than a mirror.
+ * not which end/face is which, so this can't be derived, only checked
+ * against the model. PCA's own e1/e2 eigenvectors also have an ARBITRARY
+ * sign per run (power iteration converges to whichever direction, not a
+ * canonical one) — so, contrary to what an earlier version of this comment
+ * claimed, there is no fixed rule for which xSign/ySign/zSign combination is
+ * a proper rotation vs. a mirror; that depends on signs PCA itself picked
+ * for this specific file, not just on how many of the three are negative.
+ * Parity math on paper is not a substitute for looking at the model.
+ *
+ * Set with `yarn fish:3d-orient` — it renders the actual mesh (real geometry,
+ * real lighting) with live xSign/ySign/zSign toggles next to the raw,
+ * unprocessed model, so the correct combination is read off the render
+ * directly instead of inferred. Re-run it after any `short_molly.glb`
+ * replacement — a model swap can invalidate all three signs, and separately
+ * can shift the PCA axes enough that even the SAME sign combination that
+ * looked right before no longer does.
  */
-const GLB_ORIENTATION = { xSign: -1, ySign: 1, zSign: -1 } as const;
+export interface GlbOrientation {
+  xSign: 1 | -1;
+  ySign: 1 | -1;
+  zSign: 1 | -1;
+}
 
-function remapGlbAxes(pos: THREE.Vector3, axes: PcaAxes): THREE.Vector3 {
+const GLB_ORIENTATION: GlbOrientation = { xSign: -1, ySign: -1, zSign: -1 };
+
+function remapGlbAxes(
+  pos: THREE.Vector3,
+  axes: PcaAxes,
+  orientation: GlbOrientation,
+): THREE.Vector3 {
   const d = pos.clone().sub(axes.mean);
   return new THREE.Vector3(
-    GLB_ORIENTATION.xSign * d.dot(axes.thickness),
-    GLB_ORIENTATION.ySign * d.dot(axes.height),
-    GLB_ORIENTATION.zSign * d.dot(axes.length),
+    orientation.xSign * d.dot(axes.thickness),
+    orientation.ySign * d.dot(axes.height),
+    orientation.zSign * d.dot(axes.length),
   );
+}
+
+export interface RemappedGlbMesh {
+  /** Flat [x,y,z,...] positions in the rig's coordinate system, normalized
+   *  so nose-to-tail spans exactly MESH_LENGTH. */
+  position: Float32Array;
+  index: Uint32Array;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+}
+
+/**
+ * Parse + PCA + sign-correct + normalize a .glb's mesh into this rig's
+ * coordinate system — the shared first half of `createGlbFishMesh()`,
+ * pulled out so `yarn fish:3d-orient` can compute the same bounds (for its
+ * anatomical markers) without re-deriving the PCA math a second time.
+ */
+export function remapGlbMesh(
+  bytes: ArrayBuffer,
+  orientation: GlbOrientation = GLB_ORIENTATION,
+): RemappedGlbMesh {
+  const parsed = readGlbMeshGeometry(bytes);
+  const vertexCount = parsed.position.length / 3;
+  const axes = pcaAxes(parsed.position);
+
+  const remapped = new Float32Array(parsed.position.length);
+  const scratchPos = new THREE.Vector3();
+  for (let i = 0; i < vertexCount; i++) {
+    scratchPos.set(parsed.position[i * 3], parsed.position[i * 3 + 1], parsed.position[i * 3 + 2]);
+    const v = remapGlbAxes(scratchPos, axes, orientation);
+    remapped[i * 3] = v.x;
+    remapped[i * 3 + 1] = v.y;
+    remapped[i * 3 + 2] = v.z;
+  }
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < remapped.length; i += 3) {
+    minX = Math.min(minX, remapped[i]);
+    maxX = Math.max(maxX, remapped[i]);
+    minY = Math.min(minY, remapped[i + 1]);
+    maxY = Math.max(maxY, remapped[i + 1]);
+    minZ = Math.min(minZ, remapped[i + 2]);
+    maxZ = Math.max(maxZ, remapped[i + 2]);
+  }
+
+  // Normalize length to MESH_LENGTH so `fish-3d.tsx`'s worldScale maths
+  // (which assumes a nose-to-tail length of MESH_LENGTH at scale 1) holds
+  // for this mesh exactly as it does for the procedural body — no special
+  // casing needed at the call sites.
+  const spanZ = Math.max(1e-6, maxZ - minZ);
+  const lengthScale = MESH_LENGTH / spanZ;
+  const position = new Float32Array(remapped.length);
+  for (let i = 0; i < remapped.length; i++) position[i] = remapped[i] * lengthScale;
+
+  return {
+    position,
+    index: parsed.index,
+    minX: minX * lengthScale,
+    maxX: maxX * lengthScale,
+    minY: minY * lengthScale,
+    maxY: maxY * lengthScale,
+    minZ: minZ * lengthScale,
+    maxZ: maxZ * lengthScale,
+  };
+}
+
+/**
+ * Anatomical landmarks on the remapped mesh, each a 0..1 fraction of that
+ * axis's full (fin-inclusive) bounds from `remapGlbMesh()` — the SAME shape
+ * `yarn fish:3d-orient` uses for its draggable markers. Shared so a marker
+ * placement in the tool is the exact input `createGlbFishMesh()` uses for
+ * fin tinting (see `GlbFinTintOverride`), not a separate guess.
+ */
+export type GlbMarkerKey = "nose" | "tail" | "dorsal" | "belly" | "right" | "left";
+export interface GlbMarkerFrac {
+  x: number;
+  y: number;
+  z: number;
+}
+export type GlbMarkers = Record<GlbMarkerKey, GlbMarkerFrac>;
+
+export const DEFAULT_GLB_MARKERS: GlbMarkers = {
+  nose: { x: 0.5, y: 0.5, z: 0 },
+  tail: { x: 0.5, y: 0.5, z: 1 },
+  dorsal: { x: 0.5, y: 1, z: 0.5 },
+  belly: { x: 0.5, y: 0, z: 0.5 },
+  right: { x: 1, y: 0.5, z: 0.25 },
+  left: { x: 0, y: 0.5, z: 0.25 },
+};
+
+/** Every marker except `nose` — `nose` is a body landmark, not a fin. */
+const FIN_MARKER_KEYS: GlbMarkerKey[] = ["tail", "dorsal", "belly", "right", "left"];
+
+function markerWorldPos(
+  bounds: Pick<RemappedGlbMesh, "minX" | "maxX" | "minY" | "maxY" | "minZ" | "maxZ">,
+  f: GlbMarkerFrac,
+): THREE.Vector3 {
+  return new THREE.Vector3(
+    bounds.minX + f.x * (bounds.maxX - bounds.minX),
+    bounds.minY + f.y * (bounds.maxY - bounds.minY),
+    bounds.minZ + f.z * (bounds.maxZ - bounds.minZ),
+  );
+}
+
+/**
+ * How strongly `palette.fin` blends into each vertex's colour, based on
+ * proximity to the nearest fin marker (tail/dorsal/belly/right/left).
+ *
+ * There's no vertex-group data identifying which triangles are fin vs body
+ * (same limitation `GlbPatternBoundsOverride` works around), so this is a
+ * soft radial falloff from a handful of marker points, not a real
+ * segmentation — it reads as "colour concentrates toward palette.fin near
+ * the fin bases", not a sharp, membrane-accurate boundary.
+ */
+export interface GlbFinTintOverride {
+  /** Falloff radius, in mesh units (same scale as MESH_LENGTH=2) — distance
+   *  from a marker at which the tint has faded to nothing. */
+  radius: number;
+  /** How much `palette.fin` blends in at a marker's exact position, 0..1. */
+  strength: number;
+}
+
+const DEFAULT_FIN_TINT: GlbFinTintOverride = { radius: 0.35, strength: 0.6 };
+
+function computeFinWeights(
+  basePositions: Float32Array,
+  vertexCount: number,
+  bounds: Pick<RemappedGlbMesh, "minX" | "maxX" | "minY" | "maxY" | "minZ" | "maxZ">,
+  markers: GlbMarkers,
+  tint: GlbFinTintOverride,
+): Float32Array {
+  const markerPositions = FIN_MARKER_KEYS.map((key) => markerWorldPos(bounds, markers[key]));
+  const weights = new Float32Array(vertexCount);
+  const v = new THREE.Vector3();
+  for (let i = 0; i < vertexCount; i++) {
+    v.set(basePositions[i * 3], basePositions[i * 3 + 1], basePositions[i * 3 + 2]);
+    let minDist = Infinity;
+    for (const mp of markerPositions) minDist = Math.min(minDist, v.distanceTo(mp));
+    weights[i] = THREE.MathUtils.clamp(1 - minDist / tint.radius, 0, 1) * tint.strength;
+  }
+  return weights;
+}
+
+/**
+ * How much of each end of the Y (height) and Z (length) range to discard
+ * before computing the span used for skin UV / vertex-colour mapping, as a
+ * 0..1 fraction of vertex count — NOT of fish-shaping-and-eye-placement's
+ * full extent, which stays fin-inclusive (see `remapGlbMesh`'s bounds).
+ *
+ * Why this exists: `buildSkinMap`'s texture is rasterized to the 2D BODY
+ * silhouette's own bounding box (`bodyBox()` in skin-map.ts), which excludes
+ * fins entirely. Mapping that texture with UVs spanning the mesh's FULL
+ * bounding box — which fin tips inflate past the body's actual edges —
+ * stretches the pattern to cover empty margin the fins added, so it lands
+ * squeezed and offset on the body itself. Trimming the outlier fin-tip
+ * vertices out of the span before computing UVs fixes that: body vertices
+ * once again span the pattern's full 0..1 range, and fin vertices (now
+ * outside that span) clamp to their nearest edge colour — a flat extension
+ * of the adjacent flank, not membrane-accurate but a stretch/offset better
+ * than before.
+ *
+ * There's no vertex-group data in the file to identify fin vertices
+ * directly, so this is a percentile trim, not a real segmentation — an
+ * approximation, tunable per end because the four protrusions (dorsal,
+ * caudal, anal/pelvic) aren't the same size. Defaults are starting guesses;
+ * dial them in with `yarn fish:3d-orient`.
+ */
+export interface GlbPatternBoundsOverride {
+  /** Fraction trimmed off the head/nose end of Z. Low by default — the nose
+   *  is body, not a fin protrusion. */
+  trimNoseZ: number;
+  /** Fraction trimmed off the tail end of Z — the caudal fin usually
+   *  extends further past the body's true tail than any other protrusion. */
+  trimTailZ: number;
+  /** Fraction trimmed off the top/dorsal end of Y. */
+  trimTopY: number;
+  /** Fraction trimmed off the bottom/belly end of Y. */
+  trimBottomY: number;
+}
+
+const DEFAULT_GLB_PATTERN_BOUNDS: GlbPatternBoundsOverride = {
+  trimNoseZ: 0,
+  trimTailZ: 0.08,
+  trimTopY: 0.05,
+  trimBottomY: 0.05,
+};
+
+/** Value at the given fraction into a SORTED copy of `values` — used to trim
+ *  outliers off one end of a range without needing real vertex-group data. */
+function trimmedEdge(values: Float32Array, fraction: number): number {
+  const sorted = Float32Array.from(values).sort();
+  const idx = Math.max(0, Math.min(sorted.length - 1, Math.round(fraction * (sorted.length - 1))));
+  return sorted[idx];
+}
+
+export interface GlbEyeOverride {
+  /** Fraction of body length from the nose where the eye sits (0 = nose tip). */
+  zFrac: number;
+  /** How far back from the nose the "head" region — used to measure the
+   *  local vertical extent the eye is placed within — reaches, as a
+   *  fraction of body length. */
+  headFrac: number;
+  /** Fraction up the head region's own local vertical extent (0=bottom of
+   *  the head slice, 1=top), not the whole-body bounding box — the whole
+   *  body's vertical extent is dominated by fin/tail height elsewhere and
+   *  would place the eye too high or low on the head. */
+  yFrac: number;
+  /** Lateral half-offset (left/right eye separation). */
+  x: number;
+  radius: number;
 }
 
 export interface GlbFishMeshOptions {
@@ -690,6 +926,22 @@ export interface GlbFishMeshOptions {
    *  fetch in the browser preview) — deliberately the caller's job, so this
    *  module stays free of any one platform's asset APIs. */
   bytes: ArrayBuffer;
+  /** Overrides GLB_ORIENTATION's sign correction — for the calibration tool
+   *  (`yarn fish:3d-orient`) only; the shipped app never passes this. */
+  orientation?: GlbOrientation;
+  /** Overrides the eye placement heuristic below — for the calibration tool
+   *  only; the shipped app never passes this. */
+  eye?: Partial<GlbEyeOverride>;
+  /** Overrides the fin-trim heuristic used to compute the skin UV / vertex-
+   *  colour span — for the calibration tool only; the shipped app never
+   *  passes this. See `GlbPatternBoundsOverride`. */
+  patternBounds?: Partial<GlbPatternBoundsOverride>;
+  /** Overrides where the fin-tint markers sit — for the calibration tool
+   *  only; the shipped app never passes this. See `GlbMarkers`. */
+  markers?: Partial<GlbMarkers>;
+  /** Overrides the fin-tint falloff — for the calibration tool only; the
+   *  shipped app never passes this. See `GlbFinTintOverride`. */
+  finTint?: Partial<GlbFinTintOverride>;
 }
 
 /**
@@ -707,100 +959,144 @@ export interface GlbFishMeshOptions {
  *   parsed UV attribute with the same planar projection `createFishMesh()`
  *   uses for its own body (u from length position, v from height), which is
  *   compatible with our skin texture by construction regardless of the
- *   source unwrap. Fins/spikes get whatever the flank texture happens to
- *   show at their (u, v) — reasonable-looking, not membrane-accurate the way
- *   the procedural fins' own vertex-coloured gradient is.
+ *   source unwrap. The span that projection is measured against excludes
+ *   fin-tip outliers (see `GlbPatternBoundsOverride`) so the pattern lands
+ *   on the body at the right scale instead of being stretched to also cover
+ *   the fins; fin vertices themselves still have no separate UV space of
+ *   their own, so they inherit whatever the flank shows nearby, MULTIPLIED
+ *   by a `palette.fin` tint that strengthens near the fin markers (see
+ *   `GlbFinTintOverride`) — a tinted extension of the flank, not
+ *   membrane-accurate the way the procedural fins' own flat-coloured
+ *   membranes are.
  * - **No modeled trait shapes.** balloon/lyretail/sailfin don't exist here;
  *   the model is one fixed shape regardless of `FishTraits`.
  */
 export function createGlbFishMesh(
   palette: FishPalette,
-  { skin = null, design = DEFAULT_TANK_DESIGN, bytes }: GlbFishMeshOptions,
+  {
+    skin = null,
+    design = DEFAULT_TANK_DESIGN,
+    bytes,
+    orientation = GLB_ORIENTATION,
+    eye,
+    patternBounds,
+    markers,
+    finTint,
+  }: GlbFishMeshOptions,
 ): FishMesh3D {
-  const parsed = readGlbMeshGeometry(bytes);
-  const vertexCount = parsed.position.length / 3;
-  const axes = pcaAxes(parsed.position);
-
-  const remapped = new Float32Array(parsed.position.length);
-  const scratchPos = new THREE.Vector3();
-  for (let i = 0; i < vertexCount; i++) {
-    scratchPos.set(parsed.position[i * 3], parsed.position[i * 3 + 1], parsed.position[i * 3 + 2]);
-    const v = remapGlbAxes(scratchPos, axes);
-    remapped[i * 3] = v.x;
-    remapped[i * 3 + 1] = v.y;
-    remapped[i * 3 + 2] = v.z;
-  }
-
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-  for (let i = 0; i < remapped.length; i += 3) {
-    minZ = Math.min(minZ, remapped[i + 2]);
-    maxZ = Math.max(maxZ, remapped[i + 2]);
-    minY = Math.min(minY, remapped[i + 1]);
-    maxY = Math.max(maxY, remapped[i + 1]);
-  }
-  const spanZ = Math.max(1e-6, maxZ - minZ);
-
-  // Normalize length to MESH_LENGTH so `fish-3d.tsx`'s worldScale maths
-  // (which assumes a nose-to-tail length of MESH_LENGTH at scale 1) holds
-  // for this mesh exactly as it does for the procedural body — no special
-  // casing needed at the call sites.
-  const lengthScale = MESH_LENGTH / spanZ;
-  const basePositions = new Float32Array(remapped.length);
-  for (let i = 0; i < remapped.length; i++) basePositions[i] = remapped[i] * lengthScale;
-  const scaledMinZ = minZ * lengthScale;
-  const scaledMaxZ = maxZ * lengthScale;
-  const scaledMinY = minY * lengthScale;
-  const scaledMaxY = maxY * lengthScale;
+  const {
+    position: basePositions,
+    index,
+    minX: scaledMinX,
+    maxX: scaledMaxX,
+    minY: scaledMinY,
+    maxY: scaledMaxY,
+    minZ: scaledMinZ,
+    maxZ: scaledMaxZ,
+  } = remapGlbMesh(bytes, orientation);
   const scaledSpanZ = scaledMaxZ - scaledMinZ;
-  const scaledSpanY = scaledMaxY - scaledMinY;
+  const vertexCount = basePositions.length / 3;
 
   const bodyGeo = new THREE.BufferGeometry();
   bodyGeo.setAttribute("position", new THREE.Float32BufferAttribute(basePositions.slice(), 3));
-  bodyGeo.setIndex(new THREE.Uint32BufferAttribute(parsed.index, 1));
+  bodyGeo.setIndex(new THREE.Uint32BufferAttribute(index, 1));
 
-  // Back→mid→belly vertex colours, same construction as createFishMesh()'s
-  // body — the fallback shown before a skin bake completes, or if none loads.
-  const colors = new Float32Array(basePositions.length);
-  const backColor = new THREE.Color(palette.back);
-  const midColor = new THREE.Color(palette.mid);
-  const bellyColor = new THREE.Color(palette.belly);
-  const scratch = new THREE.Color();
-  for (let i = 0; i < basePositions.length; i += 3) {
-    const t = THREE.MathUtils.clamp((basePositions[i + 1] - scaledMinY) / scaledSpanY, 0, 1);
-    const c =
-      t < 0.5
-        ? scratch.copy(bellyColor).lerp(midColor, t * 2)
-        : scratch.copy(midColor).lerp(backColor, (t - 0.5) * 2);
-    colors[i] = c.r;
-    colors[i + 1] = c.g;
-    colors[i + 2] = c.b;
+  // The span used for skin UV / vertex-colour mapping below — narrower than
+  // the mesh's full (fin-inclusive) bounds above, see GlbPatternBoundsOverride.
+  const trim: GlbPatternBoundsOverride = { ...DEFAULT_GLB_PATTERN_BOUNDS, ...patternBounds };
+  const yValues = new Float32Array(vertexCount);
+  const zValues = new Float32Array(vertexCount);
+  for (let i = 0; i < vertexCount; i++) {
+    yValues[i] = basePositions[i * 3 + 1];
+    zValues[i] = basePositions[i * 3 + 2];
   }
-  bodyGeo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  const patternMinY = trimmedEdge(yValues, trim.trimBottomY);
+  const patternMaxY = trimmedEdge(yValues, 1 - trim.trimTopY);
+  const patternMinZ = trimmedEdge(zValues, trim.trimNoseZ);
+  const patternMaxZ = trimmedEdge(zValues, 1 - trim.trimTailZ);
+  const patternSpanY = Math.max(1e-6, patternMaxY - patternMinY);
+  const patternSpanZ = Math.max(1e-6, patternMaxZ - patternMinZ);
+
+  // How strongly each vertex tints toward palette.fin, from proximity to the
+  // fin markers — see GlbFinTintOverride. Independent of skin/no-skin: it's
+  // baked into buildVertexColors() below either way (see that function).
+  const finWeights = computeFinWeights(
+    basePositions,
+    vertexCount,
+    {
+      minX: scaledMinX,
+      maxX: scaledMaxX,
+      minY: scaledMinY,
+      maxY: scaledMaxY,
+      minZ: scaledMinZ,
+      maxZ: scaledMaxZ,
+    },
+    { ...DEFAULT_GLB_MARKERS, ...markers },
+    { ...DEFAULT_FIN_TINT, ...finTint },
+  );
 
   // Replace the source model's own (unusable, 77-island) UVs with the same
   // planar side-projection createFishMesh() authors for its body, so this
   // mesh can wear the same skin texture despite the broken original unwrap.
   {
-    // Clamped, not just divided: min/max were measured from `remapped`
-    // (float64) but `basePositions` is stored as float32, so the vertex AT
-    // the measured extreme can round to a hair outside it (~1e-9) — clamp
-    // catches that instead of feeding a slightly negative/over-1 UV forward.
+    // Clamped, not just divided: fin-tip vertices fall outside the trimmed
+    // pattern span by construction (that's the point), and body vertices
+    // measured from `remapped` (float64) but stored as float32 can round to
+    // a hair outside it (~1e-9) — clamp handles both the same way.
     const uv = new Float32Array((basePositions.length / 3) * 2);
     for (let i = 0, j = 0; i < basePositions.length; i += 3, j += 2) {
-      uv[j] = THREE.MathUtils.clamp((basePositions[i + 2] - scaledMinZ) / scaledSpanZ, 0, 1);
-      uv[j + 1] = THREE.MathUtils.clamp((scaledMaxY - basePositions[i + 1]) / scaledSpanY, 0, 1);
+      uv[j] = THREE.MathUtils.clamp((basePositions[i + 2] - patternMinZ) / patternSpanZ, 0, 1);
+      uv[j + 1] = THREE.MathUtils.clamp((patternMaxY - basePositions[i + 1]) / patternSpanY, 0, 1);
     }
     bodyGeo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
   }
 
   bodyGeo.computeVertexNormals();
 
+  // The `color` attribute doubles as two different things depending on
+  // whether a skin texture is active, since MeshStandardMaterial can only
+  // multiply ONE vertex-colour layer against `map`:
+  //  - no skin yet: back→mid→belly gradient (same construction as
+  //    createFishMesh()'s body) tinted toward palette.fin near the fin
+  //    markers — the fallback shown before a bake completes, or if none loads.
+  //  - skin active: white tinted toward palette.fin, so multiplying against
+  //    the texture leaves body pixels (weight 0) exactly as textured and
+  //    only tints pixels near a fin marker.
+  const finColor = new THREE.Color(palette.fin);
+  const backColor = new THREE.Color(palette.back);
+  const midColor = new THREE.Color(palette.mid);
+  const bellyColor = new THREE.Color(palette.belly);
+  const base = new THREE.Color();
+  const scratch = new THREE.Color();
+  function buildVertexColors(useGradient: boolean): Float32Array {
+    const colors = new Float32Array(basePositions.length);
+    for (let i = 0; i < vertexCount; i++) {
+      if (useGradient) {
+        const t = THREE.MathUtils.clamp(
+          (basePositions[i * 3 + 1] - patternMinY) / patternSpanY,
+          0,
+          1,
+        );
+        if (t < 0.5) base.copy(bellyColor).lerp(midColor, t * 2);
+        else base.copy(midColor).lerp(backColor, (t - 0.5) * 2);
+      } else {
+        base.setRGB(1, 1, 1);
+      }
+      scratch.copy(base).lerp(finColor, finWeights[i]);
+      colors[i * 3] = scratch.r;
+      colors[i * 3 + 1] = scratch.g;
+      colors[i * 3 + 2] = scratch.b;
+    }
+    return colors;
+  }
+  bodyGeo.setAttribute("color", new THREE.Float32BufferAttribute(buildVertexColors(!skin), 3));
+
   const bodyMat = new THREE.MeshStandardMaterial({
     map: skin,
-    vertexColors: !skin,
+    // Always on now — the color attribute carries fin-tint even once a skin
+    // texture is active (white where untinted, a no-op multiply), not just
+    // the pre-bake fallback gradient.
+    vertexColors: true,
     roughness: design.fish.material.body.roughness,
     metalness: design.fish.material.body.metalness,
     // Unlike the procedural body (a closed volume with a real far side), the
@@ -817,6 +1113,55 @@ export function createGlbFishMesh(
   const group = new THREE.Group();
   group.add(bodyMesh);
 
+  // The source model has no baked-in eye (see the class doc above) — add
+  // spheres in the same style as createFishMesh()'s eyes. Positioned from
+  // this mesh's own remapped/scaled geometry rather than the procedural
+  // body's hardcoded landmark coordinates, since the two aren't guaranteed
+  // to share an origin: nose is at scaledMinZ (this rig's convention, see
+  // GLB_ORIENTATION), and eye height is taken from the head's own local
+  // vertical extent — the whole-body bounding box is dominated by fin/tail
+  // height elsewhere and would place the eye too high or low on the head.
+  {
+    const eyeCfg = design.fish.shape.eye;
+    const eyeParams: GlbEyeOverride = {
+      zFrac: 0.15,
+      headFrac: 0.3,
+      yFrac: 0.7,
+      x: eyeCfg.x,
+      radius: eyeCfg.radius,
+      ...eye,
+    };
+    const headEnd = scaledMinZ + eyeParams.headFrac * scaledSpanZ;
+    let headMinY = Infinity;
+    let headMaxY = -Infinity;
+    for (let i = 0; i < basePositions.length; i += 3) {
+      if (basePositions[i + 2] > headEnd) continue;
+      const y = basePositions[i + 1];
+      headMinY = Math.min(headMinY, y);
+      headMaxY = Math.max(headMaxY, y);
+    }
+    if (!Number.isFinite(headMinY)) {
+      headMinY = scaledMinY;
+      headMaxY = scaledMaxY;
+    }
+    const eyeZ = scaledMinZ + eyeParams.zFrac * scaledSpanZ;
+    const eyeY = headMinY + eyeParams.yFrac * (headMaxY - headMinY);
+    const eyeGeo = new THREE.SphereGeometry(
+      eyeParams.radius,
+      eyeCfg.widthSegments,
+      eyeCfg.heightSegments,
+    );
+    const eyeMat = new THREE.MeshStandardMaterial({
+      color: eyeCfg.color,
+      roughness: eyeCfg.roughness,
+    });
+    const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeR.position.set(eyeParams.x, eyeY, eyeZ);
+    const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeL.position.set(-eyeParams.x, eyeY, eyeZ);
+    group.add(eyeR, eyeL);
+  }
+
   const waveGain = WAVE_SCALE * design.fish.motion.waveMultiplier;
 
   function update(beatPhase: number, speedNorm: number, phase: number) {
@@ -832,7 +1177,10 @@ export function createGlbFishMesh(
 
   function setSkin(texture: THREE.Texture | null) {
     bodyMat.map = texture;
-    bodyMat.vertexColors = !texture;
+    // The color attribute's BASE flips (gradient ↔ white) with skin state —
+    // see buildVertexColors() above — so it has to be rebuilt here too, not
+    // just the map swapped in.
+    bodyGeo.setAttribute("color", new THREE.Float32BufferAttribute(buildVertexColors(!texture), 3));
     bodyMat.needsUpdate = true;
   }
 

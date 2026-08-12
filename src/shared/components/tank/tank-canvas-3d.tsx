@@ -1,5 +1,14 @@
 // The 3D counterpart to tank-canvas.tsx — same external prop shape (drop-in
 // via tank-view.tsx), real geometry instead of Skia sprites.
+//
+// This file has four `useFrame` call sites (TankScene, Water, Decor, and one
+// each inside Fish3D/DeadFish3D in fish-3d.tsx). There is no single "tick"
+// function here: R3F calls every mounted component's `useFrame` callback once
+// per rendered frame, in the order those components mounted, and each
+// callback owns only the piece of the scene it built. That's why Water only
+// touches sand/particles and Decor only touches plants/bubbles — reading one
+// `useFrame` in isolation tells you everything it does; you never need to
+// trace a shared loop to find out what runs before or after it.
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, View, type ViewStyle } from "react-native";
@@ -227,6 +236,8 @@ function Water({
     };
   }, []);
 
+  // Drives the sand's scrolling caustic shimmer and the suspended-particle
+  // drift. Nothing else in the water group animates (the backdrop is static).
   useFrame((state, delta) => {
     const t = state.clock.elapsedTime;
     water.sand.update(t);
@@ -279,6 +290,8 @@ function Decor({ halfW, halfD, topY }: { halfW: number; halfD: number; topY: num
     };
   }, []);
 
+  // Drives seaweed sway and bubble rise. Rocks and driftwood are static, so
+  // they're built once above and never touched here.
   useFrame((state, delta) => {
     const t = state.clock.elapsedTime;
     decor.plants.update(t, delta);

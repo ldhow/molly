@@ -63,6 +63,29 @@ Almost every value is in [tank-design.ts](../shared/components/tank/tank-design.
 
 **The fish's colours and patterns are not here.** Those come from the 2D art pipeline — edit `COLOR_DEFS` in [catalog.ts](../shared/fish/catalog.ts) or use `yarn fish:colors`, exactly as described in [fish-art-guide.md](fish-art-guide.md). 3D rasterizes that same artwork into a texture, so a colour change shows up in both renderers at once.
 
+## Code architecture — what runs when
+
+The table above tells you where a _value_ lives. This tells you where the _code_ that turns values into pixels runs, and in what order, which matters when a change doesn't show up where you expect. Six files, layered bottom-up:
+
+1. **`tank-design.ts`** — pure data, no behaviour. Just the numbers/strings above.
+2. **`fish-mesh-3d.ts`** — pure three.js. `createFishMesh(palette, traits)` reads `TankDesign` once and returns a `FishMesh3D` — geometry, materials, the works — for one fish. It has no idea it's about to swim or where the camera is.
+3. **`tank-decor-3d.ts`** / **`tank-env-3d.ts`** — the same shape as (2) but for the set dressing: `createPlants()`, `createRocks()`, `createBubbles()`, `createDriftwood()`, `createSand()`, `createBackdrop()`, `createParticles()`, `createCausticsTexture()`. All pure factories, all read `TankDesign`, none of them know about React or animation.
+4. **`swim-model.ts`** — pure math, **no three.js import at all**. `stepSwim(state, box, dt, …)` advances one fish's wander state (position, heading, speed, swim "mode") by `dt` seconds. This module is shared verbatim by all three renderers — the in-app 2D Skia fish (via `use-fish-swim.ts`'s Reanimated worklet), the in-app 3D fish (via `fish-3d.tsx`, below), and the standalone 3D preview (`scripts/lib/fish-3d-driver.ts`) — so a physics tweak here changes how every fish moves everywhere at once. The `"worklet"` directives exist so the Reanimated caller can run it in the same synchronous, allocation-free way the three.js caller does.
+5. **`fish-3d.tsx`** — the seam between (2) and (4). `Fish3D` builds a mesh once via `createFishMesh` (kept alive in a `ref`, not re-created on re-render), then owns a `useFrame` callback that calls `stepSwim` every frame and writes the result onto the mesh's `position`/`rotation` via `yawFor`/`bankFor`/`bobFor`. This is where "a number changing 60 times a second" becomes "a fish swimming".
+6. **`tank-canvas-3d.tsx`** — the top of the tree. `TankCanvas3D` assembles the R3F `<Canvas>`, camera and lights; `TankScene` mounts one `<Fish3D>`/`<DeadFish3D>` per tank fish plus the `Water` and `Decor` sub-components, which call the (3) factories **once** on mount and keep the results in refs.
+
+Data flows one way: `TankDesign` → the factories in (2)/(3) → objects mounted in (6); `swim-model` state flows in separately, every frame, into (5). Nothing downstream ever writes back to `TankDesign` — the only thing that does is `yarn tank:design`'s "Save to file" button, and only to disk.
+
+### Mount-once vs. every-frame
+
+Three.js objects are expensive to build (geometry, textures) and cheap to mutate (a `position` or `rotation` assignment), so the most important habit when editing this code is knowing which tier a change belongs in:
+
+- **Runs once per fish, or whenever its traits/colour/stage change:** `createFishMesh()` — builds geometry, UVs, uploads the skin texture. This is the tier the design editor's ~130ms debounce (see "Two tiers of edit" below) exists to protect you from re-triggering on every slider drag.
+- **Runs once at scene mount:** `TankScene`'s calls into `tank-decor-3d.ts`/`tank-env-3d.ts` — the tank's set dressing doesn't change per frame or per fish, so it's built once via `useMemo` and disposed (`disposeTree()`) on unmount.
+- **Runs every frame:** `TankScene`, `Water`, and `Decor` each register their **own** `useFrame` hook in `tank-canvas-3d.tsx` (camera framing; caustics/particle scroll; plant/bubble sway, respectively), and `Fish3D` registers one per fish for its swim step. R3F fires every mounted `useFrame` callback each frame, in mount order — there is no single central "tick" function to find and extend. If you're adding a new animated value, find (or add) the `useFrame` closest to the object it drives rather than routing it through an existing unrelated one.
+
+If a change depends only on `TankDesign`, it belongs in a mount-once factory and should be computed once and stored on the object. If it depends on time or per-frame state, it has to live inside a `useFrame` body — writing it once at mount will render one static frame and never update again, which is the usual symptom of a value landing in the wrong tier.
+
 ## Key mechanics before editing
 
 - **Mesh space**: Y is up, the nose points at **−Z**, and the body spans `-1..+1` along Z. The sand sits at `decor.groundY` (−1.8). This is a _different_ space from the 2D art's (nose at −x, y **down**) — don't carry coordinates between them.

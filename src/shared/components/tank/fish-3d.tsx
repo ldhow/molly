@@ -197,6 +197,14 @@ export function Fish3D({
   // eslint-disable-next-line react-hooks/refs -- groupRef.current was just guaranteed non-null above
   useFishUpgrade(groupRef.current, fishRef, def.palette, traits, def, true);
 
+  // Per-frame sequence, in order: (1) advance the shared swim physics one
+  // tick (same stepSwim used by the 2D renderer, just fed a delta from R3F's
+  // clock instead of Reanimated's); (2) translate the resulting pixel-space
+  // x/y into this fish's world-space transform; (3) hand the new beat phase
+  // to the mesh so it can pose its own vertices (body wave, tail sweep, fin
+  // flutter — see fish-mesh-3d.ts). Nothing here is declarative state, so
+  // none of this triggers a React re-render; it's a straight imperative walk
+  // executed by R3F once per rendered frame.
   useFrame((_, delta) => {
     const fish = fishRef.current;
     const group = groupRef.current;
