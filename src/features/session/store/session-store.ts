@@ -2,10 +2,15 @@ import Storage from "expo-sqlite/kv-store";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { ColorId, FishTraits } from "@/shared/fish/types";
 import { createId } from "@/shared/lib/id";
 
-import type { ActiveSession, SessionOutcome, SessionResult } from "../types";
+import type {
+  ActiveSession,
+  CreatureSelection,
+  RolledCreature,
+  SessionOutcome,
+  SessionResult,
+} from "../types";
 
 interface SessionStore {
   /** Persisted — the snapshot that survives app kill. */
@@ -15,11 +20,11 @@ interface SessionStore {
   /** In-memory — true right after surviving the grace period ("phew"). */
   graceRecovered: boolean;
 
-  start: (colorId: ColorId, plannedMinutes: number) => ActiveSession;
+  start: (selection: CreatureSelection, plannedMinutes: number) => ActiveSession;
   markBackgrounded: (now: number) => void;
   clearBackgrounded: () => void;
-  /** Clears the active session and records the result (traits already rolled). */
-  finish: (outcome: SessionOutcome, endedAt: number, traits: FishTraits) => void;
+  /** Clears the active session and records the result (variant/traits already rolled). */
+  finish: (outcome: SessionOutcome, endedAt: number, rolled: RolledCreature) => void;
   acknowledgeResult: () => void;
   setGraceRecovered: (value: boolean) => void;
 }
@@ -41,10 +46,10 @@ export const useSessionStore = create<SessionStore>()(
       result: null,
       graceRecovered: false,
 
-      start: (colorId, plannedMinutes) => {
+      start: (selection, plannedMinutes) => {
         const session: ActiveSession = {
+          ...selection,
           id: createId(),
-          colorId,
           plannedMinutes,
           startedAt: Date.now(),
           backgroundedAt: null,
@@ -65,19 +70,18 @@ export const useSessionStore = create<SessionStore>()(
         set({ active: { ...active, backgroundedAt: null } });
       },
 
-      finish: (outcome, endedAt, traits) => {
+      finish: (outcome, endedAt, rolled) => {
         const active = get().active;
         if (!active) return;
         set({
           active: null,
           graceRecovered: false,
           result: {
-            colorId: active.colorId,
-            traits,
+            ...rolled,
             plannedMinutes: active.plannedMinutes,
             outcome,
             endedAt,
-          },
+          } as SessionResult,
         });
       },
 
@@ -86,20 +90,30 @@ export const useSessionStore = create<SessionStore>()(
     }),
     {
       name: "activeSession",
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => syncKvStorage),
       partialize: (state) => ({ active: state.active }),
-      // v0 snapshots stored `variantId` — carry an in-flight session across
-      // the trait-system update instead of dropping it.
+      // v0 snapshots stored `variantId`; v1 added `colorId` with no species
+      // axis at all. Carry an in-flight session across BOTH upgrades instead
+      // of dropping it — critically, a v1 (or v0) snapshot with no
+      // `speciesId` must default to `"molly"`, or species-dispatch code
+      // downstream (`SPECIES_DEFS[active.speciesId]`) crashes on `undefined`
+      // at the worst possible moment: while the user is settling a session
+      // mid-upgrade.
       migrate: (persisted: unknown) => {
-        const state = persisted as {
-          active?: (ActiveSession & { variantId?: string }) | null;
-        } | null;
-        if (state?.active && !state.active.colorId && state.active.variantId) {
-          state.active = {
-            ...state.active,
-            colorId: state.active.variantId as ColorId,
-          };
+        // Deliberately loose: a persisted snapshot from an old build doesn't
+        // conform to any current type by definition — that's what's being
+        // migrated away from. Work with an untyped record, cast once at the
+        // end.
+        const state = persisted as { active?: Record<string, unknown> | null } | null;
+        const active = state?.active;
+        if (active) {
+          if (!active.colorId && typeof active.variantId === "string") {
+            active.colorId = active.variantId;
+          }
+          if (!active.speciesId) {
+            active.speciesId = "molly";
+          }
         }
         return state as { active: ActiveSession | null };
       },

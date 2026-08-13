@@ -12,6 +12,8 @@ Build a focus/productivity app in the fresh Expo SDK 57 starter at this repo, mo
 
 **AGENTS.md mandate**: re-read the exact SDK 57 doc page (https://docs.expo.dev/versions/v57.0.0/) for each API immediately before writing its code.
 
+**Species axis (not reconciled below — flag only):** the app grew a second axis this document doesn't reflect yet. A session now grows one of 6 species (`molly` plus `otter`/`turtle`/`frog`/`axolotl`/`snail`), picked pre-session like molly's color, with the non-molly species' own small variant list rolled at completion instead of molly's 4-axis body/tail/dorsal system. `sessions` gained nullable `speciesId`/`creatureVariant` columns; `@/shared/creature/{types,catalog,unlocks,resolve}.ts` is the new species domain (sibling to, not a replacement of, `@/shared/fish/*`); non-molly rendering lives entirely in `src/shared/aquarium/creatures/` and is 2D-V2-only (the legacy 2D and 3D renderers below only ever show a tank's molly individuals — see `src/docs/aquarium-guide.md`'s "Creatures" section for the full design). Everywhere below that says "fish" or describes the 4-trait roll as the only economy should be read as "molly specifically," not the whole app.
+
 ## Verified technical decisions
 
 | Concern           | Decision                                                                                                                                                                                                                                                                                                                    |

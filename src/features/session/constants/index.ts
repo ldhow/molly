@@ -9,8 +9,8 @@ export const DURATION_PRESETS_MINUTES = [10, 15, 25, 30, 45, 60, 90, 120];
 export const DEFAULT_DURATION_MINUTES = 25;
 
 export const NOTIFICATION_COPY = {
-  dyingTitle: "Your molly is gasping! 🐟",
+  dyingTitle: (noun: string) => `Your ${noun} is gasping! 🐟`,
   dyingBody: "Come back within a few seconds or it won't make it.",
   completedTitle: "Focus complete! 🎉",
-  completedBody: "Your molly grew up and joined the tank.",
+  completedBody: (noun: string) => `Your ${noun} grew up and joined the tank.`,
 } as const;

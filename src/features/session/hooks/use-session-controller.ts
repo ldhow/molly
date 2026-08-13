@@ -2,6 +2,8 @@ import { useRouter } from "expo-router";
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
 
+import { getSpeciesDef } from "@/shared/creature/catalog";
+
 import { useSessionStore } from "../store/session-store";
 import { judgeColdStart, judgeForeground, plannedEndOf } from "../utils/machine";
 import {
@@ -81,7 +83,7 @@ export function useSessionController() {
         // 'background'; the grace period absorbs harmless flickers.
         if (active.backgroundedAt === null) {
           store.markBackgrounded(now);
-          void scheduleDyingNotification();
+          void scheduleDyingNotification(getSpeciesDef(active.speciesId).copy.noun);
         }
       }
     });

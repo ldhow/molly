@@ -1,20 +1,16 @@
 import { FlatList, StyleSheet, Text, View } from "react-native";
 
-import { getColorDef, traitsOfRow } from "@/shared/fish/catalog";
 import { EmptyState } from "@/shared/components/empty-state";
-import { palette, radius, spacing } from "@/shared/constants/theme";
 import { ScreenContainer } from "@/shared/components/screen-container";
+import { palette, radius, spacing } from "@/shared/constants/theme";
+import { getSpeciesDef } from "@/shared/creature/catalog";
+import { resolveCreature } from "@/shared/creature/resolve";
+import { getColorDef } from "@/shared/fish/catalog";
 import { formatMinutes } from "@/shared/lib/dates";
 
+import { useStats } from "../api/use-stats";
 import { StatCard } from "../components/stat-card";
 import { WeekBars } from "../components/week-bars";
-import { useStats } from "../api/use-stats";
-
-const OUTCOME_ICON = {
-  completed: "🐟",
-  failed: "💀",
-  abandoned: "🏳️",
-} as const;
 
 export function StatsScreen() {
   const { stats, rows } = useStats();
@@ -48,12 +44,23 @@ export function StatsScreen() {
           />
         }
         renderItem={({ item }) => {
-          const colorName = getColorDef(traitsOfRow(item).color).name;
+          const resolved = resolveCreature(item);
+          const name =
+            resolved.speciesId === "molly"
+              ? getColorDef(resolved.traits.color).name
+              : (getSpeciesDef(resolved.speciesId).variants.find((v) => v.id === resolved.variant)
+                  ?.name ?? getSpeciesDef(resolved.speciesId).name);
+          const icon =
+            item.outcome === "failed"
+              ? "💀"
+              : item.outcome === "abandoned"
+                ? "🏳️"
+                : getSpeciesDef(resolved.speciesId).emoji;
           return (
             <View style={styles.historyRow}>
-              <Text style={styles.historyIcon}>{OUTCOME_ICON[item.outcome]}</Text>
+              <Text style={styles.historyIcon}>{icon}</Text>
               <View style={styles.historyBody}>
-                <Text style={styles.historyName}>{colorName}</Text>
+                <Text style={styles.historyName}>{name}</Text>
                 <Text style={styles.historyMeta}>
                   {item.localDate} · {formatMinutes(item.plannedMinutes)}
                 </Text>

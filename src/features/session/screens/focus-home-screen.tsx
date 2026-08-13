@@ -2,10 +2,14 @@ import { Canvas, Group } from "@shopify/react-native-skia";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { useMemo, useState } from "react";
+import { CreaturePreview } from "@/shared/aquarium/render/creature-preview";
 import { FishBody } from "@/shared/components/tank/fish-sprite";
 import { Button } from "@/shared/components/button";
 import { ScreenContainer } from "@/shared/components/screen-container";
 import { palette, radius, spacing } from "@/shared/constants/theme";
+import { getSpeciesDef, standardVariant } from "@/shared/creature/catalog";
+import type { SpeciesId } from "@/shared/creature/types";
+import { useSpeciesUnlocks } from "@/shared/creature/use-unlocks";
 import { DEFAULT_COLOR_ID, getColorDef, standardTraits } from "@/shared/fish/catalog";
 import { formatRarity, RARITY_COLORS } from "@/shared/fish/rarity";
 import type { ColorId } from "@/shared/fish/types";
@@ -18,14 +22,17 @@ import { computeCurrentStreak } from "@/shared/lib/sessions";
 import { DurationPicker } from "../components/duration-picker";
 import { DEFAULT_DURATION_MINUTES } from "../constants";
 import { useStartSession } from "../hooks/use-start-session";
+import type { CreatureSelection } from "../types";
 
 const PREVIEW_W = 200;
 const PREVIEW_H = 104;
 
 export function FocusHomeScreen() {
   const [minutes, setMinutes] = useState(DEFAULT_DURATION_MINUTES);
+  const [speciesId, setSpeciesId] = useState<SpeciesId>("molly");
   const [colorId, setColorId] = useState<ColorId>(DEFAULT_COLOR_ID);
-  const { entries } = useUnlocks();
+  const { entries: colorEntries } = useUnlocks();
+  const { entries: speciesEntries } = useSpeciesUnlocks();
   const { data: sessionRows } = useSessionsQuery();
   const now = useNow(60_000);
   const currentStreak = useMemo(
@@ -34,9 +41,25 @@ export function FocusHomeScreen() {
   );
   const startSession = useStartSession();
 
-  const selected = getColorDef(colorId);
-  const selectedEntry = entries.find((e) => e.def.id === colorId);
-  const selectedUnlocked = selectedEntry?.unlocked ?? false;
+  const isMolly = speciesId === "molly";
+  const speciesDef = getSpeciesDef(speciesId);
+  const speciesEntry = speciesEntries.find((e) => e.def.id === speciesId);
+  const speciesUnlocked = speciesEntry?.unlocked ?? false;
+
+  const selectedColor = getColorDef(colorId);
+  const colorEntry = colorEntries.find((e) => e.def.id === colorId);
+  const colorUnlocked = colorEntry?.unlocked ?? false;
+
+  // For molly, the color itself is gated (today's behaviour, unchanged).
+  // For every other species, only the SPECIES is gated — its variants are
+  // never individually locked, same "rolled and collected" rule molly's own
+  // body/tail/dorsal already follow (see `creature/catalog.ts`'s header).
+  const selectedUnlocked = isMolly ? colorUnlocked : speciesUnlocked;
+
+  const startPress = () => {
+    const selection: CreatureSelection = isMolly ? { speciesId: "molly", colorId } : { speciesId };
+    startSession(selection, minutes);
+  };
 
   return (
     <ScreenContainer>
@@ -54,51 +77,86 @@ export function FocusHomeScreen() {
         </View>
 
         <View style={styles.previewCard}>
-          <Canvas style={styles.previewCanvas}>
-            <Group
-              transform={[
-                { translateX: PREVIEW_W / 2 },
-                { translateY: PREVIEW_H / 2 },
-                { scale: 0.82 },
+          {isMolly ? (
+            <Canvas style={styles.previewCanvas}>
+              <Group
+                transform={[
+                  { translateX: PREVIEW_W / 2 },
+                  { translateY: PREVIEW_H / 2 },
+                  { scale: 0.82 },
+                ]}
+              >
+                <FishBody
+                  traits={standardTraits(colorId)}
+                  stage="adult"
+                  clock={null}
+                  phase={0}
+                  silhouette={!selectedUnlocked}
+                />
+              </Group>
+            </Canvas>
+          ) : selectedUnlocked ? (
+            <CreaturePreview
+              speciesId={speciesId}
+              variant={standardVariant(speciesId)}
+              width={PREVIEW_W}
+              height={PREVIEW_H}
+            />
+          ) : (
+            <View style={[styles.previewCanvas, styles.previewPlaceholder]}>
+              <Text style={styles.previewPlaceholderText}>???</Text>
+            </View>
+          )}
+          <View style={styles.previewNameRow}>
+            <Text style={styles.previewName}>
+              {isMolly
+                ? selectedUnlocked
+                  ? selectedColor.name
+                  : "???"
+                : selectedUnlocked
+                  ? speciesDef.name
+                  : "???"}
+            </Text>
+            <Text
+              style={[
+                styles.rarityBadge,
+                {
+                  color:
+                    RARITY_COLORS[isMolly ? selectedColor.rarity.tier : speciesDef.rarity.tier],
+                },
               ]}
             >
-              <FishBody
-                traits={standardTraits(colorId)}
-                stage="adult"
-                clock={null}
-                phase={0}
-                silhouette={!selectedUnlocked}
-              />
-            </Group>
-          </Canvas>
-          <View style={styles.previewNameRow}>
-            <Text style={styles.previewName}>{selectedUnlocked ? selected.name : "???"}</Text>
-            <Text style={[styles.rarityBadge, { color: RARITY_COLORS[selected.rarity.tier] }]}>
-              {formatRarity(selected.rarity)}
+              {formatRarity(isMolly ? selectedColor.rarity : speciesDef.rarity)}
             </Text>
           </View>
           <Text style={styles.previewHint}>
-            {selectedUnlocked ? selected.description : unlockHint(selected.unlock)}
+            {selectedUnlocked
+              ? isMolly
+                ? selectedColor.description
+                : speciesDef.description
+              : unlockHint(isMolly ? selectedColor.unlock : speciesDef.unlock)}
           </Text>
           {selectedUnlocked ? (
             <Text style={styles.rollNote}>
-              Body & fins are revealed when your molly grows up 🎲
+              {isMolly
+                ? "Body & fins are revealed when your molly grows up 🎲"
+                : `Its coat is revealed when your ${speciesDef.copy.noun} grows up 🎲`}
             </Text>
           ) : null}
         </View>
 
-        <Text style={styles.sectionTitle}>Your molly</Text>
+        <Text style={styles.sectionTitle}>Species</Text>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.variantRow}
         >
-          {entries.map(({ def, unlocked }) => {
-            const active = def.id === colorId;
+          {speciesEntries.map(({ def, unlocked }) => {
+            const active = def.id === speciesId;
             return (
               <Pressable
                 key={def.id}
-                onPress={() => setColorId(def.id)}
+                onPress={() => setSpeciesId(def.id)}
                 style={[styles.variantChip, active && styles.variantChipActive]}
               >
                 <View
@@ -115,22 +173,55 @@ export function FocusHomeScreen() {
           })}
         </ScrollView>
 
+        {isMolly ? (
+          <>
+            <Text style={styles.sectionTitle}>Your molly</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.variantRow}
+            >
+              {colorEntries.map(({ def, unlocked }) => {
+                const active = def.id === colorId;
+                return (
+                  <Pressable
+                    key={def.id}
+                    onPress={() => setColorId(def.id)}
+                    style={[styles.variantChip, active && styles.variantChipActive]}
+                  >
+                    <View
+                      style={[
+                        styles.variantDot,
+                        { backgroundColor: unlocked ? def.accentColor : palette.border },
+                      ]}
+                    />
+                    <Text style={[styles.variantLabel, active && styles.variantLabelActive]}>
+                      {unlocked ? def.name : "🔒"}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </>
+        ) : null}
+
         <Text style={styles.sectionTitle}>Focus for</Text>
         <DurationPicker minutes={minutes} onChange={setMinutes} />
 
         <Button
           label={`Start ${minutes} min focus`}
-          onPress={() => startSession(colorId, minutes)}
+          onPress={startPress}
           disabled={!selectedUnlocked}
           style={styles.startButton}
         />
         {!selectedUnlocked ? (
           <Text style={styles.lockedNote}>
-            This molly is still locked — {unlockHint(selected.unlock).toLowerCase()}.
+            This {speciesDef.copy.noun} is still locked —{" "}
+            {unlockHint(isMolly ? selectedColor.unlock : speciesDef.unlock).toLowerCase()}.
           </Text>
         ) : (
           <Text style={styles.lockedNote}>
-            Leave the app mid-session and your molly won&apos;t survive.
+            Leave the app mid-session and your {speciesDef.copy.noun} won&apos;t survive.
           </Text>
         )}
       </ScrollView>
@@ -167,6 +258,8 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   previewCanvas: { width: PREVIEW_W, height: PREVIEW_H },
+  previewPlaceholder: { alignItems: "center", justifyContent: "center" },
+  previewPlaceholderText: { color: palette.textDim, fontSize: 15, fontWeight: "700" },
   previewNameRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   previewName: { color: palette.text, fontSize: 17, fontWeight: "700" },
   rarityBadge: { fontSize: 11, fontWeight: "800" },

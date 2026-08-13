@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TankView } from "@/shared/components/tank/tank-view";
 import { Button } from "@/shared/components/button";
 import { palette, radius, spacing } from "@/shared/constants/theme";
+import { getSpeciesDef, SPECIES_DEFS } from "@/shared/creature/catalog";
 import { BODY_DEFS, DORSAL_DEFS, getColorDef, TAIL_DEFS } from "@/shared/fish/catalog";
 import { formatRarity, RARITY_COLORS } from "@/shared/fish/rarity";
 import type { Rarity } from "@/shared/fish/types";
@@ -14,38 +15,52 @@ import { formatMinutes } from "@/shared/lib/dates";
 import { useSessionStore } from "../store/session-store";
 import type { SessionResult } from "../types";
 
-const COPY = {
-  completed: { emoji: "🎉", title: "Your molly made it!" },
-  failed: { emoji: "🪦", title: "Your molly didn't survive..." },
-  abandoned: { emoji: "🏳️", title: "Session abandoned" },
-} as const;
-
 interface RevealItem {
   label: string;
   rarity: Rarity;
 }
 
-/** Non-standard rolled traits worth announcing on the reveal. */
+/** Non-standard rolled traits worth announcing on the reveal (molly: body/tail/dorsal; a creature: its variant, if better than the common one). */
 function revealItems(result: SessionResult): RevealItem[] {
-  const items: RevealItem[] = [];
-  const body = BODY_DEFS.find((d) => d.id === result.traits.body);
-  const tail = TAIL_DEFS.find((d) => d.id === result.traits.tail);
-  const dorsal = DORSAL_DEFS.find((d) => d.id === result.traits.dorsal);
-  if (body && body.id !== "standard")
-    items.push({ label: `${body.name} body`, rarity: body.rarity });
-  if (tail && tail.id !== "round") items.push({ label: tail.name, rarity: tail.rarity });
-  if (dorsal && dorsal.id !== "standard") items.push({ label: dorsal.name, rarity: dorsal.rarity });
-  return items;
+  if (result.speciesId === "molly") {
+    const items: RevealItem[] = [];
+    const body = BODY_DEFS.find((d) => d.id === result.traits.body);
+    const tail = TAIL_DEFS.find((d) => d.id === result.traits.tail);
+    const dorsal = DORSAL_DEFS.find((d) => d.id === result.traits.dorsal);
+    if (body && body.id !== "standard")
+      items.push({ label: `${body.name} body`, rarity: body.rarity });
+    if (tail && tail.id !== "round") items.push({ label: tail.name, rarity: tail.rarity });
+    if (dorsal && dorsal.id !== "standard")
+      items.push({ label: dorsal.name, rarity: dorsal.rarity });
+    return items;
+  }
+  const def = SPECIES_DEFS[result.speciesId];
+  const variant = def.variants.find((v) => v.id === result.variant);
+  if (!variant || variant.rarity.tier === "common") return [];
+  return [{ label: `${variant.name} ${def.name}`, rarity: variant.rarity }];
 }
 
 export function SessionResultSheet({ result }: { result: SessionResult }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const acknowledgeResult = useSessionStore((s) => s.acknowledgeResult);
-  const colorDef = getColorDef(result.colorId);
+  const speciesDef = getSpeciesDef(result.speciesId);
   const completed = result.outcome === "completed";
-  const copy = COPY[result.outcome];
+  const copy = speciesDef.copy;
+  const emoji = completed ? "🎉" : result.outcome === "failed" ? "🪦" : "🏳️";
+  const title =
+    result.outcome === "abandoned"
+      ? "Session abandoned"
+      : `Your ${copy.noun} ${completed ? copy.grownVerb : copy.diedVerb}${completed ? "!" : "..."}`;
   const reveals = completed ? revealItems(result) : [];
+  const displayName =
+    result.speciesId === "molly"
+      ? getColorDef(result.colorId).name
+      : (speciesDef.variants.find((v) => v.id === result.variant)?.name ?? speciesDef.name);
+  const plainRollLine =
+    result.speciesId === "molly"
+      ? "A classic round-tailed molly this time."
+      : `A common ${speciesDef.name.toLowerCase()} this time.`;
 
   const leave = (href: "/(tabs)/tank" | "/(tabs)") => {
     acknowledgeResult();
@@ -58,14 +73,25 @@ export function SessionResultSheet({ result }: { result: SessionResult }) {
         mode="center"
         style={StyleSheet.absoluteFill as never}
         fish={[
-          {
-            key: "result",
-            traits: result.traits,
-            stage: "adult",
-            status: completed ? "alive" : "dead",
-            scale: 1,
-            seed: seedFromString(result.colorId + result.endedAt),
-          },
+          result.speciesId === "molly"
+            ? {
+                key: "result",
+                speciesId: "molly",
+                traits: result.traits,
+                stage: "adult",
+                status: completed ? "alive" : "dead",
+                scale: 1,
+                seed: seedFromString(result.colorId + result.endedAt),
+              }
+            : {
+                key: "result",
+                speciesId: result.speciesId,
+                variant: result.variant,
+                stage: "adult",
+                status: completed ? "alive" : "dead",
+                scale: speciesDef.sizeRatio,
+                seed: seedFromString(result.speciesId + result.endedAt),
+              },
         ]}
       />
       <View
@@ -85,14 +111,14 @@ export function SessionResultSheet({ result }: { result: SessionResult }) {
           ]}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.emoji}>{copy.emoji}</Text>
-          <Text style={styles.title}>{copy.title}</Text>
+          <Text style={styles.emoji}>{emoji}</Text>
+          <Text style={styles.title}>{title}</Text>
           <Text style={styles.body}>
             {completed
-              ? `${formatMinutes(result.plannedMinutes)} of focus raised a healthy ${colorDef.name} molly. It's swimming in your tank now.`
+              ? `${formatMinutes(result.plannedMinutes)} of focus raised a healthy ${displayName} ${copy.noun}. It's swimming in your tank now.`
               : result.outcome === "failed"
-                ? `You left mid-session and the ${colorDef.name} molly couldn't hold on. It rests in your tank as a reminder.`
-                : `You gave up this time. The ${colorDef.name} molly rests in your tank as a reminder.`}
+                ? `You left mid-session and the ${displayName} ${copy.noun} couldn't hold on. It rests in your tank as a reminder.`
+                : `You gave up this time. The ${displayName} ${copy.noun} rests in your tank as a reminder.`}
           </Text>
 
           {reveals.length > 0 ? (
@@ -109,7 +135,7 @@ export function SessionResultSheet({ result }: { result: SessionResult }) {
               })}
             </View>
           ) : completed ? (
-            <Text style={styles.plainRoll}>A classic round-tailed molly this time.</Text>
+            <Text style={styles.plainRoll}>{plainRollLine}</Text>
           ) : null}
 
           <View style={styles.buttons}>

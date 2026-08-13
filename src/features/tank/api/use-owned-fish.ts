@@ -2,14 +2,15 @@ import { useMemo } from "react";
 
 import type { SessionRow } from "@/db/schema";
 import { TANK_FISH_SCALE, STAGE_SCALE } from "@/shared/constants/tank";
-import { traitsOfRow } from "@/shared/fish/catalog";
+import { getSpeciesDef } from "@/shared/creature/catalog";
+import { resolveCreature } from "@/shared/creature/resolve";
 import { stageForProgress } from "@/shared/fish/life-stage";
 import type { LifeStage } from "@/shared/fish/types";
 import { useNow } from "@/shared/hooks/use-now";
 import { useSessionsQuery } from "@/shared/hooks/use-sessions-query";
 import { classifyFish } from "@/shared/lib/tank-membership";
 import { seedFromString } from "@/shared/lib/seed";
-import type { TankFish } from "@/shared/components/tank/tank-canvas";
+import type { AnyTankFish } from "@/shared/lib/tank-fish";
 
 /**
  * Every finished session is a fish: completed → alive, failed/abandoned →
@@ -41,24 +42,31 @@ function deathProgress(row: SessionRow): number {
   return Math.min(1, Math.max(0, (row.endedAt - row.startedAt) / total));
 }
 
-function toTankFish(row: SessionRow): TankFish {
+function toTankFish(row: SessionRow): AnyTankFish {
   const alive = row.outcome === "completed";
   const stage: LifeStage = alive ? "adult" : stageForProgress(deathProgress(row));
+  const creature = resolveCreature(row);
+  // `sizeRatio` is 1 for molly (a no-op multiply) and each other species'
+  // size relative to that same baseline — see `SpeciesDef.sizeRatio`'s doc
+  // comment for why this feeds render scale rather than a separate knob.
+  const sizeRatio = getSpeciesDef(creature.speciesId).sizeRatio;
   // Dead fish deliberately skip the sizeForMinutes ambition bonus — that
   // rewards completing a long session, and a corpse should look like
   // whatever it grew into before the user gave up, not how big it was aiming
   // to get.
   const scale = alive
-    ? TANK_FISH_SCALE * STAGE_SCALE.adult * sizeForMinutes(row.plannedMinutes)
-    : TANK_FISH_SCALE * STAGE_SCALE[stage];
-  return {
+    ? TANK_FISH_SCALE * sizeRatio * STAGE_SCALE.adult * sizeForMinutes(row.plannedMinutes)
+    : TANK_FISH_SCALE * sizeRatio * STAGE_SCALE[stage];
+  const base = {
     key: row.id,
-    traits: traitsOfRow(row),
     stage,
-    status: alive ? "alive" : "dead",
+    status: (alive ? "alive" : "dead") as "alive" | "dead",
     scale,
     seed: seedFromString(row.id),
   };
+  return creature.speciesId === "molly"
+    ? { ...base, speciesId: "molly", traits: creature.traits }
+    : { ...base, speciesId: creature.speciesId, variant: creature.variant };
 }
 
 /** Longer sessions grow slightly larger adults (0.85×–1.15×). */

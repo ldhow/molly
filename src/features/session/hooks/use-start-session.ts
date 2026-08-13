@@ -1,9 +1,10 @@
 import { useRouter } from "expo-router";
 import { useCallback } from "react";
 
-import type { ColorId } from "@/shared/fish/types";
+import { getSpeciesDef } from "@/shared/creature/catalog";
 
 import { useSessionStore } from "../store/session-store";
+import type { CreatureSelection } from "../types";
 import {
   requestNotificationPermission,
   scheduleCompletionNotification,
@@ -14,13 +15,14 @@ export function useStartSession() {
   const start = useSessionStore((s) => s.start);
 
   return useCallback(
-    (colorId: ColorId, plannedMinutes: number) => {
-      const session = start(colorId, plannedMinutes);
+    (selection: CreatureSelection, plannedMinutes: number) => {
+      const session = start(selection, plannedMinutes);
+      const noun = getSpeciesDef(selection.speciesId).copy.noun;
       // Fire-and-forget: the session must start instantly even if the
       // permission prompt is still up or gets denied.
       void requestNotificationPermission().then((granted) => {
         if (granted) {
-          void scheduleCompletionNotification(plannedMinutes * 60);
+          void scheduleCompletionNotification(plannedMinutes * 60, noun);
         }
       });
       router.push("/session");

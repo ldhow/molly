@@ -1,6 +1,7 @@
 import type { SessionRow } from "@/db/schema";
 
 import { bucketFromString } from "../lib/seed";
+import { rollFrom } from "../lib/roll";
 import type { BodyId, ColorDef, ColorId, DorsalId, FishTraits, RollableDef, TailId } from "./types";
 
 /**
@@ -2476,16 +2477,6 @@ export const DORSAL_DEFS: readonly RollableDef<DorsalId>[] = [
   { id: "standard", name: "Standard Fin", rarity: { tier: "common" }, weight: 85 },
   { id: "sailfin", name: "Sailfin", rarity: { tier: "rare" }, weight: 15 },
 ];
-
-function rollFrom<Id extends string>(defs: readonly RollableDef<Id>[]): Id {
-  const total = defs.reduce((sum, d) => sum + d.weight, 0);
-  let ticket = Math.random() * total;
-  for (const def of defs) {
-    ticket -= def.weight;
-    if (ticket < 0) return def.id;
-  }
-  return defs[0].id;
-}
 
 /** The all-common combination (growing fish, failed sessions, previews). */
 export function standardTraits(color: ColorId): FishTraits {

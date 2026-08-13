@@ -1,10 +1,10 @@
-export type RarityTier = "common" | "uncommon" | "rare" | "epic" | "legendary";
+import type { Rarity, UnlockRule } from "@/shared/lib/roll";
 
-export interface Rarity {
-  tier: RarityTier;
-  /** Sub-tier within rare/epic, shown as ★s (e.g. Epic ★★★). */
-  stars?: 1 | 2 | 3;
-}
+// Rarity/unlock/roll are generic concepts shared with `@/shared/creature/`
+// (the non-molly species catalog) — defined in `@/shared/lib/roll.ts`, not
+// here, re-exported so every existing `@/shared/fish/types` import keeps
+// working unchanged.
+export type { RarityTier, Rarity, UnlockRule, RollableDef } from "@/shared/lib/roll";
 
 export type ColorId =
   | "goldDust"
@@ -46,14 +46,6 @@ export interface FishTraits {
 }
 
 export type LifeStage = "egg" | "fry" | "juvenile" | "adult";
-
-export type UnlockRule =
-  | { type: "default" }
-  | { type: "sessionMinutes"; minutes: number }
-  | { type: "totalHours"; hours: number }
-  | { type: "streakDays"; days: number }
-  /** Streak OR a manual grant (dev/event stand-in). */
-  | { type: "streakOrGrant"; days: number };
 
 /**
  * Optional per-variety knobs for the procedural generators in
@@ -147,12 +139,4 @@ export interface ColorDef {
   pattern: FishPattern;
   shimmer?: ShimmerKind;
   unlock: UnlockRule;
-}
-
-export interface RollableDef<Id extends string> {
-  id: Id;
-  name: string;
-  rarity: Rarity;
-  /** Relative roll weight within its axis. */
-  weight: number;
 }

@@ -15,6 +15,8 @@ import { Button } from "@/shared/components/button";
 import { EmptyState } from "@/shared/components/empty-state";
 import { ScreenContainer } from "@/shared/components/screen-container";
 import { palette, radius, spacing } from "@/shared/constants/theme";
+import { getSpeciesDef } from "@/shared/creature/catalog";
+import { speciesOfRow } from "@/shared/creature/resolve";
 import { TANK_CAPACITY } from "@/shared/lib/tank-membership";
 
 import { useFishCollection } from "../api/use-fish-collection";
@@ -46,9 +48,10 @@ export function HoldingTankScreen() {
       setPickingReplacementFor(null);
       return;
     }
+    const noun = getSpeciesDef(speciesOfRow(row)).copy.noun;
     Alert.alert(
       "Send back to holding tank?",
-      "This molly will leave the tank and move to your Holding Tank.",
+      `This ${noun} will leave the tank and move to your Holding Tank.`,
       [
         { text: "Cancel", style: "cancel" },
         {

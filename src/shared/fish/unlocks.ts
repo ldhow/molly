@@ -6,7 +6,12 @@ import {
 } from "@/shared/lib/sessions";
 
 import { COLOR_DEFS } from "./catalog";
-import type { ColorDef, ColorId, UnlockRule } from "./types";
+import type { ColorDef, ColorId } from "./types";
+
+// `unlockHint` is fully generic over `UnlockRule` (colors, species, any future
+// unlockable axis) — defined once in `@/shared/lib/roll.ts`, re-exported here
+// so every existing `@/shared/fish/unlocks` import keeps working unchanged.
+export { unlockHint } from "@/shared/lib/roll";
 
 /**
  * Colors unlock by progression; body/tail/dorsal traits are never locked —
@@ -37,19 +42,4 @@ export function unlockedColorIds(
   grantedColors: readonly string[] = [],
 ): ColorId[] {
   return COLOR_DEFS.filter((def) => isColorUnlocked(def, rows, grantedColors)).map((def) => def.id);
-}
-
-export function unlockHint(rule: UnlockRule): string {
-  switch (rule.type) {
-    case "default":
-      return "Available from the start";
-    case "sessionMinutes":
-      return `Complete a single ${rule.minutes}-minute focus session`;
-    case "totalHours":
-      return `Accumulate ${rule.hours} hours of completed focus`;
-    case "streakDays":
-      return `Reach a ${rule.days}-day focus streak`;
-    case "streakOrGrant":
-      return `Reach a ${rule.days}-day focus streak — or a special event`;
-  }
 }

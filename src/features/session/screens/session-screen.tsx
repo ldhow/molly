@@ -4,10 +4,11 @@ import { useEffect } from "react";
 import { Alert, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { getSpeciesDef, standardVariant } from "@/shared/creature/catalog";
 import { standardTraits } from "@/shared/fish/catalog";
 import { stageForProgress } from "@/shared/fish/life-stage";
-import type { LifeStage } from "@/shared/fish/types";
 import { TankView } from "@/shared/components/tank/tank-view";
+import type { AnyTankFish } from "@/shared/lib/tank-fish";
 import { seedFromString } from "@/shared/lib/seed";
 import { Button } from "@/shared/components/button";
 import { palette, radius, spacing } from "@/shared/constants/theme";
@@ -37,13 +38,6 @@ export function SessionScreen() {
   return <Redirect href="/(tabs)" />;
 }
 
-const STAGE_LABEL: Record<LifeStage, string> = {
-  egg: "An egg rests in the current…",
-  fry: "A tiny fry hatched!",
-  juvenile: "Growing into a young molly",
-  adult: "Almost fully grown — keep going!",
-};
-
 function ActiveSessionView({ session }: { session: ActiveSession }) {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -60,10 +54,31 @@ function ActiveSessionView({ session }: { session: ActiveSession }) {
 
   const progress = progressOf(session, now);
   const stage = stageForProgress(progress);
-  const traits = standardTraits(session.colorId);
+  const speciesDef = getSpeciesDef(session.speciesId);
+  const copy = speciesDef.copy;
+  const previewFish: AnyTankFish =
+    session.speciesId === "molly"
+      ? {
+          key: session.id,
+          speciesId: "molly",
+          traits: standardTraits(session.colorId),
+          stage,
+          status: "alive",
+          scale: 0.45 + 0.55 * progress,
+          seed: seedFromString(session.id),
+        }
+      : {
+          key: session.id,
+          speciesId: session.speciesId,
+          variant: standardVariant(session.speciesId),
+          stage,
+          status: "alive",
+          scale: speciesDef.sizeRatio * (0.45 + 0.55 * progress),
+          seed: seedFromString(session.id),
+        };
 
   const confirmGiveUp = () => {
-    Alert.alert("Give up?", "Your molly won't survive if you end the session early.", [
+    Alert.alert("Give up?", `Your ${copy.noun} won't survive if you end the session early.`, [
       { text: "Keep focusing", style: "cancel" },
       {
         text: "Give up",
@@ -75,20 +90,7 @@ function ActiveSessionView({ session }: { session: ActiveSession }) {
 
   return (
     <View style={styles.root}>
-      <TankView
-        mode="center"
-        style={StyleSheet.absoluteFill as never}
-        fish={[
-          {
-            key: session.id,
-            traits,
-            stage,
-            status: "alive",
-            scale: 0.45 + 0.55 * progress,
-            seed: seedFromString(session.id),
-          },
-        ]}
-      />
+      <TankView mode="center" style={StyleSheet.absoluteFill as never} fish={[previewFish]} />
 
       <View
         style={[
@@ -102,13 +104,15 @@ function ActiveSessionView({ session }: { session: ActiveSession }) {
       >
         {graceRecovered ? (
           <View style={styles.graceBanner}>
-            <Text style={styles.graceText}>Phew — your molly barely survived. Stay here!</Text>
+            <Text style={styles.graceText}>
+              Phew — your {copy.noun} barely survived. Stay here!
+            </Text>
           </View>
         ) : null}
         <Text style={[styles.clock, { fontSize: height < 420 ? 40 : 56 }]}>
           {formatClock(secondsLeftOf(session, now))}
         </Text>
-        <Text style={styles.stageLabel}>{STAGE_LABEL[stage]}</Text>
+        <Text style={styles.stageLabel}>{copy.lifeStageLabels[stage]}</Text>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { flex: progress }]} />
           <View style={{ flex: 1 - progress }} />

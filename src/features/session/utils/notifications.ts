@@ -74,14 +74,14 @@ export async function requestNotificationPermission(): Promise<boolean> {
   }
 }
 
-export async function scheduleCompletionNotification(secondsFromNow: number) {
+export async function scheduleCompletionNotification(secondsFromNow: number, noun: string) {
   try {
     const Notifications = getNotifications();
     if (!Notifications) return;
     await Notifications.scheduleNotificationAsync({
       content: {
         title: NOTIFICATION_COPY.completedTitle,
-        body: NOTIFICATION_COPY.completedBody,
+        body: NOTIFICATION_COPY.completedBody(noun),
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
@@ -94,13 +94,13 @@ export async function scheduleCompletionNotification(secondsFromNow: number) {
   }
 }
 
-export async function scheduleDyingNotification() {
+export async function scheduleDyingNotification(noun: string) {
   try {
     const Notifications = getNotifications();
     if (!Notifications) return;
     dyingNotificationId = await Notifications.scheduleNotificationAsync({
       content: {
-        title: NOTIFICATION_COPY.dyingTitle,
+        title: NOTIFICATION_COPY.dyingTitle(noun),
         body: NOTIFICATION_COPY.dyingBody,
         sound: true,
       },

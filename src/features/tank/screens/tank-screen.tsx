@@ -5,11 +5,24 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { EmptyState } from "@/shared/components/empty-state";
 import { TankView } from "@/shared/components/tank/tank-view";
 import { palette, radius, spacing } from "@/shared/constants/theme";
-import { useRenderModeStore } from "@/shared/store/render-mode-store";
+import { useRenderModeStore, type RenderMode } from "@/shared/store/render-mode-store";
 
 import { useAddDevFishMutation } from "../api/use-add-dev-fish-mutation";
 import { useOwnedFish } from "../api/use-owned-fish";
 import { useRemoveDevFishMutation } from "../api/use-remove-dev-fish-mutation";
+
+/** Cycles the toggle through all three renderers, 2D first. */
+const NEXT_RENDER_MODE: Record<RenderMode, RenderMode> = {
+  "2d": "v2",
+  v2: "3d",
+  "3d": "2d",
+};
+
+const RENDER_MODE_LABEL: Record<RenderMode, string> = {
+  "2d": "2D",
+  v2: "2D V2",
+  "3d": "3D",
+};
 
 export function TankScreen() {
   const insets = useSafeAreaInsets();
@@ -36,7 +49,7 @@ export function TankScreen() {
         <View style={styles.headerCard}>
           <Text style={styles.title}>Your Tank</Text>
           <Text style={styles.subtitle}>
-            {aliveCount} {aliveCount === 1 ? "molly" : "mollies"} thriving
+            {aliveCount} {aliveCount === 1 ? "companion" : "companions"} thriving
             {totalCount - aliveCount > 0 ? ` · ${totalCount - aliveCount} lost` : ""}
             {holdingCount > 0 ? ` · ${holdingCount} in holding tank` : ""}
           </Text>
@@ -45,12 +58,10 @@ export function TankScreen() {
               <Text style={styles.manageButtonText}>Manage tank</Text>
             </Pressable>
             <Pressable
-              style={[styles.manageButton, renderMode === "3d" && styles.manageButtonActive]}
-              onPress={() => setRenderMode(renderMode === "3d" ? "2d" : "3d")}
+              style={[styles.manageButton, renderMode !== "2d" && styles.manageButtonActive]}
+              onPress={() => setRenderMode(NEXT_RENDER_MODE[renderMode])}
             >
-              <Text style={styles.manageButtonText}>
-                3D fish: {renderMode === "3d" ? "On" : "Off"}
-              </Text>
+              <Text style={styles.manageButtonText}>Renderer: {RENDER_MODE_LABEL[renderMode]}</Text>
             </Pressable>
           </View>
           {__DEV__ ? (
@@ -81,7 +92,7 @@ export function TankScreen() {
           <EmptyState
             emoji="🫧"
             title="Your tank is empty"
-            caption="Complete a focus session to raise your first molly."
+            caption="Complete a focus session to raise your first companion."
           />
         </View>
       ) : null}
