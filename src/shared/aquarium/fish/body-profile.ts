@@ -6,14 +6,20 @@
 // are directly editable art, not a fit — see `anatomy.ts`'s header for why
 // this replaced `legacy-fit.ts`.
 //
-// Art direction: a plump storybook companion fish, genuinely distinct from
-// the legacy renderer's leaner "chunky realistic molly" (measured aspect
-// 2.48:1 under the convention below, despite its own header's stale "2.25:1"
-// claim) — a blunt puppy-nose snout, a back that crests forward of centre
-// (a "shoulders up" read), a deep belly cresting just past centre, and a
-// confident taper into an ON-AXIS peduncle waist (legacy's peduncle rides
-// high off-axis at `peduncleMidY ≈ -4.85`; here it's ≈ -0.7 — the tail
-// centres on the body axis, not just a resize of the old shape).
+// Art direction: `standard` was originally a plump storybook companion fish
+// (aspect ~2.0:1) — "update 2d fish v2" plan Part D leaned it out toward a
+// reference image's more elongated, flowing-fin look (aspect ~2.35:1, all
+// `top`/`bottom` depths scaled by 0.86 from the original table, length/x0
+// and every u-position unchanged so crest position, snout bluntness, and
+// peduncle centering all carry over unaltered — see PROPORTION_SPEC in
+// `scripts/verify-aquarium.ts` for the checked range). `balloon` is
+// deliberately UNCHANGED: it's its own distinct puffy body type, not a
+// second point on the same lean/plump axis, and the reference image treats
+// "Balloon (Short)" as its own thing too. A back that crests forward of
+// centre (a "shoulders up" read), a deep belly cresting just past centre,
+// and a confident taper into an ON-AXIS peduncle waist are still the shared
+// silhouette language between both bodies (legacy's peduncle rides high
+// off-axis at `peduncleMidY ≈ -4.85`; here it's ≈ -0.65 on `standard`).
 //
 // Measurement convention (state it explicitly, the old comment didn't):
 // aspect = length(nose -> peduncle) / max(top(u) + bottom(u)) over u in [0,1].
@@ -42,40 +48,43 @@ export interface BodyProfile {
   bottom: CurvePoint[];
 }
 
+// All y-values are the original plump-storybook table x 0.86 (see the art-
+// direction comment above) — a uniform depth scale, not a shape redesign,
+// so the crest/belly u-positions and relative proportions are unchanged.
 const STANDARD: BodyProfile = {
   x0: -56,
   length: 104,
   top: [
-    { x: 0.0, y: 7.6 },
-    { x: 0.06, y: 11.8 },
-    { x: 0.14, y: 17.2 },
-    { x: 0.25, y: 22.4 },
-    { x: 0.34, y: 24.8 },
-    { x: 0.4, y: 25.5 }, // crest, forward of centre
-    { x: 0.5, y: 25.1 },
-    { x: 0.6, y: 23.6 },
-    { x: 0.7, y: 21.0 },
-    { x: 0.8, y: 17.2 },
-    { x: 0.88, y: 13.4 },
-    { x: 0.94, y: 10.6 },
-    { x: 1.0, y: 8.5 }, // peduncle top
-    { x: 1.1, y: 6.8 }, // end-tangent only, never sampled directly
+    { x: 0.0, y: 6.5 },
+    { x: 0.06, y: 10.1 },
+    { x: 0.14, y: 14.8 },
+    { x: 0.25, y: 19.3 },
+    { x: 0.34, y: 21.3 },
+    { x: 0.4, y: 21.9 }, // crest, forward of centre
+    { x: 0.5, y: 21.6 },
+    { x: 0.6, y: 20.3 },
+    { x: 0.7, y: 18.1 },
+    { x: 0.8, y: 14.8 },
+    { x: 0.88, y: 11.5 },
+    { x: 0.94, y: 9.1 },
+    { x: 1.0, y: 7.3 }, // peduncle top
+    { x: 1.1, y: 5.8 }, // end-tangent only, never sampled directly
   ],
   bottom: [
-    { x: 0.0, y: 8.4 },
-    { x: 0.06, y: 12.0 },
-    { x: 0.14, y: 16.6 },
-    { x: 0.25, y: 21.4 },
-    { x: 0.36, y: 25.2 },
-    { x: 0.46, y: 27.4 },
-    { x: 0.55, y: 28.5 }, // belly low, just past centre
-    { x: 0.62, y: 28.2 },
-    { x: 0.7, y: 26.4 },
-    { x: 0.8, y: 21.2 },
-    { x: 0.88, y: 15.0 },
-    { x: 0.94, y: 10.2 },
-    { x: 1.0, y: 7.0 }, // peduncle bottom
-    { x: 1.1, y: 5.6 },
+    { x: 0.0, y: 7.2 },
+    { x: 0.06, y: 10.3 },
+    { x: 0.14, y: 14.3 },
+    { x: 0.25, y: 18.4 },
+    { x: 0.36, y: 21.7 },
+    { x: 0.46, y: 23.6 },
+    { x: 0.55, y: 24.5 }, // belly low, just past centre
+    { x: 0.62, y: 24.3 },
+    { x: 0.7, y: 22.7 },
+    { x: 0.8, y: 18.2 },
+    { x: 0.88, y: 12.9 },
+    { x: 0.94, y: 8.8 },
+    { x: 1.0, y: 6.0 }, // peduncle bottom
+    { x: 1.1, y: 4.8 },
   ],
 };
 

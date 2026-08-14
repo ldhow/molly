@@ -28,6 +28,7 @@ import {
 } from "@shopify/react-native-skia";
 import { PixelRatio } from "react-native";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
+import { useMemo } from "react";
 
 import { sandHeightFor } from "@/shared/constants/tank";
 import { DEAD_GRAYSCALE_MATRIX, DEAD_OPACITY } from "@/shared/fish/render-spec";
@@ -35,8 +36,20 @@ import type { FishTraits, LifeStage } from "@/shared/fish/types";
 
 import type { BakedArt } from "../core/bake";
 import { getWarpEffect } from "../core/sksl/warp";
+import { buildFishAnatomy } from "../fish/anatomy";
 import { densityAwareDpr } from "../fish/bake-fish";
-import { SPINE_AMP_MAX, SPINE_AMP_MIN, SPINE_K, SPINE_PAD } from "../fish/spine";
+import { finPivotsFor } from "../fish/fin-secondary";
+import {
+  CAUDAL_FIN_AMP_MAX,
+  CAUDAL_LAG_RAD,
+  PEC_FIN_AMP_MAX,
+  PEC_PHASE_OFFSET,
+  SPINE_AMP_MAX,
+  SPINE_AMP_MIN,
+  SPINE_K,
+  SPINE_PAD,
+  type FinPivot,
+} from "../fish/spine";
 import type { SceneLayer } from "../scene/types";
 import { biasedDepthRange, personalityFor } from "../sim/personality";
 import { Z_MAX } from "../sim/swim";
@@ -101,16 +114,56 @@ const EDGE_ON_MIN_WIDTH = 0.3;
  */
 const PERSPECTIVE_RATIO = 2.2;
 
+/**
+ * Render-only screen-space arc during a wall-turn ("update 2d fish v2"
+ * plan, Part C): `roll` is already a smoothed, signed, turn-rate-derived
+ * commitment to the turn (see `sim/swim.ts`), previously driving only a
+ * barely-visible banking squash — reusing it here as an on-screen
+ * `translateY` term turns the old decelerate-pause-reverse cusp at a wall
+ * into a rounded hook, without adding parallel state. 30 px/rad: confirmed
+ * via `scripts/verify-aquarium.ts`'s swim trace that ~90%+ of actively-
+ * turning steps (both current on and off) produce an on-screen arc past the
+ * 8px visibility floor. Re-check that trace if this changes, and eyeball
+ * `yarn aquarium:preview`'s wall-turn strip (`scripts/aquarium-preview.ts`)
+ * for how it actually reads.
+ */
+const ARC_GAIN_PX_PER_RAD = 30;
+
+/**
+ * Static body-bend-into-the-turn gain, in `bendAmp` units (same scale as
+ * `SPINE_AMP_MIN`/`MAX`) per radian of `roll`. 8 (not a rounder or larger
+ * number) because `scripts/verify-aquarium.ts`'s sweep measured that a
+ * higher gain (12 was the original guess) pushes `balloon/round/sailfin` —
+ * already the tightest combo before this term existed — past both the
+ * round-trip tolerance and `SPINE_PAD`'s budget; 8 is the largest gain that
+ * stays within a re-measured, still-documented budget (see `SPINE_PAD` in
+ * spine.ts and `ROUND_TRIP_TOLERANCE_PX` in verify-aquarium.ts). Re-run
+ * `npm run verify:aquarium` after changing this.
+ */
+const TURN_BEND_GAIN_PX_PER_RAD = 8;
+
 interface WarpedBodyProps {
   baked: BakedArt;
   phaseOffset: number;
   beatPhase: SharedValue<number>;
   speedNorm: SharedValue<number>;
   yaw: SharedValue<number>;
+  /** Turn-commitment scalar driving the body-bend term below — see `ARC_GAIN_PX_PER_RAD`'s doc comment. */
+  roll: SharedValue<number>;
+  /** Pectoral near/far + caudal hub/radius, for the independent secondary rotation below — see `fish/fin-secondary.ts`. */
+  pivots: { pecNear: FinPivot; pecFar: FinPivot; caudal: FinPivot };
 }
 
 /** The swim-bend body: a padded rect, warped through the fish's own baked texture. */
-function WarpedBody({ baked, phaseOffset, beatPhase, speedNorm, yaw }: WarpedBodyProps) {
+function WarpedBody({
+  baked,
+  phaseOffset,
+  beatPhase,
+  speedNorm,
+  yaw,
+  roll,
+  pivots,
+}: WarpedBodyProps) {
   const effect = getWarpEffect(Skia);
   const imageRect = Skia.XYWHRect(
     baked.bounds.x,
@@ -125,12 +178,44 @@ function WarpedBody({ baked, phaseOffset, beatPhase, speedNorm, yaw }: WarpedBod
     // damp it there; fish-layer.tsx's translateX wobble pays the motion
     // back as a horizontal shimmy instead.
     const edgeOnDamp = lerp(0.35, 1, Math.abs(Math.cos(yaw.value)));
+    const speed = Math.min(1, speedNorm.value);
+    const phaseNow = beatPhase.value + phaseOffset;
+    // Fin secondary motion idles down at rest and damps edge-on the same
+    // way the base wave's `ampScale` does — a resting or edge-on fish's
+    // fins settle rather than keep sculling at full amplitude.
+    const finDamp = lerp(0.3, 1, speed) * edgeOnDamp;
+    const pecNearAmp = PEC_FIN_AMP_MAX * Math.sin(phaseNow + PEC_PHASE_OFFSET) * finDamp;
+    const pecFarAmp = PEC_FIN_AMP_MAX * Math.sin(phaseNow + PEC_PHASE_OFFSET + Math.PI) * finDamp;
+    const caudalAmp = CAUDAL_FIN_AMP_MAX * Math.sin(phaseNow - CAUDAL_LAG_RAD) * finDamp;
+    // The warp runs in pre-mirror local space, but `liveTransform`'s `w`
+    // mirrors nose-right fish (w < 0 exactly when cos(yaw) >= 0 — see that
+    // derivation below). Without correcting for it, the same signed
+    // `roll`-driven bend would curl the tail into the turn for one facing
+    // and away from it for the other; `roll`'s only other consumer
+    // (`Math.cos(roll)`) is sign-independent, so this was never exercised
+    // before. Unlike `ampScale`, deliberately NOT scaled by `edgeOnDamp` —
+    // that damping exists because the OSCILLATING wave misreads edge-on,
+    // but this static bend is most needed exactly there, mid-turn.
+    const mirrorSign = Math.cos(yaw.value) >= 0 ? -1 : 1;
+    const bendAmp = roll.value * TURN_BEND_GAIN_PX_PER_RAD * mirrorSign;
     return {
       boundsX: baked.bounds.x,
       boundsWidth: baked.bounds.width,
-      ampScale: lerp(SPINE_AMP_MIN, SPINE_AMP_MAX, Math.min(1, speedNorm.value)) * edgeOnDamp,
+      ampScale: lerp(SPINE_AMP_MIN, SPINE_AMP_MAX, speed) * edgeOnDamp,
       k: SPINE_K,
-      phase: beatPhase.value + phaseOffset,
+      phase: phaseNow,
+      bendAmp,
+      pecNearHub: [
+        pivots.pecNear.x,
+        pivots.pecNear.n,
+        pivots.pecNear.radiusX,
+        pivots.pecNear.radiusN,
+      ],
+      pecFarHub: [pivots.pecFar.x, pivots.pecFar.n, pivots.pecFar.radiusX, pivots.pecFar.radiusN],
+      caudalHub: [pivots.caudal.x, pivots.caudal.n, pivots.caudal.radiusX, pivots.caudal.radiusN],
+      pecNearAmp,
+      pecFarAmp,
+      caudalAmp,
     };
   });
 
@@ -185,6 +270,10 @@ export function FishLayer({
     mode === "tank" ? MAX_RENDER_SCALE_TANK : MAX_RENDER_SCALE_CENTER,
   );
   const baked = getCachedFish(traits, stage, dpr);
+  // Fin secondary motion pivots — pure geometry (no rasterizing), cheap
+  // enough to recompute whenever `traits` changes at all rather than fight
+  // the linter over which of its fields actually affect fin shape.
+  const pivots = useMemo(() => finPivotsFor(buildFishAnatomy(traits).fins), [traits]);
 
   // Per-fish personality (pure function of seed — see sim/personality.ts):
   // bolder fish roam closer to the glass, all fish cruise at their own
@@ -271,6 +360,14 @@ export function FishLayer({
     // above) removes: broadside the body bends, edge-on it shimmies
     // horizontally instead, and the two cross-fade with |sin yaw|.
     const wobble = 2.5 * Math.abs(Math.sin(yaw)) * Math.sin(beatPhase);
+    // Visible on-screen arc through a turn ("update 2d fish v2" plan, Part
+    // C): proportional to `roll` (not integrated into position), so it
+    // rises and falls with the turn itself and self-corrects to ~0 once the
+    // fish is back on a straight heading — deliberately NOT folded into
+    // `swim.y`'s own box-clamped approach, which has no notion of "turning"
+    // at all. World-space (added here, before the mirror/matrix below), so
+    // it reads the same regardless of which way the fish is facing.
+    const arcOffset = roll * ARC_GAIN_PX_PER_RAD;
     const c = Math.cos(yaw);
     const s = Math.sin(yaw);
     // Art is nose-left: yaw=0 is heading +x (rightward), which must draw
@@ -281,7 +378,7 @@ export function FishLayer({
     const matrix: Matrix4 = [w, 0, 0, 0, 0, Math.cos(roll), 0, 0, 0, 0, 1, 0, q, 0, 0, 1];
     return [
       { translateX: swim.x.value + wobble },
-      { translateY: swim.y.value + bob },
+      { translateY: swim.y.value + bob + arcOffset },
       { rotate: pitch * Math.cos(yaw) },
       { matrix },
       { scaleX: renderScale },
@@ -330,6 +427,8 @@ export function FishLayer({
         beatPhase={swim.beatPhase}
         speedNorm={swim.speedNorm}
         yaw={swim.yaw}
+        roll={swim.roll}
+        pivots={pivots}
       />
     </Group>
   );

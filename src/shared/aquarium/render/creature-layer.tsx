@@ -58,12 +58,22 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+/** Zero-amplitude placeholder for the warp shader's fin-secondary uniforms — see `WarpedCreatureBody`'s `uniforms` comment. */
+const INERT_FIN_HUB = [0, 0, 1, 1];
+
+/** Mirrors `fish-layer.tsx`'s identical constant — see that file's doc comment for the tuning loop. */
+const ARC_GAIN_PX_PER_RAD = 30;
+/** Mirrors `fish-layer.tsx`'s identical constant — see that file's doc comment for the tuning loop. */
+const TURN_BEND_GAIN_PX_PER_RAD = 8;
+
 interface WarpedCreatureBodyProps {
   baked: BakedArt;
   phaseOffset: number;
   beatPhase: SharedValue<number>;
   speedNorm: SharedValue<number>;
   yaw: SharedValue<number>;
+  /** Turn-commitment scalar driving the body-bend term below — see `fish-layer.tsx`'s `ARC_GAIN_PX_PER_RAD` doc comment. */
+  roll: SharedValue<number>;
 }
 
 /** `fish-layer.tsx`'s `WarpedBody`, unchanged in every particular except its name — see this file's header for why that's a deliberate duplication, not a shared import. */
@@ -73,6 +83,7 @@ function WarpedCreatureBody({
   beatPhase,
   speedNorm,
   yaw,
+  roll,
 }: WarpedCreatureBodyProps) {
   const effect = getWarpEffect(Skia);
   const imageRect = Skia.XYWHRect(
@@ -84,12 +95,29 @@ function WarpedCreatureBody({
 
   const uniforms = useDerivedValue<Uniforms>(() => {
     const edgeOnDamp = lerp(0.35, 1, Math.abs(Math.cos(yaw.value)));
+    // See fish-layer.tsx's identical derivation for why the sign correction
+    // is load-bearing (the warp runs in pre-mirror local space).
+    const mirrorSign = Math.cos(yaw.value) >= 0 ? -1 : 1;
+    const bendAmp = roll.value * TURN_BEND_GAIN_PX_PER_RAD * mirrorSign;
     return {
       boundsX: baked.bounds.x,
       boundsWidth: baked.bounds.width,
       ampScale: lerp(SPINE_AMP_MIN, SPINE_AMP_MAX, Math.min(1, speedNorm.value)) * edgeOnDamp,
       k: SPINE_K,
       phase: beatPhase.value + phaseOffset,
+      bendAmp,
+      // The shared warp shader (core/sksl/warp.ts) now also takes fin
+      // secondary-rotation uniforms for molly's pectoral/caudal scull (see
+      // fish-layer.tsx) — creatures have no equivalent fins, so these are
+      // inert no-ops: zero amplitude, and a non-zero degenerate radius
+      // (never 0 — the shader divides by it) so the falloff math stays
+      // well-defined even though it's never visible.
+      pecNearHub: INERT_FIN_HUB,
+      pecFarHub: INERT_FIN_HUB,
+      caudalHub: INERT_FIN_HUB,
+      pecNearAmp: 0,
+      pecFarAmp: 0,
+      caudalAmp: 0,
     };
   });
 
@@ -211,6 +239,10 @@ export function CreatureLayer({
     const zNorm01 = Math.max(0, Math.min(1, swim.z.value / Z_MAX / 2 + 0.5));
     const renderScale = depthScale * lerp(0.92, 1.08, zNorm01);
     const wobble = 2.5 * Math.abs(Math.sin(yaw)) * Math.sin(beatPhase);
+    // See fish-layer.tsx's identical `arcOffset` for the reasoning — applies
+    // to every species here (rigid or undulating), since it's a position
+    // cue, not a body-warp one.
+    const arcOffset = roll * ARC_GAIN_PX_PER_RAD;
     const c = Math.cos(yaw);
     const s = Math.sin(yaw);
     const w = -(c >= 0 ? 1 : -1) * Math.max(Math.abs(c), EDGE_ON_MIN_WIDTH);
@@ -218,7 +250,7 @@ export function CreatureLayer({
     const matrix: Matrix4 = [w, 0, 0, 0, 0, Math.cos(roll), 0, 0, 0, 0, 1, 0, q, 0, 0, 1];
     return [
       { translateX: swim.x.value + wobble },
-      { translateY: swim.y.value + bob },
+      { translateY: swim.y.value + bob + arcOffset },
       { rotate: pitch * Math.cos(yaw) },
       { matrix },
       { scaleX: renderScale },
@@ -268,6 +300,7 @@ export function CreatureLayer({
           beatPhase={swim.beatPhase}
           speedNorm={swim.speedNorm}
           yaw={swim.yaw}
+          roll={swim.roll}
         />
       </Group>
     );

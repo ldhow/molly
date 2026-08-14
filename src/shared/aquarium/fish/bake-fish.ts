@@ -72,6 +72,13 @@ function finMembraneNodes(
   membranePaint: Paint,
   rayColor: string,
   outlineColor: string,
+  /**
+   * Path to stroke for the keyline, if different from the fin's own closed
+   * `d` — the caudal fin passes `undefined` here (its hub-radiating edges
+   * are covered by `silhouetteStrokeD` instead, see `buildFishAquariumSpec`)
+   * so it isn't outlined twice at the peduncle.
+   */
+  strokeD: string | null = fin.d,
 ): Node {
   const children: Node[] = [
     { kind: "path", d: fin.d, paint: membranePaint },
@@ -100,19 +107,22 @@ function finMembraneNodes(
         ],
       },
     },
-    // Fin keyline — bolder than the old 0.34/1.1/0.9 soft edge so fins read
-    // as drawn shapes matching the body's contour weight, but deliberately
-    // lighter than the body's own line (0.62 vs 0.88, 1.5 vs 2.1): a fin is
-    // a translucent membrane, and an equally heavy outline makes it look
-    // like a solid paddle glued on.
-    {
+  ];
+  // Fin keyline — bolder than the old 0.34/1.1/0.9 soft edge so fins read as
+  // drawn shapes matching the body's contour weight, but deliberately
+  // lighter than the body's own line (0.62 vs 0.88, 1.5 vs 2.1): a fin is a
+  // translucent membrane, and an equally heavy outline makes it look like a
+  // solid paddle glued on. `null` skips this node entirely (caudal — see
+  // `strokeD`'s doc comment above).
+  if (strokeD) {
+    children.push({
       kind: "path",
-      d: fin.d,
+      d: strokeD,
       paint: { type: "solid", color: outlineColor, opacity: 0.62 },
       stroke: { width: 1.5 },
       blur: 0.25,
-    },
-  ];
+    });
+  }
   return { kind: "group", children, opacity: fin.alpha, isolate: true };
 }
 
@@ -125,7 +135,7 @@ function finsBbox(fins: FishFins): Box {
 
 export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAquariumSpec {
   const anatomy = buildFishAnatomy(traits);
-  const { landmarks, outlineD, fins } = anatomy;
+  const { landmarks, outlineD, silhouetteStrokeD, fins } = anatomy;
   const aquaDef = aquariumColorDef(def);
   const material = materialFor(def.rarity.tier);
   const seed = traits.patternSeed ?? 0;
@@ -154,6 +164,19 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
   const bp = landmarks.backPeak.y;
   const belly = landmarks.bellyLow.y;
   const px = landmarks.peduncleTop.x;
+
+  // One shared key-light direction ("update 2d fish v2" plan Part E) every
+  // lighting cue below derives its placement from — mostly overhead with a
+  // slight lean toward the nose (x negative, since the nose sits at
+  // negative local x), matching the reference image's own upper-front key
+  // light. Previously each cue (counter-shading axis, gloss position, rim
+  // axis, AO shadow centre) was placed independently and didn't visually
+  // agree on where the light was coming from; this is what makes them read
+  // as one coherent light hitting a volumetric form instead of four
+  // unrelated glows.
+  const LIGHT_DIR = { x: -0.32, y: -0.95 };
+  const bodyCx = (landmarks.nose.x + px) / 2;
+  const bodyCy = (bp + belly) / 2;
 
   // Face anchors, as fractions of the head (u-position + a fraction of the
   // local top/bottom half-height) rather than absolute pixel offsets from
@@ -187,12 +210,37 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
   const fin = (f: FinShape) =>
     finMembraneNodes(f, finPaint(f.pivot, f.tip), rayColor, outlineColor);
 
+  // The caudal's own root tone: `p.mid` is the body skin gradient's own
+  // middle stop, and the caudal hub sits at `peduncleMidY` — "the vertical
+  // centre of the peduncle" per `anatomy.ts`'s `Landmarks` doc — so this is
+  // the body's own colour at exactly the point the tail continues from,
+  // full opacity, before easing into the fin's own tint. Without this the
+  // tail was a differently-tinted, already-translucent membrane butting
+  // straight against the opaque body at the peduncle — a colour seam on top
+  // of (and independent from) the ink-outline seam `silhouetteStrokeD`
+  // fixes below.
+  const caudalPaint: Paint = {
+    type: "linear",
+    from: fins.caudal.pivot,
+    to: fins.caudal.tip,
+    stops: [
+      { offset: 0, color: rgba(p.mid, 1) },
+      { offset: 0.25, color: rgba(darken(p.fin, 0.24), 0.95) },
+      { offset: 0.55, color: rgba(p.fin, 0.8) },
+      { offset: 1, color: rgba(p.fin, material.finTrail * 0.75) },
+    ],
+  };
+
   const nodes: Node[] = [];
 
   // Behind the body, buried at the root by the opaque skin fill drawn next.
   nodes.push(fin(fins.pectoralFar));
   nodes.push(fin(fins.pelvicFar));
-  nodes.push(fin(fins.caudal));
+  // `strokeD: null` — the caudal's outer margin is already inked as part of
+  // `silhouetteStrokeD` below (one continuous line with the body), and its
+  // hub-radiating edges are buried under the skin fill same as any other
+  // "behind" fin; stroking `fin.d` here too would double-ink the same rim.
+  nodes.push(finMembraneNodes(fins.caudal, caudalPaint, rayColor, outlineColor, null));
   nodes.push(fin(fins.dorsal));
   nodes.push(fin(fins.anal));
   nodes.push(fin(fins.pelvicNear));
@@ -220,28 +268,38 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
   skinAlbedo.push(...scalePrimitives(def, pigmentGeom, trunkBbox, outlineD, seed));
 
   const skin: Node[] = [...skinAlbedo];
-  // Counter-shading: dark at the back, light at the belly. Deliberately a
-  // SHORT stop list (was 7 soft stops fading in and out) — the mascot pass
-  // wants one readable light-to-dark sweep, not a wash of overlapping soft
-  // gradients that average out to flat mid-tone at normal viewing size.
+  // Curvature-aware core shadow, replacing the old straight top-to-bottom
+  // counter-shading gradient (Part E). A RADIAL gradient centred off to the
+  // LIGHT_DIR side of the body, with an elliptical scale matching the
+  // body's own aspect, reads as wrapping around a lit cylinder rather than
+  // a flat top-lit/bottom-lit fade: the light-facing flank sits close to
+  // the gradient's bright centre, the far flank sits near its dark edge.
+  // The final stop bounces back up slightly instead of crushing to black —
+  // a cheap stand-in for ambient/bounce light on the shadow side.
+  const shadeCx = bodyCx + LIGHT_DIR.x * landmarks.halfHeight * 1.1;
+  const shadeCy = bodyCy + LIGHT_DIR.y * landmarks.halfHeight * 1.1;
+  const bodyHalfLength = (px - landmarks.nose.x) / 2;
   skin.push({
     kind: "path",
     d: outlineD,
+    clip: outlineD,
     paint: {
-      type: "linear",
-      from: { x: 0, y: bp },
-      to: { x: 0, y: belly },
+      type: "radial",
+      center: { x: shadeCx, y: shadeCy },
+      radius: landmarks.halfHeight * 2.6,
+      scale: { x: bodyHalfLength / (landmarks.halfHeight * 1.3), y: 1 },
       stops: [
-        { offset: 0, color: "rgba(0,0,0,0.34)" },
-        { offset: 0.42, color: "rgba(0,0,0,0.0)" },
-        { offset: 0.86, color: "rgba(255,255,255,0.16)" },
-        { offset: 1, color: "rgba(0,0,0,0.14)" },
+        { offset: 0, color: "rgba(255,255,255,0.14)" },
+        { offset: 0.45, color: "rgba(0,0,0,0)" },
+        { offset: 0.82, color: "rgba(0,0,0,0.32)" },
+        { offset: 1, color: "rgba(0,0,0,0.16)" },
       ],
     },
   });
   // Rear/belly ambient occlusion — kept (it's what stops the body reading as
   // a flat decal) but tightened and pushed rearward so it shades the peduncle
-  // rather than washing the whole lower half.
+  // rather than washing the whole lower half. A grounding shadow, not a
+  // directional-light cue, so it stays independent of LIGHT_DIR.
   const shadowTone = darken(p.back, 0.6);
   skin.push({
     kind: "path",
@@ -259,14 +317,13 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
       ],
     },
   });
-  // ONE clean specular highlight on the upper flank, replacing the previous
-  // softLight bloom + wide blurred gloss STRIPE pair. The mascot reference
-  // reads its shine as a single compact bright shape, not a broad sheen —
-  // hence a tight ellipse (scale x2.2) at low blur instead of a full-width
-  // gradient band at blur 6. `material.gloss`/`bloom` still scale it, so
-  // rarer tiers stay shinier (see MATERIAL_BY_TIER in pigment.ts).
-  const glossCx = xAt(0.34);
-  const glossCy = bp * 0.62;
+  // Two-tier specular (Part E): the existing soft bloom, now paired with a
+  // small near-opaque hotspot at its centre — a real specular highlight
+  // reads as a bright core plus a softer surrounding glow, not one uniform
+  // ellipse. Both positioned along LIGHT_DIR from the body centre, so they
+  // agree with the core shadow above about where the light is.
+  const glossCx = bodyCx + LIGHT_DIR.x * landmarks.halfHeight * 0.75;
+  const glossCy = bodyCy + LIGHT_DIR.y * landmarks.halfHeight * 0.75;
   const glossPeak = Math.min(0.95, material.gloss * 1.5 + material.bloom * 0.35);
   skin.push({
     kind: "path",
@@ -286,6 +343,46 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
       ],
     },
   });
+  skin.push({
+    kind: "path",
+    d: outlineD,
+    blend: "screen",
+    blur: 0.6,
+    clip: outlineD,
+    paint: {
+      type: "radial",
+      center: { x: glossCx, y: glossCy },
+      radius: landmarks.halfHeight * 0.16,
+      scale: { x: 1.6, y: 1 },
+      stops: [
+        { offset: 0, color: `rgba(255,255,255,${Math.min(0.98, glossPeak * 1.35).toFixed(2)})` },
+        { offset: 1, color: "rgba(255,255,255,0)" },
+      ],
+    },
+  });
+  // Grounded fins (Part E): a small soft shadow crescent where each
+  // "behind"-layer fin meets the body, so a fin reads as socketed into the
+  // flank rather than pasted flat on top. Complements (doesn't fight) Part
+  // A's peduncle fix: A removes the FALSE hard line at the caudal joint,
+  // this adds a SOFT occlusion cue at the flank fins, which is where such a
+  // cue is physically correct.
+  for (const groundedFin of [
+    fins.dorsal,
+    fins.anal,
+    fins.pelvicNear,
+    fins.pelvicFar,
+    fins.pectoralFar,
+  ]) {
+    skin.push({
+      kind: "circle",
+      cx: groundedFin.pivot.x,
+      cy: groundedFin.pivot.y,
+      r: landmarks.halfHeight * 0.22,
+      blend: "multiply",
+      blur: landmarks.halfHeight * 0.12,
+      paint: { type: "solid", color: rgba(shadowTone, 0.28) },
+    });
+  }
 
   nodes.push({ kind: "group", children: skin, isolate: true });
 
@@ -319,14 +416,36 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
   // single biggest thing separating the reference's clean illustrated look
   // from a soft-shaded vector blob. `multiply` is dropped too — it made the
   // line's darkness depend on whatever it happened to sit over.
+  //
+  // Strokes `silhouetteStrokeD`, NOT `outlineD` — the body's own outline
+  // still ends in a straight peduncle edge (needed to close the FILL
+  // polygon), but inking that edge draws a hard line straight across the
+  // point where the tail attaches, independent of what the tail does behind
+  // it. `silhouetteStrokeD` walks around the caudal fin's own outer rim
+  // instead, so the ink line — not just the pixels — reads as one
+  // continuous animal. See `anatomy.ts`'s `FishAnatomy.silhouetteStrokeD`.
   nodes.push({
     kind: "path",
-    d: outlineD,
+    d: silhouetteStrokeD,
     paint: { type: "solid", color: outlineColor, opacity: 0.88 },
     stroke: { width: 2.1 },
     blur: 0.15,
   });
-  // Rim light.
+  // Rim light (Part E): axis re-derived from LIGHT_DIR instead of the old
+  // fixed nose-belly -> peduncle-back diagonal — `from` sits toward the
+  // LIGHT side (weakest rim, since a rim catches light wrapping around the
+  // silhouette on the side AWAY from the source), `to` toward the shadow
+  // side (strongest). Physically correct rim placement is asymmetric by
+  // construction here, which is what actually sells it as a rim rather than
+  // a second highlight.
+  const rimFrom = {
+    x: bodyCx + LIGHT_DIR.x * bodyHalfLength,
+    y: bodyCy + LIGHT_DIR.y * landmarks.halfHeight,
+  };
+  const rimTo = {
+    x: bodyCx - LIGHT_DIR.x * bodyHalfLength,
+    y: bodyCy - LIGHT_DIR.y * landmarks.halfHeight,
+  };
   nodes.push({
     kind: "path",
     d: outlineD,
@@ -336,8 +455,8 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
     clip: outlineD,
     paint: {
       type: "linear",
-      from: { x: landmarks.nose.x, y: belly },
-      to: { x: px, y: bp },
+      from: rimFrom,
+      to: rimTo,
       stops: [
         { offset: 0, color: "rgba(255,255,255,0)" },
         { offset: 0.55, color: `rgba(255,255,255,${(material.rim * 0.32).toFixed(2)})` },

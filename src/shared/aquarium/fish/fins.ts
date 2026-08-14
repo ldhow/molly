@@ -58,6 +58,10 @@ export interface FinSpec {
 
 export interface FinShape {
   d: string;
+  /** Open path: just the tip-to-tip margin (no hub-radiating edges) — the fin's own outer rim, for callers that want to stroke the margin without the hub seam (see `anatomy.ts`'s unified body+tail silhouette). */
+  rimD: string;
+  /** Ray tip points in fan order, first-to-last — `rimD`'s endpoints (`tips[0]`, `tips[tips.length-1]`) as raw coordinates, for callers bridging into the rim without parsing the path string. */
+  tips: XY[];
   rays: string[];
   pivot: XY;
   tip: XY;
@@ -114,7 +118,7 @@ export function buildFin(spec: FinSpec, ctx: FinBuildContext): FinShape {
 
   const bulgeAt = (i: number) => (Array.isArray(spec.bulge) ? spec.bulge[i] : spec.bulge);
 
-  let d = `M ${F(hub.x)} ${F(hub.y)} L ${F(tips[0].x)} ${F(tips[0].y)}`;
+  let margin = "";
   for (let i = 0; i < tips.length - 1; i++) {
     const a = tips[i];
     const b = tips[i + 1];
@@ -136,9 +140,11 @@ export function buildFin(spec: FinSpec, ctx: FinBuildContext): FinShape {
     const push = bulge * segLen + ripple;
     const cx = mid.x + nx * push;
     const cy = mid.y + ny * push;
-    d += ` Q ${F(cx)} ${F(cy)} ${F(b.x)} ${F(b.y)}`;
+    margin += ` Q ${F(cx)} ${F(cy)} ${F(b.x)} ${F(b.y)}`;
   }
-  d += ` L ${F(hub.x)} ${F(hub.y)} Z`;
+
+  const d = `M ${F(hub.x)} ${F(hub.y)} L ${F(tips[0].x)} ${F(tips[0].y)}${margin} L ${F(hub.x)} ${F(hub.y)} Z`;
+  const rimD = `M ${F(tips[0].x)} ${F(tips[0].y)}${margin}`;
 
   const rays = tips.map(
     (t) =>
@@ -157,6 +163,8 @@ export function buildFin(spec: FinSpec, ctx: FinBuildContext): FinShape {
 
   return {
     d,
+    rimD,
+    tips,
     rays,
     pivot: hub,
     tip,
@@ -354,6 +362,13 @@ export const CAUDAL_FIN: Record<TailId, FinSpec> = {
   // A real fork: strongly concave (negative bulge) on the middle segments,
   // gently convex at the shoulders — the shape a "function of u" body
   // profile cannot express (see this file's header).
+  //
+  // Rays are the original table x1.5 ("update 2d fish v2" plan Part D —
+  // dramatic flowing lobes toward the reference image), angles unchanged.
+  // A larger multiplier measurably pushed `scripts/verify-aquarium.ts`'s
+  // combined injectivity/padding budget (spine.ts, shared with Parts B/C's
+  // fin-secondary and turn-bend terms) past its margin; re-run that sweep
+  // before raising this further, don't just eyeball the preview.
   lyretail: {
     uRoot: 0.965,
     side: "rear",
@@ -361,12 +376,12 @@ export const CAUDAL_FIN: Record<TailId, FinSpec> = {
     axisDeg: 0,
     ref: "L",
     rays: [
-      { dAngleDeg: -34, lenFrac: 0.56 },
-      { dAngleDeg: -21, lenFrac: 0.4 },
-      { dAngleDeg: -7, lenFrac: 0.25 },
-      { dAngleDeg: 7, lenFrac: 0.245 },
-      { dAngleDeg: 21, lenFrac: 0.4 },
-      { dAngleDeg: 35, lenFrac: 0.58 },
+      { dAngleDeg: -34, lenFrac: 0.84 },
+      { dAngleDeg: -21, lenFrac: 0.6 },
+      { dAngleDeg: -7, lenFrac: 0.38 },
+      { dAngleDeg: 7, lenFrac: 0.37 },
+      { dAngleDeg: 21, lenFrac: 0.6 },
+      { dAngleDeg: 35, lenFrac: 0.87 },
     ],
     bulge: [0.06, -0.26, -0.26, -0.26, 0.06],
     scallop: 0.02,

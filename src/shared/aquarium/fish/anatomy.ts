@@ -100,12 +100,126 @@ export interface FishFins {
 }
 
 export interface FishAnatomy {
-  /** Body only — nose to peduncle to belly, one closed path. */
+  /** Body only — nose to peduncle to belly, one closed path. Still used for the fill/pattern clip — unchanged. */
   outlineD: string;
+  /**
+   * The INK KEYLINE path: body top/bottom passes with the straight
+   * peduncle end-cap replaced by a walk around the caudal fin's own outer
+   * rim (`fins.caudal.rimD`), bridged in with two smooth curves instead of
+   * straight lines. Stroking this instead of `outlineD` + the caudal's own
+   * closed-shape stroke is what stops the body and tail from reading as two
+   * separately-outlined pieces glued together — see `bake-fish.ts`.
+   */
+  silhouetteStrokeD: string;
   landmarks: Landmarks;
   baseTop: Curve1D;
   baseBottom: Curve1D;
   fins: FishFins;
+}
+
+const F2 = (n: number) => n.toFixed(2);
+
+/**
+ * Bow fraction (of chord length) used to bulge each bridge's control point
+ * away from the body's vertical centre, so a straight peduncle->rim line
+ * reads as a swept leading edge instead of a corner.
+ *
+ * An earlier version placed the control point along the BODY curve's own
+ * exit tangent, scaled by the full chord length. That reads well for
+ * `round` (a short ~15-17%-of-body-length gap, where the tip sits close
+ * enough to the peduncle that the tangent direction and the chord direction
+ * roughly agree) but folds the path on `lyretail`: its first/last rays sweep
+ * ~50 units out at an angle that diverges ~75-90 degrees from the body's own
+ * exit tangent, so a tangent-scaled handle massively overshoots and loops
+ * back across the fin's own concave margin — caught by
+ * `scripts/verify-aquarium.ts`'s `polygonSelfIntersects` check on
+ * `standard/lyretail/*` and `balloon/lyretail/*`, not eyeballed.
+ *
+ * A perpendicular bow from the chord's own midpoint can't produce that kind
+ * of unbounded loop regardless of how divergent the endpoint tangents are —
+ * it trades tangent continuity at the peduncle corner for a hard geometric
+ * guarantee, which is the right trade given this runs across every
+ * body/tail combination, not just the one it was eyeballed against. 0.15 is
+ * the largest fraction that still passes `polygonSelfIntersects` for both
+ * `round` and `lyretail`, both body types — re-run
+ * `npm run verify:aquarium` before raising it.
+ */
+const BRIDGE_BOW_FRACTION = 0.15;
+
+/**
+ * Quadratic bridge from `from` to `to`, control point bowed away from the
+ * body's vertical centre (`awayFromCenter`, `-1` = toward more negative y /
+ * up, `+1` = toward more positive y / down) by `BRIDGE_BOW_FRACTION` of the
+ * chord length.
+ */
+function bowBridge(from: XY, to: XY, awayFromCenter: -1 | 1): string {
+  const midX = (from.x + to.x) / 2;
+  const midY = (from.y + to.y) / 2;
+  const len = Math.hypot(to.x - from.x, to.y - from.y);
+  const cy = midY + awayFromCenter * len * BRIDGE_BOW_FRACTION;
+  return ` Q ${F2(midX)} ${F2(cy)} ${F2(to.x)} ${F2(to.y)}`;
+}
+
+function lineThrough(points: readonly XY[]): string {
+  return points.map((p) => ` L ${F2(p.x)} ${F2(p.y)}`).join("");
+}
+
+/**
+ * The peduncle->rim->peduncle sequence (no leading `M`, so it splices into
+ * an already-started path): bridge out to the caudal's upper lobe, walk its
+ * outer rim, bridge back in at the lower lobe. Shared verbatim by
+ * `silhouetteStrokeD` (the ink line, spliced into the body's own top/bottom
+ * passes) and `caudalFillD` (the fin's own FILL, closed straight back to
+ * `peduncleTop`) — they MUST use identical coordinates, not just visually
+ * similar ones, or the ink line bulges away from the fill it's meant to
+ * trace and leaves a gap of bare background showing through at the corners
+ * (measured via `yarn aquarium:preview` — this happened during development
+ * when the stroke path used this curve but the fill didn't).
+ */
+function tailBridgeSequence(peduncleTop: XY, peduncleBottom: XY, caudal: FinShape): string {
+  const tipFirst = caudal.tips[0];
+  const tipLast = caudal.tips[caudal.tips.length - 1];
+  // `rimD` is `M <tipFirst> <Q-chain to tipLast>` — strip the leading M so
+  // the Q-chain can be spliced into this path instead of starting a new one.
+  const rimMargin = caudal.rimD.replace(/^M\s+-?[\d.]+\s+-?[\d.]+/, "");
+  return bowBridge(peduncleTop, tipFirst, -1) + rimMargin + bowBridge(tipLast, peduncleBottom, 1);
+}
+
+/**
+ * The unified body+tail ink keyline (see `FishAnatomy.silhouetteStrokeD`).
+ * `topPass`/`bottomPass` are the SAME sampled arrays `buildFishAnatomy`
+ * already built for the fill outline — this only changes how the peduncle
+ * end is bridged, not the body curve itself.
+ */
+function buildSilhouetteStrokeD(
+  topPass: readonly XY[],
+  bottomPass: readonly XY[],
+  cap: readonly XY[],
+  bridgeSequence: string,
+): string {
+  let d = `M ${F2(topPass[0].x)} ${F2(topPass[0].y)}`;
+  d += lineThrough(topPass.slice(1));
+  d += bridgeSequence;
+  d += lineThrough(bottomPass.slice(1));
+  d += lineThrough(cap);
+  return d + " Z";
+}
+
+/**
+ * The caudal fin's own FILL, replacing the generic `buildFin()` output's
+ * hub-radiating edges with the SAME bridge curve the ink line uses, closed
+ * with a straight `peduncleTop -> peduncleBottom` edge — exactly where the
+ * body's own fill already ends, so there is no gap between the two fills
+ * for the ink line (or anything else) to reveal. The fin's hub itself is
+ * unchanged and still used for ray angles / gradient anchors — only the
+ * FILL boundary near the root moves out to the peduncle plane.
+ */
+function buildCaudalFillD(peduncleTop: XY, peduncleBottom: XY, bridgeSequence: string): string {
+  return (
+    `M ${F2(peduncleTop.x)} ${F2(peduncleTop.y)}` +
+    bridgeSequence +
+    ` L ${F2(peduncleTop.x)} ${F2(peduncleTop.y)} Z`
+  );
 }
 
 function argmax(fn: Curve1D, lo: number, hi: number, steps = 200): { u: number; value: number } {
@@ -198,7 +312,31 @@ export function buildFishAnatomy(traits: FishTraits): FishAnatomy {
     caudal: buildFin(CAUDAL_FIN[traits.tail], finCtx),
   };
 
-  return { outlineD, landmarks, baseTop, baseBottom, fins };
+  const bridgeSequence = tailBridgeSequence(
+    landmarks.peduncleTop,
+    landmarks.peduncleBottom,
+    fins.caudal,
+  );
+  const silhouetteStrokeD = buildSilhouetteStrokeD(topPass, bottomPass, cap, bridgeSequence);
+  // Replace the generic hub-anchored fill with one that reaches the SAME
+  // peduncle corners the ink line now bridges to — see `buildCaudalFillD`'s
+  // doc comment for why this must share `bridgeSequence` exactly rather
+  // than being independently shaped.
+  fins.caudal = {
+    ...fins.caudal,
+    d: buildCaudalFillD(landmarks.peduncleTop, landmarks.peduncleBottom, bridgeSequence),
+    bbox: unionBox(
+      unionBox(fins.caudal.bbox, {
+        x: landmarks.peduncleTop.x,
+        y: landmarks.peduncleTop.y,
+        width: 0,
+        height: 0,
+      }),
+      { x: landmarks.peduncleBottom.x, y: landmarks.peduncleBottom.y, width: 0, height: 0 },
+    ),
+  };
+
+  return { outlineD, silhouetteStrokeD, landmarks, baseTop, baseBottom, fins };
 }
 
 /** Sum of base half-heights at `u` — must stay positive everywhere for the body outline to be simple. */

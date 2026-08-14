@@ -14,6 +14,7 @@ import { getWarpEffect, WARP_UNIFORM_KEYS } from "@/shared/aquarium/core/sksl/wa
 import { bodyDepthAt, buildFishAnatomy } from "@/shared/aquarium/fish/anatomy";
 import { bakeFish, buildFishAquariumSpec, densityAwareDpr } from "@/shared/aquarium/fish/bake-fish";
 import { BODY_PROFILES } from "@/shared/aquarium/fish/body-profile";
+import { finPivotsFor } from "@/shared/aquarium/fish/fin-secondary";
 import type { FinShape } from "@/shared/aquarium/fish/fins";
 import {
   distanceToPolygonBoundary,
@@ -24,13 +25,19 @@ import { linspace, pchip } from "@/shared/aquarium/fish/profile";
 import { composeScene, GENERATORS, type PlacedPiece } from "@/shared/aquarium/scene/compose";
 import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
 import {
+  CAUDAL_FIN_AMP_MAX,
+  finSecondaryInjectivityBudget,
+  finSecondaryMaxDisplacement,
+  finSecondaryOffset,
   forwardWarp,
   inverseWarp,
+  PEC_FIN_AMP_MAX,
   spineInjectivityBudget,
   spineMaxDisplacement,
   SPINE_AMP_MAX,
   SPINE_K,
   SPINE_PAD,
+  type FinPivot,
   type SpineParams,
 } from "@/shared/aquarium/fish/spine";
 import { bakeCreature } from "@/shared/aquarium/creatures/bake-creature";
@@ -67,6 +74,13 @@ const SPINE_PHASE_SAMPLES = 24;
  * fin has to be tall enough to read as a fin. Don't lower this without
  * re-measuring; don't raise it without checking the fold margin stays
  * comfortable.
+ *
+ * Re-measured after "update 2d fish v2" plan Part D (leaner `standard`
+ * body, longer `lyretail`): `standard`'s own worst case actually DROPPED
+ * (leaning the body out shrinks `nMax` faster than the bigger lyretail
+ * grows it) — `balloon` is untouched by Part D and stays the tightest combo
+ * at ~0.627 (`balloon/round/sailfin`), still comfortably under this ceiling
+ * but worth watching before growing any `balloon` fin further.
  */
 const INJECTIVITY_BUDGET_MAX = 0.65;
 
@@ -80,8 +94,38 @@ const INJECTIVITY_BUDGET_MAX = 0.65;
  * so this is generous on purpose rather than chasing sub-pixel precision
  * that has no visual consequence. Re-measure, don't guess, if body/fin
  * proportions change again.
+ *
+ * Raised from 0.35 to 1.0 once the turn-bend term (`bendAmp`, "update 2d
+ * fish v2" plan Part C) started composing with the same warp: stacking the
+ * wave's own worst phase with the bend's worst sign at `balloon/round/
+ * sailfin`'s `nMax` measured ~0.83px residual — still under 1 local unit
+ * (a fraction of a device pixel at typical 2.5-3x bake DPR), so still no
+ * visible consequence, but the compounded worst case needed the tolerance
+ * re-measured rather than assumed. Re-measure again before raising
+ * `TURN_BEND_GAIN_PX_PER_RAD` (`render/fish-layer.tsx`).
  */
-const ROUND_TRIP_TOLERANCE_PX = 0.35;
+const ROUND_TRIP_TOLERANCE_PX = 1.0;
+
+/**
+ * Fold-safety floor for `finSecondaryInjectivityBudget`'s worst-case
+ * Jacobian determinant — must stay comfortably above 0 (where the rotation
+ * field folds). Measured worst case across all 8 body/tail/dorsal
+ * combinations at `PEC_FIN_AMP_MAX`/`CAUDAL_FIN_AMP_MAX`: 0.907 (pecNear,
+ * constant across combos since pectoral geometry doesn't depend on
+ * tail/dorsal). 0.5 leaves a comfortable ~45% margin below that — re-measure
+ * before raising `PEC_FIN_AMP_MAX`/`CAUDAL_FIN_AMP_MAX` or shrinking a fin's
+ * falloff-radius margin (`fin-secondary.ts`'s `FALLOFF_MARGIN`).
+ */
+const FIN_SECONDARY_DET_MIN = 0.5;
+
+/**
+ * `TURN_BEND_GAIN_PX_PER_RAD * ROLL_MAX` — the worst-case static turn-bend
+ * amplitude (`render/fish-layer.tsx` / `sim/swim.ts`), duplicated as a
+ * literal for the same "fails loudly if the source changes" reason as
+ * `INJECTIVITY_BUDGET_MAX`'s neighbors. Swept with both signs below, since
+ * `mirrorSign` means either sign is reachable depending on facing.
+ */
+const TURN_BEND_MAX = 8 * 0.65;
 
 const BODIES: BodyId[] = ["standard", "balloon"];
 const TAILS: TailId[] = ["round", "lyretail"];
@@ -95,7 +139,10 @@ const DORSALS: DorsalId[] = ["standard", "sailfin"];
  * table, the bounds encode the actual design brief.
  */
 const PROPORTION_SPEC: Record<BodyId, { aspect: [number, number] }> = {
-  standard: { aspect: [1.85, 2.1] },
+  // Widened from [1.85, 2.1] — "update 2d fish v2" plan Part D leaned
+  // `standard` out toward the reference image (measured 2.273 after the
+  // depth scale in body-profile.ts).
+  standard: { aspect: [2.15, 2.4] },
   balloon: { aspect: [1.15, 1.45] },
 };
 
@@ -145,6 +192,21 @@ async function main() {
           `${label} body outline is simple`,
           !polygonSelfIntersects(bodyPoly),
           `${bodyPoly.length} points`,
+        );
+
+        // (2b) The unified body+tail ink-line path ("update 2d fish v2"
+        // plan, Part A — see anatomy.ts's `silhouetteStrokeD`) must also be
+        // simple. This is the harder case: unlike the body outline or a
+        // single fin polygon, this path is stitched together from three
+        // different curve families at the peduncle join — the body's own
+        // PCHIP passes, two hand-tuned bridge Beziers, and the caudal fin's
+        // own bulge-curve margin — and lyretail's concave forked margin is
+        // the shape most likely to fold across a bridge.
+        const strokePoly = flattenPath(anatomy.silhouetteStrokeD, { tolerance: 0.6 })[0];
+        check(
+          `${label} unified body+tail silhouette stroke is simple`,
+          !polygonSelfIntersects(strokePoly),
+          `${strokePoly.length} points`,
         );
 
         // (3) Every fin polygon is simple too — the fan builder's real risk
@@ -360,24 +422,31 @@ async function main() {
 
         let maxErr = 0;
         let worstBudget = 0;
-        for (let pi = 0; pi < SPINE_PHASE_SAMPLES; pi++) {
-          const phase = (pi / SPINE_PHASE_SAMPLES) * Math.PI * 2;
-          const p: SpineParams = {
-            boundsX,
-            boundsWidth,
-            ampScale: SPINE_AMP_MAX,
-            k: SPINE_K,
-            phase,
-          };
-          for (let i = 0; i <= 20; i++) {
-            const x = boundsX + (boundsWidth * i) / 20;
-            for (const n of [-nMax, 0, nMax]) {
-              const fwd = forwardWarp(x, n, p);
-              const inv = inverseWarp(fwd.x, fwd.y, p);
-              maxErr = Math.max(maxErr, Math.abs(inv.x - x), Math.abs(inv.n - n));
+        // Sweeps both signs of the static turn-bend term alongside phase —
+        // it's non-oscillating (unlike ampScale), so the true worst case is
+        // wherever it lands ON TOP of the wave's own worst phase, and
+        // `mirrorSign` means either sign is physically reachable.
+        for (const bendAmp of [0, TURN_BEND_MAX, -TURN_BEND_MAX]) {
+          for (let pi = 0; pi < SPINE_PHASE_SAMPLES; pi++) {
+            const phase = (pi / SPINE_PHASE_SAMPLES) * Math.PI * 2;
+            const p: SpineParams = {
+              boundsX,
+              boundsWidth,
+              ampScale: SPINE_AMP_MAX,
+              k: SPINE_K,
+              phase,
+              bendAmp,
+            };
+            for (let i = 0; i <= 20; i++) {
+              const x = boundsX + (boundsWidth * i) / 20;
+              for (const n of [-nMax, 0, nMax]) {
+                const fwd = forwardWarp(x, n, p);
+                const inv = inverseWarp(fwd.x, fwd.y, p);
+                maxErr = Math.max(maxErr, Math.abs(inv.x - x), Math.abs(inv.n - n));
+              }
             }
+            worstBudget = Math.max(worstBudget, spineInjectivityBudget(p, nMax));
           }
-          worstBudget = Math.max(worstBudget, spineInjectivityBudget(p, nMax));
         }
         check(
           `${body}/${tail}/${dorsal} forward/inverse round-trip < ${ROUND_TRIP_TOLERANCE_PX}px`,
@@ -391,11 +460,37 @@ async function main() {
           `budget=${worstBudget.toFixed(3)} at nMax=${nMax.toFixed(0)} (real bake bounds, ${SPINE_PHASE_SAMPLES}-phase sweep)`,
         );
 
-        const maxDisp = spineMaxDisplacement(boundsX, boundsWidth, SPINE_AMP_MAX, nMax);
+        const maxDisp = Math.max(
+          spineMaxDisplacement(boundsX, boundsWidth, SPINE_AMP_MAX, nMax, 60, TURN_BEND_MAX),
+          spineMaxDisplacement(boundsX, boundsWidth, SPINE_AMP_MAX, nMax, 60, -TURN_BEND_MAX),
+        );
+
+        // Fin secondary motion (pectoral near/far scull, caudal lag — see
+        // fish/spine.ts's finSecondaryOffset) composes AFTER this base warp,
+        // so its own fold-safety and padding demands are checked here
+        // against the SAME real bake geometry, not estimated separately.
+        const anatomy = buildFishAnatomy(traits);
+        const pivots = finPivotsFor(anatomy.fins);
+        const finTargets: [string, FinPivot, number][] = [
+          ["pecNear", pivots.pecNear, PEC_FIN_AMP_MAX],
+          ["pecFar", pivots.pecFar, PEC_FIN_AMP_MAX],
+          ["caudal", pivots.caudal, CAUDAL_FIN_AMP_MAX],
+        ];
+        let finMaxDisp = 0;
+        for (const [finName, pivot, ampMax] of finTargets) {
+          const finBudget = finSecondaryInjectivityBudget(pivot, ampMax);
+          check(
+            `${body}/${tail}/${dorsal} ${finName} secondary rotation stays injective (det > ${FIN_SECONDARY_DET_MIN})`,
+            finBudget > FIN_SECONDARY_DET_MIN,
+            `min det=${finBudget.toFixed(3)} at amp=${ampMax.toFixed(2)}rad, radius=(${pivot.radiusX.toFixed(1)},${pivot.radiusN.toFixed(1)})`,
+          );
+          finMaxDisp = Math.max(finMaxDisp, finSecondaryMaxDisplacement(pivot, ampMax));
+        }
+
         check(
-          `${body}/${tail}/${dorsal} SPINE_PAD (${SPINE_PAD}) covers max displacement`,
-          maxDisp < SPINE_PAD,
-          `max displacement=${maxDisp.toFixed(1)}px`,
+          `${body}/${tail}/${dorsal} SPINE_PAD (${SPINE_PAD}) covers base+bend + fin-secondary max displacement`,
+          maxDisp + finMaxDisp < SPINE_PAD,
+          `base+bend=${maxDisp.toFixed(1)}px + fin=${finMaxDisp.toFixed(1)}px = ${(maxDisp + finMaxDisp).toFixed(1)}px`,
         );
       }
     }
@@ -428,16 +523,40 @@ async function main() {
       MipmapMode.None,
     );
 
-    const p: SpineParams = { boundsX: 0, boundsWidth: srcW, ampScale: 10, k: SPINE_K, phase: 0.7 };
+    const p: SpineParams = {
+      boundsX: 0,
+      boundsWidth: srcW,
+      ampScale: 10,
+      k: SPINE_K,
+      phase: 0.7,
+      bendAmp: 3,
+    };
+    // Synthetic (not real-geometry) pivots inside the srcW x srcH test
+    // image, just to exercise finSecondaryOffset's SkSL twin against three
+    // simultaneously-active fins with different signs/amplitudes — real
+    // pivot placement is covered by the fold-safety sweep above instead.
+    const pecNearPivot: FinPivot = { x: 40, n: 20, radiusX: 15, radiusN: 12 };
+    const pecFarPivot: FinPivot = { x: 70, n: 45, radiusX: 15, radiusN: 12 };
+    const caudalPivot: FinPivot = { x: 100, n: 32, radiusX: 20, radiusN: 18 };
+    const pecNearAmp = 0.2;
+    const pecFarAmp = -0.15;
+    const caudalAmp = 0.1;
     const uniforms = {
       boundsX: p.boundsX,
       boundsWidth: p.boundsWidth,
       ampScale: p.ampScale,
       k: p.k,
       phase: p.phase,
+      bendAmp: p.bendAmp ?? 0,
+      pecNearHub: [pecNearPivot.x, pecNearPivot.n, pecNearPivot.radiusX, pecNearPivot.radiusN],
+      pecFarHub: [pecFarPivot.x, pecFarPivot.n, pecFarPivot.radiusX, pecFarPivot.radiusN],
+      caudalHub: [caudalPivot.x, caudalPivot.n, caudalPivot.radiusX, caudalPivot.radiusN],
+      pecNearAmp,
+      pecFarAmp,
+      caudalAmp,
     };
     const warpShader = effect.makeShaderWithChildren(
-      WARP_UNIFORM_KEYS.map((key) => uniforms[key as keyof typeof uniforms]),
+      WARP_UNIFORM_KEYS.flatMap((key) => uniforms[key as keyof typeof uniforms]),
       [childShader],
     );
     const pad = 30;
@@ -458,13 +577,20 @@ async function main() {
         const decodedX = px[0];
         const decodedY = (px[1] / 255) * srcH;
         const inv = inverseWarp(qx, qy, p);
-        const err = Math.max(Math.abs(decodedX - inv.x), Math.abs(decodedY - inv.n));
+        // The shader applies fin secondary rotations AFTER the base inverse
+        // solve, in pecNear -> pecFar -> caudal order (see warp.ts's
+        // main()) — compose the TS reference the same way, or this would
+        // silently only be checking the base warp again.
+        let expected = finSecondaryOffset(inv.x, inv.n, pecNearPivot, pecNearAmp);
+        expected = finSecondaryOffset(expected.x, expected.n, pecFarPivot, pecFarAmp);
+        expected = finSecondaryOffset(expected.x, expected.n, caudalPivot, caudalAmp);
+        const err = Math.max(Math.abs(decodedX - expected.x), Math.abs(decodedY - expected.n));
         maxAgreementErr = Math.max(maxAgreementErr, err);
         sampleCount++;
       }
     }
     check(
-      `shader sampling matches TS inverseWarp (${sampleCount} points, nearest-filter tolerance)`,
+      `shader sampling matches TS inverseWarp + finSecondaryOffset (${sampleCount} points, nearest-filter tolerance)`,
       maxAgreementErr < 1.5,
       `max disagreement ${maxAgreementErr.toFixed(2)}px across ${sampleCount} points`,
     );
@@ -640,6 +766,14 @@ async function main() {
     // re-examined, instead of silently tracking a moving target.
     const TURN_RATE_CEIL = 3.0;
     const EDGE_ON_MIN_WIDTH = 0.3;
+    // Duplicated from sim/swim.ts / render/fish-layer.tsx for the same
+    // "fails loudly if the source changes without this trace being
+    // re-examined" reason as TURN_RATE_CEIL above ("update 2d fish v2"
+    // plan, Part C).
+    const TURN_RATE_MIN = 1.5;
+    const ARC_GAIN_PX_PER_RAD = 30;
+    /** Screen-px threshold below which the wall-turn arc wouldn't read as visible. */
+    const ARC_VISIBLE_PX = 8;
 
     function mulberry32(seed: number): () => number {
       let a = seed;
@@ -673,6 +807,7 @@ async function main() {
       meanReversalsPerMin: number;
       meanAbsVx: number;
       meanStraightness: number;
+      turningArcVisibleFrac: number;
     }
 
     function runTrace(currentStrength: number): TraceResult {
@@ -685,6 +820,8 @@ async function main() {
       let meanAbsVxSum = 0;
       let straightnessSum = 0;
       let straightnessWindows = 0;
+      let turningSteps = 0;
+      let turningVisibleSteps = 0;
 
       for (let seedIdx = 0; seedIdx < SEEDS; seedIdx++) {
         const seed = seedIdx / SEEDS;
@@ -747,6 +884,16 @@ async function main() {
           vxAbsSum += Math.abs(state.x - prevX) / DT;
           prevX = state.x;
 
+          // Visible wall-turn arc: while actively turning (turnRate above
+          // the baseline cruise-arc rate), does the render-layer's
+          // roll-driven `arcOffset` reach a visible magnitude? Mirrors
+          // `fish-layer.tsx`'s `arcOffset = roll * ARC_GAIN_PX_PER_RAD`
+          // exactly — this is pure math on `state.roll`, no Skia needed.
+          if (Math.abs(state.turnRate) > TURN_RATE_MIN) {
+            turningSteps++;
+            if (Math.abs(state.roll * ARC_GAIN_PX_PER_RAD) > ARC_VISIBLE_PX) turningVisibleSteps++;
+          }
+
           winPathLen += Math.hypot(state.x - winPrevX, state.y - winPrevY);
           winPrevX = state.x;
           winPrevY = state.y;
@@ -775,6 +922,7 @@ async function main() {
         meanReversalsPerMin: reversalsPerMinSum / SEEDS,
         meanAbsVx: meanAbsVxSum / SEEDS,
         meanStraightness: straightnessWindows > 0 ? straightnessSum / straightnessWindows : 0,
+        turningArcVisibleFrac: turningSteps > 0 ? turningVisibleSteps / turningSteps : 0,
       };
     }
 
@@ -812,6 +960,11 @@ async function main() {
         `${tag}: straightness index in the natural 0.35-0.75 band`,
         r.meanStraightness >= 0.35 && r.meanStraightness <= 0.75,
         `${r.meanStraightness.toFixed(2)} (<0.15 = circling, >0.9 = on rails)`,
+      );
+      check(
+        `${tag}: wall-turns produce a visible (>${ARC_VISIBLE_PX}px) on-screen arc most of the time`,
+        r.turningArcVisibleFrac > 0.5,
+        `${(r.turningArcVisibleFrac * 100).toFixed(0)}% of actively-turning steps (|turnRate| > ${TURN_RATE_MIN}) exceed the visibility threshold`,
       );
     }
   }

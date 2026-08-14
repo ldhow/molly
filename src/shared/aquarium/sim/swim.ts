@@ -85,6 +85,35 @@ const HOVER_JITTER = 20;
 export const MAX_DT = 0.064;
 
 /**
+ * Banking gain/ceiling ("update 2d fish v2" plan, Part C). The previous
+ * `turnRate * 0.16` clamped at 0.3 rad topped out at `cos(0.3) ≈ 0.955` — a
+ * 4.5% squash under `render/fish-layer.tsx`'s `Math.cos(roll)` scale term,
+ * effectively invisible. `roll` only ever feeds that scale (never a
+ * rotation), so widening it carries no flip risk. `ROLL_GAIN` is tuned so a
+ * sustained wall-turn (`turnRate` approaching `TURN_RATE_MAX_WALL`) reaches
+ * `ROLL_MAX`, giving `cos(0.65) ≈ 0.796` — a ~20% squash, in the project's
+ * own `skia-aquarium` skill's ~20-30% guidance for banking into a turn.
+ */
+const ROLL_GAIN = 0.25;
+const ROLL_MAX = 0.65;
+
+/**
+ * How much a sustained hard turn cuts speed, as a fraction of the current
+ * target ("update 2d fish v2" plan, Part C — the project's own
+ * `skia-aquarium` skill: "Turns cost speed... reduce speed when turning
+ * hard"). 0.35 (the skill suggests up to ~0.55), ramped from `TURN_RATE_MIN`
+ * rather than from 0 (see the ramp below) — confirmed via
+ * `scripts/verify-aquarium.ts`'s swim trace that `meanAbsVx` clears the
+ * cruise floor at this value (~26px/s vs a ~25px/s floor, current on or
+ * off). The FIRST version of this ramp started at turnRate=0 instead and
+ * measured a ~38% mean-speed drop — `omega` is already `TURN_RATE_MIN` even
+ * during ordinary no-wall retargeting, so that version penalized nearly
+ * every heading correction, not just hard wall-turns. Raise cautiously and
+ * re-check that trace, not just the turn's visual weight.
+ */
+const TURN_SPEED_PENALTY_MAX = 0.35;
+
+/**
  * Pulls the fish's heading toward whichever of "facing screen-right" (yaw 0)
  * or "facing screen-left" (yaw π) is nearer, so it mostly presents its
  * flank — the art is the point, in a cozy tank. Dropped to 0 while wall-
@@ -314,6 +343,24 @@ export function stepV2Swim(
   const target = targetSpeed(s.mode, base, s.beatPhase, seedPhase);
   const tau = target > s.speed ? ACCEL_TAU : DECEL_TAU;
   s.speed = approach(s.speed, target, dt, tau);
+  // Applied AFTER the approach (not folded into `target` before it):
+  // `turnRate` is smoothed at `TURN_RATE_TAU` (0.25s), much faster than
+  // `DECEL_TAU` (1.4s) — folding the penalty into the pre-approach target
+  // would desync the speed dip from the visible turn by over a second.
+  //
+  // Ramped from TURN_RATE_MIN, not from 0: `omega` itself is already
+  // TURN_RATE_MIN even during ordinary, no-wall retargeting (`lerp` at
+  // q=0), so a ratio against TURN_RATE_MAX_WALL starting at turnRate=0 fired
+  // on nearly every heading correction, not just hard wall-turns — measured
+  // via `scripts/verify-aquarium.ts`'s swim trace as an ~38% mean-speed
+  // drop against the existing cruise-floor check. Ramping from the baseline
+  // cruise-turn rate instead means routine steering pays nothing and only
+  // turning HARDER than that costs speed, matching the intent ("turns cost
+  // speed... when turning hard").
+  const turnPenalty =
+    clamp((Math.abs(s.turnRate) - TURN_RATE_MIN) / (TURN_RATE_MAX_WALL - TURN_RATE_MIN), 0, 1) *
+    TURN_SPEED_PENALTY_MAX;
+  s.speed *= 1 - turnPenalty;
 
   const vx = Math.cos(s.yaw) * s.speed;
   const vz = Math.sin(s.yaw) * s.speed;
@@ -352,8 +399,9 @@ export function stepV2Swim(
 
   // Roll — a genuine bank into the turn (see fish-layer.tsx's matrix, where
   // this collapses to a vertical squash under the perspective projection),
-  // not a screen-space Z rotation.
-  const rollTarget = clamp(s.turnRate * 0.16, -0.3, 0.3);
+  // not a screen-space Z rotation. Also drives the turn's on-screen arc and
+  // body-bend in fish-layer.tsx/spine.ts — see ROLL_GAIN's doc comment.
+  const rollTarget = clamp(s.turnRate * ROLL_GAIN, -ROLL_MAX, ROLL_MAX);
   s.roll = approach(s.roll, rollTarget, dt, ROLL_TAU);
 
   s.modeLeft -= dt;

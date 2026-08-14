@@ -26,6 +26,16 @@ export interface SpineParams {
   ampScale: number;
   k: number;
   phase: number;
+  /**
+   * Static (non-oscillating) turn-bend term — a `u²`-weighted lateral
+   * offset (zero at the nose, growing quadratically toward the tail,
+   * tail-weighted in the same spirit as the base wave's envelope though not
+   * the identical curve) added to `d(x)` so the body visibly arcs into a
+   * wall-turn (see `sim/swim.ts`'s `roll` and `render/fish-layer.tsx`).
+   * Optional; defaults to 0 (no bend) so every existing caller that doesn't
+   * know about turning stays untouched.
+   */
+  bendAmp?: number;
 }
 
 /**
@@ -48,12 +58,22 @@ export const SPINE_AMP_MAX = 7;
  * a point's unwarped position, at `SPINE_AMP_MAX`, plus a small margin.
  * `<ImageShader tx="decal" ty="decal">` needs the destination rect to fully
  * contain the forward image of the bake bounds or the edge row smears across
- * the padded region — this is what prevents that. 22 (not 18) because the
- * original-silhouette redesign's deeper `balloon` body pushes max
- * displacement to ~18.7px — measured via `verify-aquarium.ts`'s sweep, not
- * guessed; re-measure before changing body/fin proportions again.
+ * the padded region — this is what prevents that. Originally 22 (not 18)
+ * because the original-silhouette redesign's deeper `balloon` body pushes
+ * max displacement to ~18.7px — measured via `verify-aquarium.ts`'s sweep,
+ * not guessed.
+ *
+ * Raised to 28 once two more terms started composing with this same warp:
+ * fin secondary motion (pectoral/caudal scull) adds ~2.7-3.2px, and the
+ * turn-bend term (`bendAmp`, "update 2d fish v2" plan Part C —
+ * `render/fish-layer.tsx`'s `TURN_BEND_GAIN_PX_PER_RAD`) adds another
+ * ~4-6px depending on trait combo. Measured worst combined total: ~26.4px
+ * (`balloon/round/sailfin`, base+bend=23.8px + fin=2.7px) — 28 leaves a
+ * ~1.6px margin. Re-measure (don't assume it still fits) before Part D of
+ * that plan grows fins further; raising `SPINE_PAD` again there is
+ * expected, not a regression.
  */
-export const SPINE_PAD = 22;
+export const SPINE_PAD = 28;
 
 /** Wave number — matches `swim-model.ts`'s `waveDy` for a familiar swim feel. */
 export const SPINE_K = 4.8;
@@ -81,12 +101,13 @@ function spineAt(x: number, p: SpineParams): { d: number; dx: number; dxx: numbe
   const angle = p.phase - p.k * u;
   const s = Math.sin(angle);
   const c = Math.cos(angle);
+  const bendAmp = p.bendAmp ?? 0;
 
-  const d = A * s;
+  const d = A * s + bendAmp * u * u;
   // d/du [A(u) sin(phase - k u)] = A'(u) sin - k A(u) cos
-  const dgdu = Ad * s - p.k * A * c;
+  const dgdu = Ad * s - p.k * A * c + bendAmp * 2 * u;
   // d2/du2 [...] = A''(u) sin - 2k A'(u) cos - k^2 A(u) sin
-  const d2gdu2 = Add * s - 2 * p.k * Ad * c - p.k * p.k * A * s;
+  const d2gdu2 = Add * s - 2 * p.k * Ad * c - p.k * p.k * A * s + bendAmp * 2;
 
   return { d, dx: dgdu * invBw, dxx: d2gdu2 * invBw * invBw };
 }
@@ -138,11 +159,133 @@ export function spineInjectivityBudget(p: SpineParams, nMax: number, samples = 2
   return worst;
 }
 
+// ---------------------------------------------------------------------------
+// Fin secondary motion — independent-but-connected pectoral scull / caudal
+// lag, composed AFTER the base spine warp above (see `render/fish-layer.tsx`:
+// the shader resolves a destination pixel to local `(x, n)` via
+// `inverseWarp`, THEN perturbs that already-warped point per targeted fin,
+// THEN samples the baked texture). This is a perturbative approximation,
+// not a jointly-solved warp — fine for a subtle secondary wiggle, wrong tool
+// for the primary silhouette bend `spineAt` already owns.
+// ---------------------------------------------------------------------------
+
+export interface FinPivot {
+  /** Hub position, in the SAME local space `inverseWarp` resolves to. */
+  x: number;
+  n: number;
+  /** Falloff semi-axes — the rotation reaches full `amp` at the hub and eases to 0 at this ellipse. */
+  radiusX: number;
+  radiusN: number;
+}
+
+/**
+ * Amplitude ceilings (radians) — conservative starting points, not measured
+ * yet. `scripts/verify-aquarium.ts` sweeps `finSecondaryInjectivityBudget`
+ * against these for every trait combination; raise them only after
+ * confirming the budget stays safe, the same discipline `SPINE_AMP_MAX`
+ * documents above.
+ */
+export const PEC_FIN_AMP_MAX = 0.28;
+export const CAUDAL_FIN_AMP_MAX = 0.18;
+/** Phase lead on the near pectoral (the far pectoral gets `+ Math.PI`) — makes the two scull out of phase instead of mirrored. */
+export const PEC_PHASE_OFFSET = Math.PI / 6;
+/** Fixed angular lag on the caudal's secondary term — approximates "trailing" since the shader only ever sees the current `beatPhase`, not true history. */
+export const CAUDAL_LAG_RAD = Math.PI / 8;
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Rotates `(x, n)` by `amp` radians around `pivot`'s hub, eased to identity
+ * past the falloff ellipse (`radiusX`/`radiusN`) via `smoothstep`. `core/sksl/warp.ts`
+ * re-derives this identical formula in SkSL — keep the two in numeric sync
+ * the same deliberate way `spineAt` and its SkSL twin already are (written
+ * twice, not templated).
+ */
+export function finSecondaryOffset(
+  x: number,
+  n: number,
+  pivot: FinPivot,
+  amp: number,
+): { x: number; n: number } {
+  const dx = x - pivot.x;
+  const dn = n - pivot.n;
+  const dist = Math.hypot(dx / pivot.radiusX, dn / pivot.radiusN);
+  const theta = amp * smoothstep(1, 0, dist);
+  const c = Math.cos(theta);
+  const s = Math.sin(theta);
+  return { x: pivot.x + dx * c - dn * s, n: pivot.n + dx * s + dn * c };
+}
+
+/**
+ * Fold-safety budget for `finSecondaryOffset`: the WORST-CASE (minimum)
+ * Jacobian determinant of the rotation field, via central finite
+ * differences over a grid spanning a bit past the falloff ellipse. Unlike
+ * `spineInjectivityBudget`'s "ratio against 1" convention, this returns the
+ * determinant itself — the map folds where it crosses <= 0, so callers
+ * should require a comfortable positive margin (measured per
+ * `scripts/verify-aquarium.ts`, not derived from first principles: a
+ * spatially-varying rotation field's fold point doesn't reduce to a single
+ * closed-form curvature term the way the base warp's does).
+ */
+export function finSecondaryInjectivityBudget(pivot: FinPivot, amp: number, samples = 40): number {
+  const h = Math.min(pivot.radiusX, pivot.radiusN) * 0.01;
+  const span = 1.3; // sample a bit past the falloff radius, where the field re-approaches identity but the Jacobian could still misbehave near the edge
+  let worst = Infinity;
+  for (let i = 0; i <= samples; i++) {
+    for (let j = 0; j <= samples; j++) {
+      const x = pivot.x + (-span + (2 * span * i) / samples) * pivot.radiusX;
+      const n = pivot.n + (-span + (2 * span * j) / samples) * pivot.radiusN;
+      const p0 = finSecondaryOffset(x, n, pivot, amp);
+      const px = finSecondaryOffset(x + h, n, pivot, amp);
+      const pn = finSecondaryOffset(x, n + h, pivot, amp);
+      const dXdx = (px.x - p0.x) / h;
+      const dNdx = (px.n - p0.n) / h;
+      const dXdn = (pn.x - p0.x) / h;
+      const dNdn = (pn.n - p0.n) / h;
+      const det = dXdx * dNdn - dXdn * dNdx;
+      worst = Math.min(worst, det);
+    }
+  }
+  return worst;
+}
+
+/**
+ * How far `finSecondaryOffset` can move a point from its input position —
+ * the additional padding it demands ON TOP of `spineMaxDisplacement`'s own
+ * (the two compose: base warp first, then this), since the destination rect
+ * must stay large enough that the FULL composed inverse map never samples
+ * past the padded source bounds. Sweeps a grid out to the same margin
+ * `finSecondaryInjectivityBudget` samples.
+ */
+export function finSecondaryMaxDisplacement(pivot: FinPivot, amp: number, samples = 60): number {
+  const span = 1.3;
+  let maxAbs = 0;
+  for (let i = 0; i <= samples; i++) {
+    for (let j = 0; j <= samples; j++) {
+      const x = pivot.x + (-span + (2 * span * i) / samples) * pivot.radiusX;
+      const n = pivot.n + (-span + (2 * span * j) / samples) * pivot.radiusN;
+      const { x: wx, n: wn } = finSecondaryOffset(x, n, pivot, amp);
+      maxAbs = Math.max(maxAbs, Math.abs(wx - x), Math.abs(wn - n));
+    }
+  }
+  return maxAbs;
+}
+
 /**
  * How far the forward map can push a point beyond the source bounds, so the
  * caller can pad the draw rect enough that `tx="decal" ty="decal"` never
  * samples (and smears) the image edge. Sweeps `x` across the bounds and `n`
  * across `[-nMax, nMax]`, plus a full beat of `phase`.
+ *
+ * `bendAmp` (default 0) folds in the static turn-bend term — since it's
+ * non-oscillating, the true worst case is wherever `ampScale`'s own sweep
+ * lands, so sweeping `phase` with a fixed `bendAmp` (rather than also
+ * sweeping `bendAmp`'s own sign) is sufficient: the term is monotonic in its
+ * own sign, so the caller sweeping ±`TURN_BEND_GAIN_PX_PER_RAD` and taking
+ * the max covers both directions.
  */
 export function spineMaxDisplacement(
   boundsX: number,
@@ -150,11 +293,12 @@ export function spineMaxDisplacement(
   ampScale: number,
   nMax: number,
   samples = 60,
+  bendAmp = 0,
 ): number {
   let maxAbs = 0;
   for (let pi = 0; pi < 24; pi++) {
     const phase = (pi / 24) * Math.PI * 2;
-    const p: SpineParams = { boundsX, boundsWidth, ampScale, k: SPINE_K, phase };
+    const p: SpineParams = { boundsX, boundsWidth, ampScale, k: SPINE_K, phase, bendAmp };
     for (let i = 0; i <= samples; i++) {
       const x = boundsX + (boundsWidth * i) / samples;
       for (const n of [-nMax, -nMax / 2, 0, nMax / 2, nMax]) {
