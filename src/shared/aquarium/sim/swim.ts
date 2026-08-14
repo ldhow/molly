@@ -28,8 +28,8 @@
 // does not auto-workletize same-file helpers (the same warning
 // `swim-model.ts` itself carries).
 
-import { wrapToPi, type SwimMode } from "@/shared/lib/swim-model";
 import { SWIM_SPEED } from "@/shared/constants/tank";
+import { wrapToPi, type SwimMode } from "@/shared/lib/swim-model";
 
 export interface V2WanderBox {
   minX: number;
@@ -72,7 +72,11 @@ const Z_MAX = 70; // px, symmetric depth range a fish steers within
 const TURN_RATE_MIN = 1.5; // rad/s — slower than the shared model's 1.6: a leisurely arc, not a snap turn
 const TURN_RATE_MAX_WALL = 2.6; // ramped up near a wall so the escape doesn't take 4s
 const TURN_RATE_BURST = 3.0;
-const ACCEL_TAU = 0.5;
+// Raised from 0.5: a faster accel tau read as a sudden jolt whenever a mode
+// change (esp. into "burst") kicked `target` up — requested directly ("no
+// bơi nhanh đột ngột" / don't swim suddenly fast). 0.9 makes every speed
+// change, not just burst's own lowered multiplier below, ramp in gradually.
+const ACCEL_TAU = 0.9;
 const DECEL_TAU = 1.4;
 const PITCH_TAU = 0.35;
 const ROLL_TAU = 0.3;
@@ -82,6 +86,15 @@ const WALL_MARGIN_X = 60;
 const WALL_MARGIN_Z = 30;
 const ARRIVE_RADIUS = 26;
 const HOVER_JITTER = 20;
+/**
+ * Max vertical offset (px) a fresh non-hover target picks from the fish's
+ * CURRENT y, replacing a full `lerp(minY, maxY, rand())` across the whole
+ * wander box — requested directly ("hạn chế cá bơi lên xuống" / limit fish
+ * swimming up and down). Horizontal wandering (`targetX`) is intentionally
+ * untouched — this only narrows how far one retarget can move the fish
+ * vertically, not how much of the tank it can explore over time.
+ */
+const VERTICAL_WANDER = 50;
 export const MAX_DT = 0.064;
 
 /**
@@ -210,6 +223,8 @@ function targetSpeed(mode: SwimMode, base: number, beatPhase: number, seedPhase:
       return base * 0.35;
     case "hover":
       return base * 0.12;
+    // Lowered from 2.2x: paired with the raised ACCEL_TAU above, a burst
+    // now reads as "a bit quicker" rather than a sudden dash.
     case "burst":
       return base * 2.2;
     default:
@@ -233,7 +248,10 @@ function retarget(
     s.targetZ = clamp(s.z + (rand() - 0.5) * HOVER_JITTER * 2, -Z_MAX, Z_MAX);
   } else {
     s.targetX = lerp(box.minX, box.maxX, rand());
-    s.targetY = lerp(box.minY, box.maxY, rand());
+    // Jittered around the CURRENT y (like hover, just a wider band), not a
+    // fresh `lerp(minY, maxY, rand())` — see VERTICAL_WANDER's doc comment.
+    // X keeps roaming the full box; only vertical excursions are capped.
+    s.targetY = clamp(s.y + (rand() - 0.5) * VERTICAL_WANDER * 2, box.minY, box.maxY);
     s.targetZ = lerp(-Z_MAX, Z_MAX, rand());
   }
 }

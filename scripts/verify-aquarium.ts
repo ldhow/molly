@@ -930,7 +930,16 @@ async function main() {
     // opted-in current strength — the current blends `yawDesired`, so it can
     // in principle break the turn-rate/bounds guarantees, and "we only
     // eyeballed the new path" is exactly how that regresses silently.
-    const cruiseFloor = 0.45 * SWIM_SPEED;
+    //
+    // Lowered from 0.45x on direct request ("giảm tốc độ bơi... không bơi
+    // nhanh đột ngột" / reduce swim speed, no sudden fast swimming): a
+    // slower ACCEL_TAU and a lower burst multiplier (sim/swim.ts) are the
+    // whole point of that change, and they deliberately pull meanAbsVx down
+    // with them — measured ~22.5px/s (current on) at speedFactor=1, so 0.38x
+    // leaves a real but not padded-out margin. This floor exists to catch
+    // the OTHER kind of regression (a steering bug that stalls the fish
+    // outright), not to hold the pace at its old value.
+    const cruiseFloor = 0.38 * SWIM_SPEED;
     for (const { label, strength } of [
       { label: "current off", strength: 0 },
       { label: "current on", strength: 1 },

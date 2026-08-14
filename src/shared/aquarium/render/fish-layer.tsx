@@ -320,15 +320,16 @@ export function FishLayer({
   const swim = useV2Swim({
     box,
     seed,
-    // Tank mode was 1.25 — bumped there because screen-x speed is cut by
-    // |cos yaw| and cruising fish looked stalled. Pulled back to 0.88 for a
-    // calmer, more watchable pace (the reference scene's single fish drifts;
-    // it doesn't commute). Still comfortably above "stalled" because the
-    // shared current below keeps everyone gently moving even mid-glide.
+    // Tank mode was 1.25, then 0.88; pulled back again to 0.6 on direct
+    // request ("giảm tốc độ bơi của cá" / reduce fish swim speed) — still
+    // comfortably above "stalled" because the shared current below keeps
+    // everyone gently moving even mid-glide. Center mode brought down
+    // proportionally (0.45 -> 0.32) so the session screen's single focal
+    // fish stays calmer too, not just the tank view.
     // NOTE: this is app-level tuning only — `verify-aquarium.ts`'s swim
     // trace exercises the engine at speedFactor 1, so its cruise-speed floor
     // is unaffected by this number.
-    speedFactor: (mode === "center" ? 0.45 : 0.88) * personality.speedFactor,
+    speedFactor: (mode === "center" ? 0.32 : 0.6) * personality.speedFactor,
     // Molly-only: the five creature species in `creature-layer.tsx` pass
     // nothing here and keep their existing independent motion. Measured with
     // individual wander averaged out (400 fish, 60s): this sways the tank's
