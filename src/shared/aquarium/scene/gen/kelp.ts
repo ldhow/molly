@@ -13,33 +13,35 @@
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { unionBox } from "@/shared/aquarium/core/ir";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
 import { darken, lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
 import { ribbonPath } from "./ribbon";
 
-/** Dark, cool, low-saturation — these sit in shadow at the tank's edges. */
-const FROND_COLORS = ["#123a30", "#0d2f28", "#17453a"];
+const DESIGN = DEFAULT_SCENE_DESIGN.species.kelp;
 
 export const generateKelp: Generator = ({ seed, scale, mirror }) => {
+  // Read at call time — see anubias.ts's identical note on why. Dark, cool,
+  // low-saturation — these sit in shadow at the tank's edges.
+  const FROND_COLORS = [DESIGN.color1, DESIGN.color2, DESIGN.color3];
   const rng = makeRng(`kelp-${seed}`);
   const dir = mirror ? -1 : 1;
-  const frondCount = 3 + Math.floor(rng() * 2);
+  const frondCount = DESIGN.frondCountMin + Math.floor(rng() * DESIGN.frondCountRange);
   const nodes: Node[] = [];
   let bbox = { x: 0, y: 0, width: 1, height: 1 };
 
   for (let i = 0; i < frondCount; i++) {
-    // Tall on purpose: `compose.ts`'s `sizeFactorFor` clamps to 0.6 on a
-    // 390px-wide phone (its reference width is 700), so a nominal 300px
-    // frond only reaches ~40% up the water column and the "wall framing the
-    // scene" read collapses. These numbers are chosen POST-clamp to actually
-    // reach near the top of frame — don't tune them against the raw value.
-    const height = (560 + rng() * 260) * scale;
+    // Tall on purpose — see `KelpDesign.heightMin`'s doc comment in
+    // scene-design.ts: `compose.ts`'s `sizeFactorFor` clamps decor scale, so
+    // these numbers are chosen POST-clamp to actually reach near the top of
+    // frame — don't tune them against the raw value.
+    const height = (DESIGN.heightMin + rng() * DESIGN.heightRange) * scale;
     // Fronds fan outward from the base, leaning away from the tank centre so
     // an edge-placed clump frames the scene instead of leaning into it.
-    const lean = dir * (14 + rng() * 30) * scale;
-    const curve = dir * (10 + rng() * 26) * scale;
+    const lean = dir * (DESIGN.leanMin + rng() * DESIGN.leanRange) * scale;
+    const curve = dir * (DESIGN.curveMin + rng() * DESIGN.curveRange) * scale;
     const baseX = dir * (i - (frondCount - 1) / 2) * 9 * scale;
     const spine: XY[] = [
       { x: baseX, y: 0 },
@@ -48,11 +50,8 @@ export const generateKelp: Generator = ({ seed, scale, mirror }) => {
       { x: baseX + lean + curve, y: -height },
     ];
     // Wide at the base, tapering but never to a point — a kelp blade ends
-    // bluntly, unlike a grass tip. Broad on purpose: at ~9px these read as
-    // reeds indistinguishable from the `vallisneria` grass they sit behind,
-    // which defeats having a separate species. A kelp blade is a strap, and
-    // the width is what carries that.
-    const width = (26 + rng() * 14) * scale;
+    // bluntly, unlike a grass tip. Broad on purpose — see `KelpDesign.widthMin`'s doc.
+    const width = (DESIGN.widthMin + rng() * DESIGN.widthRange) * scale;
     const d = ribbonPath(spine, (t) => width * (1 - t * 0.55) * (1 + 0.12 * Math.sin(t * 9)));
     const color = FROND_COLORS[i % FROND_COLORS.length];
     nodes.push({
@@ -84,5 +83,5 @@ export const generateKelp: Generator = ({ seed, scale, mirror }) => {
     });
   }
 
-  return { nodes, bbox, anchors: [], swayHeight: 150 * scale };
+  return { nodes, bbox, anchors: [], swayHeight: DESIGN.swayHeightFactor * scale };
 };

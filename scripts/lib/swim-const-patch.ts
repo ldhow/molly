@@ -46,8 +46,15 @@ export interface SwimConstInfo {
   doc: string;
 }
 
+// Trailing `(\\r?)` as its own group, reattached in patchSwimConstants below:
+// `source.split("\n")` on a CRLF file leaves a trailing `\r` on every line,
+// which `(.*)$` alone can't reach (`.` excludes `\r`, and `$` without the
+// `m` flag only matches true end-of-string) — every line would silently fail
+// to match on a CRLF-checked-out file otherwise.
 function declLineRegex(name: string): RegExp {
-  return new RegExp(`^(\\s*)(export\\s+)?const\\s+${name}\\s*=\\s*(-?\\d+(?:\\.\\d+)?)\\s*;(.*)$`);
+  return new RegExp(
+    `^(\\s*)(export\\s+)?const\\s+${name}\\s*=\\s*(-?\\d+(?:\\.\\d+)?)\\s*;(.*?)(\\r?)$`,
+  );
 }
 
 /** Strips line- and block-comment markers (leading `//`, leading `*`, and JSDoc open/close), keeping the prose. */
@@ -125,8 +132,8 @@ export function patchSwimConstants(
     if (idx === -1) {
       throw new Error(`swim-const-patch: could not find "const ${name} = ..." in sim/swim.ts`);
     }
-    lines[idx] = lines[idx].replace(re, (_m, indent, exportKw, _num, rest) => {
-      return `${indent}${exportKw ?? ""}const ${name} = ${String(value)};${rest}`;
+    lines[idx] = lines[idx].replace(re, (_m, indent, exportKw, _num, rest, cr) => {
+      return `${indent}${exportKw ?? ""}const ${name} = ${String(value)};${rest}${cr}`;
     });
   }
   return lines.join("\n");

@@ -11,16 +11,14 @@
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { unionBox } from "@/shared/aquarium/core/ir";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
 import { lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
 import { ribbonPath } from "./ribbon";
 
-const LEAF_DARK = "#175c3d";
-const LEAF_MID = "#2f8f5b";
-const LEAF_TIP = lighten(LEAF_MID, 0.2);
-const LEAF_VEIN = "#0d3322";
+const DESIGN = DEFAULT_SCENE_DESIGN.species.anubias;
 
 /** A spade/lance leaf blade, authored pointing straight up (-y) from its own base. */
 function leafPath(len: number, width: number): string {
@@ -36,18 +34,30 @@ function leafPath(len: number, width: number): string {
 }
 
 export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
+  // Read at call time (not hoisted to module scope) so a live-edited colour
+  // in `DEFAULT_SCENE_DESIGN` — e.g. from `yarn aquarium:design`'s Scene tab
+  // — is picked up on the next bake, not frozen at import time.
+  const LEAF_DARK = DESIGN.leafDarkColor;
+  const LEAF_MID = DESIGN.leafMidColor;
+  const LEAF_TIP = lighten(LEAF_MID, DESIGN.leafTipLighten);
+  const LEAF_VEIN = DESIGN.veinColor;
   const rng = makeRng(`anubias-${seed}`);
-  const baseAngle = attachTo ? attachTo.angleDeg : -90;
-  const leafCount = 3 + Math.floor(rng() * 3);
+  const baseAngle = attachTo ? attachTo.angleDeg : DESIGN.unattachedBaseAngle;
+  const leafCount = DESIGN.leafCountMin + Math.floor(rng() * DESIGN.leafCountRange);
   const nodes: Node[] = [];
-  let bbox = { x: -6 * scale, y: -6 * scale, width: 12 * scale, height: 12 * scale };
+  let bbox = {
+    x: -DESIGN.rhizomeSpan * scale,
+    y: -DESIGN.rhizomeSpan * scale,
+    width: DESIGN.rhizomeSpan * 2 * scale,
+    height: DESIGN.rhizomeSpan * 2 * scale,
+  };
 
   const rhizomeD = ribbonPath(
     [
-      { x: -6 * scale, y: 0 },
-      { x: 6 * scale, y: -1 * scale },
+      { x: -DESIGN.rhizomeSpan * scale, y: 0 },
+      { x: DESIGN.rhizomeSpan * scale, y: -DESIGN.rhizomeTilt * scale },
     ],
-    () => 4 * scale,
+    () => DESIGN.rhizomeWidth * scale,
   );
   nodes.push({
     kind: "path",
@@ -56,11 +66,11 @@ export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
   });
 
   for (let i = 0; i < leafCount; i++) {
-    const spread = (i - (leafCount - 1) / 2) * (18 + rng() * 8);
-    const angleDeg = baseAngle + spread + (rng() - 0.5) * 10;
-    const stemLen = (10 + rng() * 6) * scale;
-    const leafLen = (30 + rng() * 22) * scale;
-    const leafWidth = leafLen * (0.42 + rng() * 0.12);
+    const spread = (i - (leafCount - 1) / 2) * (DESIGN.spreadBase + rng() * DESIGN.spreadRange);
+    const angleDeg = baseAngle + spread + (rng() - 0.5) * DESIGN.angleJitter;
+    const stemLen = (DESIGN.stemLenMin + rng() * DESIGN.stemLenRange) * scale;
+    const leafLen = (DESIGN.leafLenMin + rng() * DESIGN.leafLenRange) * scale;
+    const leafWidth = leafLen * (DESIGN.leafWidthFactorMin + rng() * DESIGN.leafWidthFactorRange);
     const rad = (angleDeg * Math.PI) / 180;
 
     const stemD = ribbonPath(
@@ -68,7 +78,7 @@ export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
         { x: 0, y: 0 },
         { x: Math.cos(rad) * stemLen, y: Math.sin(rad) * stemLen },
       ],
-      () => 1.4 * scale,
+      () => DESIGN.stemWidth * scale,
     );
     nodes.push({
       kind: "path",
@@ -123,5 +133,5 @@ export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
     });
   }
 
-  return { nodes, bbox, anchors: [], swayHeight: 14 * scale };
+  return { nodes, bbox, anchors: [], swayHeight: DESIGN.swayHeightFactor * scale };
 };

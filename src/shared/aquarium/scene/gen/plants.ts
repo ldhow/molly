@@ -11,14 +11,16 @@
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { unionBox } from "@/shared/aquarium/core/ir";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
 import { lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
 import { ribbonPath } from "./ribbon";
 
-const BLADE_COLORS = ["#2e7d57", "#256b4a", "#35906a"];
-const LEAF_COLORS = ["#1f6b46", "#2f8f5b", "#175c3d"];
+const VALLISNERIA_DESIGN = DEFAULT_SCENE_DESIGN.species.vallisneria;
+const STEM_BUSH_DESIGN = DEFAULT_SCENE_DESIGN.species.stemBush;
+const ROTALA_DESIGN = DEFAULT_SCENE_DESIGN.species.rotala;
 
 /** Base-to-tip gradient instead of a flat fill — a blade/leaf catches more light toward its tip, the "richer leaf-tone gradients" pass. */
 const bladeGradient = (color: string, from: XY, to: XY) => ({
@@ -32,23 +34,30 @@ const bladeGradient = (color: string, from: XY, to: XY) => ({
 });
 
 export const generateVallisneria: Generator = ({ seed, scale }) => {
+  // Read at call time — see anubias.ts's identical note on why.
+  const BLADE_COLORS = [
+    VALLISNERIA_DESIGN.color1,
+    VALLISNERIA_DESIGN.color2,
+    VALLISNERIA_DESIGN.color3,
+  ];
   const rng = makeRng(`vallisneria-${seed}`);
-  const bladeCount = 4 + Math.floor(rng() * 3);
+  const D = VALLISNERIA_DESIGN;
+  const bladeCount = D.bladeCountMin + Math.floor(rng() * D.bladeCountRange);
   const nodes: Node[] = [];
   let bbox = { x: 0, y: 0, width: 1, height: 1 };
 
   for (let i = 0; i < bladeCount; i++) {
-    const height = (180 + rng() * 140) * scale;
-    const lean = (i - (bladeCount - 1) / 2) * 4 + (rng() - 0.5) * 6;
-    const curve = (rng() - 0.5) * 26;
-    const baseX = (i - (bladeCount - 1) / 2) * 5 * scale;
+    const height = (D.heightMin + rng() * D.heightRange) * scale;
+    const lean = (i - (bladeCount - 1) / 2) * D.leanBase + (rng() - 0.5) * D.leanJitter;
+    const curve = (rng() - 0.5) * D.curveRange;
+    const baseX = (i - (bladeCount - 1) / 2) * D.bladeSpacing * scale;
     const spine: XY[] = [
       { x: baseX, y: 0 },
       { x: baseX + lean, y: -height * 0.4 },
       { x: baseX + lean + curve, y: -height * 0.8 },
       { x: baseX + lean + curve * 1.4, y: -height },
     ];
-    const width = (2.2 + rng() * 1.2) * scale;
+    const width = (D.widthMin + rng() * D.widthRange) * scale;
     const d = ribbonPath(spine, (t) => width * (1 - t * 0.85));
     const color = BLADE_COLORS[i % BLADE_COLORS.length];
     const tip = spine[spine.length - 1];
@@ -64,19 +73,48 @@ export const generateVallisneria: Generator = ({ seed, scale }) => {
       height,
     });
   }
-  return { nodes, bbox, anchors: [], swayHeight: 90 * scale };
+  return { nodes, bbox, anchors: [], swayHeight: D.swayHeightFactor * scale };
 };
 
-export const generateStemBush: Generator = ({ seed, scale }) => {
-  const rng = makeRng(`stembush-${seed}`);
-  const stemCount = 5 + Math.floor(rng() * 4);
+/** Shared body for stemBush and rotala — a bushier silhouette of N stems each carrying one oval leaf, differing only in palette/proportions via `design`. */
+function generateStemPlant(
+  design: {
+    leafColor1: string;
+    leafColor2: string;
+    leafColor3: string;
+    stemColor: string;
+    stemCountMin: number;
+    stemCountRange: number;
+    angleSpreadBase: number;
+    angleSpreadRange: number;
+    stemLenMin: number;
+    stemLenRange: number;
+    leafLenMin: number;
+    leafLenRange: number;
+    leafWidthFactor: number;
+    swayHeightFactor: number;
+  },
+  rngSeedPrefix: string,
+  seed: number,
+  scale: number,
+): {
+  nodes: Node[];
+  bbox: { x: number; y: number; width: number; height: number };
+  anchors: never[];
+  swayHeight: number;
+} {
+  const LEAF_COLORS = [design.leafColor1, design.leafColor2, design.leafColor3];
+  const rng = makeRng(`${rngSeedPrefix}-${seed}`);
+  const D = design;
+  const stemCount = D.stemCountMin + Math.floor(rng() * D.stemCountRange);
   const nodes: Node[] = [];
   let bbox = { x: 0, y: 0, width: 1, height: 1 };
 
   for (let i = 0; i < stemCount; i++) {
-    const angleDeg = -90 + (i - (stemCount - 1) / 2) * (14 + rng() * 6);
+    const angleDeg =
+      -90 + (i - (stemCount - 1) / 2) * (D.angleSpreadBase + rng() * D.angleSpreadRange);
     const rad = (angleDeg * Math.PI) / 180;
-    const stemLen = (34 + rng() * 40) * scale;
+    const stemLen = (D.stemLenMin + rng() * D.stemLenRange) * scale;
     const tipX = Math.cos(rad) * stemLen;
     const tipY = Math.sin(rad) * stemLen;
     const stemD = ribbonPath(
@@ -89,11 +127,11 @@ export const generateStemBush: Generator = ({ seed, scale }) => {
     nodes.push({
       kind: "path",
       d: stemD,
-      paint: { type: "solid", color: "#0d3322", opacity: 0.6 },
+      paint: { type: "solid", color: D.stemColor, opacity: 0.6 },
     });
 
-    const leafLen = (13 + rng() * 9) * scale;
-    const leafWidth = leafLen * 0.65;
+    const leafLen = (D.leafLenMin + rng() * D.leafLenRange) * scale;
+    const leafWidth = leafLen * D.leafWidthFactor;
     const leafSpine: XY[] = [
       { x: 0, y: 0 },
       { x: leafWidth * 0.2, y: -leafLen * 0.6 },
@@ -126,5 +164,12 @@ export const generateStemBush: Generator = ({ seed, scale }) => {
       height: reach,
     });
   }
-  return { nodes, bbox, anchors: [], swayHeight: 24 * scale };
-};
+  return { nodes, bbox, anchors: [], swayHeight: D.swayHeightFactor * scale };
+}
+
+export const generateStemBush: Generator = ({ seed, scale }) =>
+  generateStemPlant(STEM_BUSH_DESIGN, "stembush", seed, scale);
+
+/** Red-stem accent (rotala/ludwigia style) — the same bushy stem-plant body as stemBush, just a warmer palette and a distinct rng stream so it never coincides with a stemBush placement using the same seed. */
+export const generateRotala: Generator = ({ seed, scale }) =>
+  generateStemPlant(ROTALA_DESIGN, "rotala", seed, scale);

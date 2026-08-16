@@ -13,13 +13,15 @@ import {
 import { useMemo } from "react";
 import { useDerivedValue } from "react-native-reanimated";
 
+import { DEFAULT_SCENE_DESIGN } from "../scene/scene-design";
+
 interface Props {
   width: number;
   height: number;
 }
 
-const BUBBLE_COUNT = 14;
-const SPRITE_SIZE = 28;
+const BUBBLE_COUNT = DEFAULT_SCENE_DESIGN.bubbles.count;
+const SPRITE_SIZE = DEFAULT_SCENE_DESIGN.bubbles.spriteSize;
 
 let cachedSprite: SkImage | null | undefined;
 

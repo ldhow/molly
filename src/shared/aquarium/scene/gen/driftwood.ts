@@ -8,13 +8,13 @@
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { unionBox } from "@/shared/aquarium/core/ir";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Anchor, Generator } from "@/shared/aquarium/scene/types";
 import { makeRng } from "@/shared/lib/rng";
 
 import { ribbonPath } from "./ribbon";
 
-const BARK_DARK = "#2c1d14";
-const BARK_MID = "#4a3220";
+const DESIGN = DEFAULT_SCENE_DESIGN.species.driftwood;
 
 function limb(
   rng: () => number,
@@ -34,7 +34,7 @@ function limb(
   // getting a differently-shaped random walk out of the same seed.
   const xSign = mirror ? -1 : 1;
   for (let i = 1; i <= segments; i++) {
-    angle += (rng() - 0.5) * 22; // organic wander, degrees per segment
+    angle += (rng() - 0.5) * DESIGN.wanderDeg; // organic wander, degrees per segment
     const rad = (angle * Math.PI) / 180;
     const step = (length / segments) * (0.85 + rng() * 0.3);
     pos = { x: pos.x + xSign * Math.cos(rad) * step, y: pos.y + Math.sin(rad) * step };
@@ -44,12 +44,54 @@ function limb(
   return { spine, d };
 }
 
+/** A thin lengthwise grain streak offset toward one edge of the limb — real driftwood bark isn't a flat cylinder, light catches one ridge along its length. */
+function grainHighlight(spine: XY[], baseWidth: number, xSign: number): Node {
+  const offsetSpine = spine.map((p) => ({ x: p.x + xSign * baseWidth * 0.18, y: p.y }));
+  const d = ribbonPath(offsetSpine, (t) => baseWidth * 0.1 * (1 - t * 0.5) + 0.3);
+  return {
+    kind: "path",
+    d,
+    blend: "screen",
+    paint: { type: "solid", color: DESIGN.highlightColor, opacity: 0.3 },
+  };
+}
+
+/** Soft dark rings along a limb's interior — where a branch once was, real driftwood's "character". */
+function knots(rng: () => number, spine: XY[], scale: number): Node[] {
+  const count = DESIGN.knotCountMin + Math.floor(rng() * DESIGN.knotCountRange);
+  const nodes: Node[] = [];
+  for (let k = 0; k < count; k++) {
+    // Interior of the limb only — a knot at the very tip or base reads wrong.
+    const idx = 1 + Math.floor(rng() * Math.max(1, spine.length - 3));
+    const p = spine[idx];
+    const r = (DESIGN.knotRadiusMin + rng() * DESIGN.knotRadiusRange) * scale;
+    nodes.push({
+      kind: "circle",
+      cx: p.x,
+      cy: p.y,
+      r,
+      blend: "multiply",
+      paint: {
+        type: "radial",
+        center: { x: p.x, y: p.y },
+        radius: r,
+        stops: [
+          { offset: 0, color: "rgba(0,0,0,0.55)" },
+          { offset: 0.7, color: "rgba(0,0,0,0.3)" },
+          { offset: 1, color: "rgba(0,0,0,0)" },
+        ],
+      },
+    });
+  }
+  return nodes;
+}
+
 function limbShading(d: string): Node {
   return {
     kind: "group",
     isolate: true,
     children: [
-      { kind: "path", d, paint: { type: "solid", color: BARK_MID } },
+      { kind: "path", d, paint: { type: "solid", color: DESIGN.midColor } },
       {
         kind: "path",
         d,
@@ -81,36 +123,87 @@ function limbShading(d: string): Node {
       {
         kind: "path",
         d,
-        paint: { type: "solid", color: BARK_DARK, opacity: 0.4 },
+        paint: { type: "solid", color: DESIGN.darkColor, opacity: 0.4 },
         stroke: { width: 1.2 },
       },
     ],
   };
 }
 
+/** Soft dark pool where the trunk meets the substrate — grounds the piece instead of it looking like it floats on the sand. */
+function contactShadow(baseWidth: number): Node {
+  const rx = baseWidth * DESIGN.contactShadowRadius;
+  const ry = rx * 0.35;
+  return {
+    kind: "circle",
+    cx: 0,
+    cy: 0,
+    r: rx,
+    blend: "multiply",
+    paint: {
+      type: "radial",
+      center: { x: 0, y: 0 },
+      radius: rx,
+      scale: { x: 1, y: ry / rx },
+      stops: [
+        { offset: 0, color: `rgba(0,0,0,${DESIGN.contactShadowStrength})` },
+        { offset: 1, color: "rgba(0,0,0,0)" },
+      ],
+    },
+  };
+}
+
 export const generateDriftwood: Generator = ({ seed, scale, mirror = false }) => {
   const rng = makeRng(`driftwood-${seed}`);
-  const height = (150 + rng() * 90) * scale;
-  const baseWidth = (15 + rng() * 7) * scale;
-  const trunkHeading = -70 + (rng() - 0.5) * 30; // mostly upward; `mirror` flips which way it leans
-  const trunk = limb(rng, { x: 0, y: 0 }, trunkHeading, height, baseWidth, 6, mirror);
+  const height = (DESIGN.heightMin + rng() * DESIGN.heightRange) * scale;
+  const baseWidth = (DESIGN.baseWidthMin + rng() * DESIGN.baseWidthRange) * scale;
+  const trunkHeading = DESIGN.headingBase + (rng() - 0.5) * DESIGN.headingRange; // mostly upward; `mirror` flips which way it leans
+  const trunk = limb(
+    rng,
+    { x: 0, y: 0 },
+    trunkHeading,
+    height,
+    baseWidth,
+    DESIGN.trunkSegments,
+    mirror,
+  );
 
-  const nodes: Node[] = [limbShading(trunk.d)];
+  const xSign = mirror ? -1 : 1;
+  const nodes: Node[] = [
+    contactShadow(baseWidth),
+    limbShading(trunk.d),
+    grainHighlight(trunk.spine, baseWidth, xSign),
+    ...knots(rng, trunk.spine, scale),
+  ];
   const anchors: Anchor[] = [];
-  let bbox = { x: -baseWidth, y: -height, width: baseWidth * 2, height };
+  const shadowRx = baseWidth * DESIGN.contactShadowRadius;
+  let bbox = unionBox(
+    { x: -baseWidth, y: -height, width: baseWidth * 2, height },
+    { x: -shadowRx, y: -shadowRx * 0.35, width: shadowRx * 2, height: shadowRx * 0.35 },
+  );
 
-  const branchCount = 2 + Math.floor(rng() * 2);
+  const branchCount = DESIGN.branchCountMin + Math.floor(rng() * DESIGN.branchCountRange);
   for (let b = 0; b < branchCount; b++) {
-    const forkT = 0.35 + rng() * 0.45;
+    const forkT = DESIGN.forkTMin + rng() * DESIGN.forkTRange;
     const forkIndex = Math.min(
       trunk.spine.length - 1,
       Math.round(forkT * (trunk.spine.length - 1)),
     );
     const forkPoint = trunk.spine[forkIndex];
-    const forkHeading = trunkHeading + (rng() > 0.5 ? 1 : -1) * (35 + rng() * 35);
-    const branchLen = height * (0.35 + rng() * 0.3);
-    const branch = limb(rng, forkPoint, forkHeading, branchLen, baseWidth * 0.4, 4, mirror);
-    nodes.push(limbShading(branch.d));
+    const forkHeading =
+      trunkHeading + (rng() > 0.5 ? 1 : -1) * (DESIGN.forkAngleMin + rng() * DESIGN.forkAngleRange);
+    const branchLen = height * (DESIGN.branchLenMin + rng() * DESIGN.branchLenRange);
+    const branch = limb(
+      rng,
+      forkPoint,
+      forkHeading,
+      branchLen,
+      baseWidth * DESIGN.branchWidthFactor,
+      DESIGN.branchSegments,
+      mirror,
+    );
+    nodes.push(limbShading(branch.d), grainHighlight(branch.spine, baseWidth, xSign));
+    nodes.push(...knots(rng, branch.spine, scale));
     const tip = branch.spine[branch.spine.length - 1];
     const prev = branch.spine[branch.spine.length - 2] ?? forkPoint;
     const outward = (Math.atan2(tip.y - prev.y, tip.x - prev.x) * 180) / Math.PI;
@@ -119,8 +212,15 @@ export const generateDriftwood: Generator = ({ seed, scale, mirror = false }) =>
   }
   // One anchor low on the trunk too, so anubias can sit at the base like it
   // often does in a real scape, not only on the high branches.
-  const lowT = Math.min(trunk.spine.length - 1, Math.round(0.15 * (trunk.spine.length - 1)));
-  anchors.push({ x: trunk.spine[lowT].x, y: trunk.spine[lowT].y, angleDeg: -100 - rng() * 40 });
+  const lowT = Math.min(
+    trunk.spine.length - 1,
+    Math.round(DESIGN.lowAnchorT * (trunk.spine.length - 1)),
+  );
+  anchors.push({
+    x: trunk.spine[lowT].x,
+    y: trunk.spine[lowT].y,
+    angleDeg: DESIGN.lowAnchorAngleBase - rng() * DESIGN.lowAnchorAngleRange,
+  });
 
   return { nodes, bbox, anchors, swayHeight: 0 }; // wood doesn't sway
 };

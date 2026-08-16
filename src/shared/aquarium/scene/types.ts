@@ -8,7 +8,8 @@
 
 import type { Node } from "@/shared/aquarium/core/ir";
 
-export type SceneLayer = "back" | "mid" | "front";
+/** "far" sits behind "back" — dim distant silhouettes, no fish band, exempt from the composition invariants exactly like "back". */
+export type SceneLayer = "far" | "back" | "mid" | "front";
 
 export type SpeciesId =
   | "driftwood"
@@ -21,7 +22,9 @@ export type SpeciesId =
   | "kelp"
   | "bloom"
   | "cabomba"
-  | "sword";
+  | "sword"
+  | "carpet"
+  | "rotala";
 
 /** A point on an already-placed piece of decor that another piece can mount to. */
 export interface Anchor {

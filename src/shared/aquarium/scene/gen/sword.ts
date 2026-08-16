@@ -13,16 +13,14 @@
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { unionBox } from "@/shared/aquarium/core/ir";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
 import { lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
 import { ribbonPath, spinePath } from "./ribbon";
 
-const LEAF_DARK = "#0f4a2e";
-const LEAF_MID = "#3aa06a";
-const LEAF_TIP = lighten(LEAF_MID, 0.22);
-const LEAF_VEIN = "#0a3320";
+const DESIGN = DEFAULT_SCENE_DESIGN.species.sword;
 
 /** A long arching lance leaf: grows outward, then droops in its outer third — the silhouette a straight spade leaf (anubias.ts) doesn't have. */
 function leafSpine(leafLen: number, rad: number, droop: number): XY[] {
@@ -37,20 +35,25 @@ function leafSpine(leafLen: number, rad: number, droop: number): XY[] {
 }
 
 export const generateSwordPlant: Generator = ({ seed, scale }) => {
+  // Read at call time — see anubias.ts's identical note on why.
+  const LEAF_DARK = DESIGN.leafDarkColor;
+  const LEAF_MID = DESIGN.leafMidColor;
+  const LEAF_TIP = lighten(LEAF_MID, DESIGN.leafTipLighten);
+  const LEAF_VEIN = DESIGN.veinColor;
   const rng = makeRng(`sword-${seed}`);
-  const leafCount = 5 + Math.floor(rng() * 4);
+  const leafCount = DESIGN.leafCountMin + Math.floor(rng() * DESIGN.leafCountRange);
   const nodes: Node[] = [
     { kind: "circle", cx: 0, cy: 0, r: 4 * scale, paint: { type: "solid", color: LEAF_DARK } },
   ];
   let bbox = { x: -6 * scale, y: -6 * scale, width: 12 * scale, height: 12 * scale };
 
   for (let i = 0; i < leafCount; i++) {
-    const spread = (i - (leafCount - 1) / 2) * (7 + rng() * 3);
-    const angleDeg = -90 + spread + (rng() - 0.5) * 10;
+    const spread = (i - (leafCount - 1) / 2) * (DESIGN.spreadMin + rng() * DESIGN.spreadRange);
+    const angleDeg = -90 + spread + (rng() - 0.5) * DESIGN.angleJitter;
     const rad = (angleDeg * Math.PI) / 180;
-    const leafLen = (55 + rng() * 40) * scale;
-    const leafWidth = leafLen * (0.16 + rng() * 0.06);
-    const droop = (6 + rng() * 10) * scale;
+    const leafLen = (DESIGN.leafLenMin + rng() * DESIGN.leafLenRange) * scale;
+    const leafWidth = leafLen * (DESIGN.leafWidthFactorMin + rng() * DESIGN.leafWidthFactorRange);
+    const droop = (DESIGN.droopMin + rng() * DESIGN.droopRange) * scale;
     const spine = leafSpine(leafLen, rad, droop);
     const tip = spine[spine.length - 1];
 
@@ -87,5 +90,5 @@ export const generateSwordPlant: Generator = ({ seed, scale }) => {
     });
   }
 
-  return { nodes, bbox, anchors: [], swayHeight: 20 * scale };
+  return { nodes, bbox, anchors: [], swayHeight: DESIGN.swayHeightFactor * scale };
 };

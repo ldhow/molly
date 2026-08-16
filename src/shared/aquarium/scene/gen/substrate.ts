@@ -13,13 +13,12 @@
 // extending upward (-y) — same convention as `rock.ts`.
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
 import { makeRng } from "@/shared/lib/rng";
 
-const MOUND_TOP = "#5a4632";
-const MOUND_BOTTOM = "#3c2e20";
-const PEBBLE_COLORS = ["#6b6258", "#544c43", "#7a7168"];
-const PEBBLE_HIGHLIGHT = "#9a9186";
+const MOUND_DESIGN = DEFAULT_SCENE_DESIGN.species.substrateMound;
+const PEBBLES_DESIGN = DEFAULT_SCENE_DESIGN.species.pebbles;
 
 function polygonD(points: readonly XY[]): string {
   const F = (n: number) => n.toFixed(1);
@@ -29,10 +28,14 @@ function polygonD(points: readonly XY[]): string {
 }
 
 export const generateSubstrateMound: Generator = ({ seed, scale }) => {
+  // Read at call time — see anubias.ts's identical note on why.
+  const MOUND_TOP = MOUND_DESIGN.topColor;
+  const MOUND_BOTTOM = MOUND_DESIGN.bottomColor;
   const rng = makeRng(`substrate-mound-${seed}`);
-  const width = (260 + rng() * 140) * scale;
-  const height = (34 + rng() * 20) * scale;
-  const vertexCount = 10 + Math.floor(rng() * 3);
+  const D = MOUND_DESIGN;
+  const width = (D.widthMin + rng() * D.widthRange) * scale;
+  const height = (D.heightMin + rng() * D.heightRange) * scale;
+  const vertexCount = D.vertexCountMin + Math.floor(rng() * D.vertexCountRange);
 
   // A smooth cosine hump, not a jagged rock silhouette — sand slumps into a
   // rounded rise, it doesn't facet. Small per-vertex jitter keeps it from
@@ -42,7 +45,7 @@ export const generateSubstrateMound: Generator = ({ seed, scale }) => {
     const t = i / vertexCount;
     const x = (t - 0.5) * width;
     const hump = Math.cos((t - 0.5) * Math.PI);
-    const jitter = 1 - 0.06 + rng() * 0.12;
+    const jitter = D.jitterMin + rng() * D.jitterRange;
     points.push({ x, y: -height * hump * jitter });
   }
   points.push({ x: width / 2, y: 0 });
@@ -76,16 +79,20 @@ export const generateSubstrateMound: Generator = ({ seed, scale }) => {
 };
 
 export const generatePebbles: Generator = ({ seed, scale }) => {
+  // Read at call time — see anubias.ts's identical note on why.
+  const PEBBLE_COLORS = [PEBBLES_DESIGN.color1, PEBBLES_DESIGN.color2, PEBBLES_DESIGN.color3];
+  const PEBBLE_HIGHLIGHT = PEBBLES_DESIGN.highlightColor;
   const rng = makeRng(`pebbles-${seed}`);
-  const count = 4 + Math.floor(rng() * 4);
-  const spread = (60 + rng() * 40) * scale;
+  const D = PEBBLES_DESIGN;
+  const count = D.countMin + Math.floor(rng() * D.countRange);
+  const spread = (D.spreadMin + rng() * D.spreadRange) * scale;
   const nodes: Node[] = [];
   let minX = 0;
   let maxX = 0;
   let maxR = 0;
 
   for (let i = 0; i < count; i++) {
-    const r = (3 + rng() * 4) * scale;
+    const r = (D.radiusMin + rng() * D.radiusRange) * scale;
     const cx = (rng() - 0.5) * spread;
     const cy = -r * (0.35 + rng() * 0.2); // sits partly embedded, not floating on the line
     const color = PEBBLE_COLORS[i % PEBBLE_COLORS.length];

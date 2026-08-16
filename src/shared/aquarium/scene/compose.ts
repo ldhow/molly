@@ -9,9 +9,10 @@
 import { generateAnubias } from "./gen/anubias";
 import { generateBloom } from "./gen/bloom";
 import { generateCabomba } from "./gen/cabomba";
+import { generateCarpet } from "./gen/carpet";
 import { generateDriftwood } from "./gen/driftwood";
 import { generateKelp } from "./gen/kelp";
-import { generateStemBush, generateVallisneria } from "./gen/plants";
+import { generateRotala, generateStemBush, generateVallisneria } from "./gen/plants";
 import { generateSeiryuStone } from "./gen/rock";
 import { generatePebbles, generateSubstrateMound } from "./gen/substrate";
 import { generateSwordPlant } from "./gen/sword";
@@ -29,6 +30,8 @@ const GENERATORS: Record<SpeciesId, Generator> = {
   bloom: generateBloom,
   cabomba: generateCabomba,
   sword: generateSwordPlant,
+  carpet: generateCarpet,
+  rotala: generateRotala,
 };
 
 export interface PlacedPiece {
@@ -77,7 +80,7 @@ const REFERENCE_HEIGHT = 800;
 const MIN_SIZE_FACTOR = 0.6;
 const MAX_SIZE_FACTOR = 1.2;
 
-function sizeFactorFor(canvasWidth: number, canvasHeight: number): number {
+export function sizeFactorFor(canvasWidth: number, canvasHeight: number): number {
   const widthFactor = canvasWidth / REFERENCE_WIDTH;
   const heightFactor = canvasHeight / REFERENCE_HEIGHT;
   return Math.min(MAX_SIZE_FACTOR, Math.max(MIN_SIZE_FACTOR, Math.min(widthFactor, heightFactor)));

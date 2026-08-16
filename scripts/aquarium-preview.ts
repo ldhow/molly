@@ -14,12 +14,18 @@ import { bakeFish, densityAwareDpr } from "@/shared/aquarium/fish/bake-fish";
 import { bakeNodes } from "@/shared/aquarium/core/bake";
 import { bakeCreature } from "@/shared/aquarium/creatures/bake-creature";
 import type { Box, Node } from "@/shared/aquarium/core/ir";
+import { getSubstrateEffect, SUBSTRATE_UNIFORM_KEYS } from "@/shared/aquarium/core/sksl/substrate";
+import { composeSpriteScene } from "@/shared/aquarium/scene/compose-sprites";
 import { composeScene, GENERATORS } from "@/shared/aquarium/scene/compose";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
+import { SCENE_SPRITES } from "@/shared/aquarium/scene/sprites/sprite-manifest";
+import { SPRITE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
 import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
 import { SPECIES_LIST } from "@/shared/creature/catalog";
 import type { SpeciesDef, SpeciesId } from "@/shared/creature/types";
 import { COLOR_DEFS } from "@/shared/fish/catalog";
 import type { BodyId, DorsalId, FishTraits, LifeStage, TailId } from "@/shared/fish/types";
+import { parseHex } from "@/shared/lib/color";
 import { processTransform } from "@shopify/react-native-skia/src/skia/types/Matrix";
 import type { Matrix4, Transforms3d } from "@shopify/react-native-skia/src/skia/types/Matrix4";
 import { TileMode } from "@shopify/react-native-skia/src/skia/types";
@@ -149,10 +155,18 @@ async function main() {
   // check use — the only way to actually judge composition (layout,
   // asymmetry, decor size relative to the tank) without a device.
   console.log("Rendering full-scene composites...");
-  const SUBSTRATE_TOP = "#5a4632";
-  const SUBSTRATE_BOTTOM = "#3c2e20";
-  const WATER_TOP = "#1c4f66";
-  const WATER_BOTTOM = "#0a2331";
+  // These used to be hand-copied literals that had already drifted from the
+  // real render/water.tsx — reading from scene-design.ts is what keeps this
+  // composite pixel-matched to the app going forward.
+  const SUBSTRATE_TOP = DEFAULT_SCENE_DESIGN.substrate.top;
+  const SUBSTRATE_BOTTOM = DEFAULT_SCENE_DESIGN.substrate.bottom;
+  const WATER_TOP = DEFAULT_SCENE_DESIGN.water.top;
+  const WATER_BOTTOM = DEFAULT_SCENE_DESIGN.water.bottom;
+  const toUnit = (hex: string): [number, number, number] => {
+    const rgb = parseHex(hex) ?? [0, 0, 0];
+    return [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255];
+  };
+  const substrateEffect = getSubstrateEffect(Skia);
   const sceneCells: { label: string; dataUri: string | null }[] = [];
   for (const [w, h] of [
     [390, 844],
@@ -191,17 +205,38 @@ async function main() {
       ),
     );
     canvas.drawRect(Skia.XYWHRect(0, 0, w, h), waterPaint);
-    const sandPaint = Skia.Paint();
-    sandPaint.setShader(
-      Skia.Shader.MakeLinearGradient(
-        Skia.Point(0, substrateY),
-        Skia.Point(0, h),
-        [Skia.Color(SUBSTRATE_TOP), Skia.Color(SUBSTRATE_BOTTOM)],
-        [0, 1],
-        TileMode.Clamp,
-      ),
-    );
-    canvas.drawRect(Skia.XYWHRect(0, substrateY, w, h - substrateY), sandPaint);
+    const sandHeight = h - substrateY;
+    if (substrateEffect) {
+      const uniforms = {
+        width: w,
+        height: sandHeight,
+        colorTop: toUnit(SUBSTRATE_TOP),
+        colorBottom: toUnit(SUBSTRATE_BOTTOM),
+        speckleColor: toUnit(DEFAULT_SCENE_DESIGN.substrate.speckleColor),
+        grainStrength: DEFAULT_SCENE_DESIGN.substrate.grainStrength,
+        speckleDensity: DEFAULT_SCENE_DESIGN.substrate.speckleDensity,
+      };
+      const sandPaint = Skia.Paint();
+      sandPaint.setShader(
+        substrateEffect.makeShader(SUBSTRATE_UNIFORM_KEYS.flatMap((key) => uniforms[key])),
+      );
+      canvas.save();
+      canvas.translate(0, substrateY);
+      canvas.drawRect(Skia.XYWHRect(0, 0, w, sandHeight), sandPaint);
+      canvas.restore();
+    } else {
+      const sandPaint = Skia.Paint();
+      sandPaint.setShader(
+        Skia.Shader.MakeLinearGradient(
+          Skia.Point(0, substrateY),
+          Skia.Point(0, h),
+          [Skia.Color(SUBSTRATE_TOP), Skia.Color(SUBSTRATE_BOTTOM)],
+          [0, 1],
+          TileMode.Clamp,
+        ),
+      );
+      canvas.drawRect(Skia.XYWHRect(0, substrateY, w, h - substrateY), sandPaint);
+    }
 
     const bounds: Box = { x: 0, y: 0, width: w, height: substrateY };
     const baked = bakeNodes(Skia, decorNodes, bounds, 1);
@@ -221,6 +256,99 @@ async function main() {
     const bytes = surf.makeImageSnapshot().encodeToBytes();
     sceneCells.push({
       label: `${w}x${h} — ${scene.pieces.length} pieces`,
+      dataUri: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`,
+    });
+  }
+
+  // Sprite-mode composite — approach "B" in the procedural-vs-sprite A/B
+  // comparison, drawn from disk (not through the app's `require`/Metro
+  // resolution) so this stays runnable from plain Node. Degrades to a
+  // labelled empty cell per canvas size until real PNGs are supplied — see
+  // `sprite-manifest.ts`'s header.
+  console.log("Rendering sprite-scape composites...");
+  // Same reference-sampled palette as `render/sprite-layers.tsx`'s
+  // `SpriteWater` — duplicated for the same "sprite mode has no dependency
+  // on the other render module" reason as that file's LAYER_OPACITY note.
+  const SPRITE_WATER_TOP = "#b8ecfa";
+  const SPRITE_WATER_MID = "#5ec3e0";
+  const SPRITE_WATER_BOTTOM = "#1a5f79";
+  const spriteSceneCells: { label: string; dataUri: string | null }[] = [];
+  for (const [w, h] of [
+    [390, 844],
+    [844, 390],
+  ] as const) {
+    const substrateY = h - 60;
+    const spriteScene = composeSpriteScene(SPRITE_SCAPE, w, h, substrateY);
+    if (spriteScene.pieces.length === 0) {
+      spriteSceneCells.push({
+        label: `${w}x${h} — no sprite assets supplied`,
+        dataUri: null,
+      });
+      continue;
+    }
+    const surf = Skia.Surface.Make(w, h)!;
+    const canvas = surf.getCanvas();
+    const waterPaint = Skia.Paint();
+    waterPaint.setShader(
+      Skia.Shader.MakeLinearGradient(
+        Skia.Point(0, 0),
+        Skia.Point(0, h),
+        [
+          Skia.Color(SPRITE_WATER_TOP),
+          Skia.Color(SPRITE_WATER_MID),
+          Skia.Color(SPRITE_WATER_BOTTOM),
+        ],
+        [0, 0.55, 1],
+        TileMode.Clamp,
+      ),
+    );
+    canvas.drawRect(Skia.XYWHRect(0, 0, w, h), waterPaint);
+    // Sprite mode's ground is the painted sand piece itself, stretched to
+    // the canvas width, over a solid base fill (the piece is a rounded oval
+    // clump, not a strip — the fill is what keeps its curved edge from
+    // showing water at the corners) — see `render/sprite-layers.tsx`'s
+    // `SpriteSubstrate`.
+    const sandBasePaint = Skia.Paint();
+    sandBasePaint.setShader(
+      Skia.Shader.MakeLinearGradient(
+        Skia.Point(0, substrateY),
+        Skia.Point(0, h),
+        [Skia.Color("#efe0ba"), Skia.Color("#cbb887")],
+        [0, 1],
+        TileMode.Clamp,
+      ),
+    );
+    canvas.drawRect(Skia.XYWHRect(0, substrateY, w, h - substrateY), sandBasePaint);
+    const sandSprite = SCENE_SPRITES.sandPatch;
+    const sandPngPath = path.join(__dirname, "..", sandSprite.file);
+    if (fs.existsSync(sandPngPath)) {
+      const sandBytes = fs.readFileSync(sandPngPath);
+      const sandImage = Skia.Image.MakeImageFromEncoded(Skia.Data.fromBytes(sandBytes));
+      if (sandImage) {
+        const sandSrcRect = Skia.XYWHRect(0, 0, sandImage.width(), sandImage.height());
+        const sandDestRect = Skia.XYWHRect(0, substrateY, w, h - substrateY);
+        canvas.drawImageRect(sandImage, sandSrcRect, sandDestRect, Skia.Paint());
+      }
+    }
+    for (const piece of spriteScene.pieces) {
+      const sprite = SCENE_SPRITES[piece.spriteId];
+      const pngPath = path.join(__dirname, "..", sprite.file);
+      if (!fs.existsSync(pngPath)) continue;
+      const bytes = fs.readFileSync(pngPath);
+      const image = Skia.Image.MakeImageFromEncoded(Skia.Data.fromBytes(bytes));
+      if (!image) continue;
+      const srcRect = Skia.XYWHRect(0, 0, image.width(), image.height());
+      const destRect = Skia.XYWHRect(
+        piece.worldX + piece.rect.x,
+        piece.worldY + piece.rect.y,
+        piece.rect.width,
+        piece.rect.height,
+      );
+      canvas.drawImageRect(image, srcRect, destRect, Skia.Paint());
+    }
+    const bytes = surf.makeImageSnapshot().encodeToBytes();
+    spriteSceneCells.push({
+      label: `${w}x${h} — ${spriteScene.pieces.length} pieces`,
       dataUri: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`,
     });
   }
@@ -287,6 +415,8 @@ ${colorRows
 <h2>Full-scene composite — nature-scape theme, decor only</h2>
 <p>Faint vertical lines mark the authored swim lane.</p>
 <div class="grid">${sceneCells.map((c) => `<div class="cell scene-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">bake failed</div>`}</div>`).join("")}</div>
+<h2>Sprite-scape composite — approach "B" (shipped PNGs) for A/B comparison against the composite above</h2>
+<div class="grid">${spriteSceneCells.map((c) => `<div class="cell scene-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">no sprite assets supplied</div>`}</div>`).join("")}</div>
 <h2>Creatures — every non-molly species x its own variant list</h2>
 <p>Real anatomy where it's shipped (see <code>creatures/&lt;species&gt;/</code>), the placeholder blob otherwise (see <code>creatures/bake-placeholder.ts</code>).</p>
 ${creatureRows

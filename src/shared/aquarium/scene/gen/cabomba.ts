@@ -9,32 +9,35 @@
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { unionBox } from "@/shared/aquarium/core/ir";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
 import { makeRng } from "@/shared/lib/rng";
 
 import { catmullRomSample, ribbonPath } from "./ribbon";
 
-const STALK_COLOR = "#1f4d33";
-const LEAFLET_COLORS = ["#2f7d4a", "#3f9d63", "#256b45"];
+const DESIGN = DEFAULT_SCENE_DESIGN.species.cabomba;
 
 export const generateCabomba: Generator = ({ seed, scale }) => {
+  // Read at call time — see anubias.ts's identical note on why.
+  const STALK_COLOR = DESIGN.stalkColor;
+  const LEAFLET_COLORS = [DESIGN.leafletColor1, DESIGN.leafletColor2, DESIGN.leafletColor3];
   const rng = makeRng(`cabomba-${seed}`);
-  const stalkCount = 3 + Math.floor(rng() * 3);
+  const stalkCount = DESIGN.stalkCountMin + Math.floor(rng() * DESIGN.stalkCountRange);
   const nodes: Node[] = [];
   let bbox = { x: 0, y: 0, width: 1, height: 1 };
 
   for (let i = 0; i < stalkCount; i++) {
-    const height = (170 + rng() * 140) * scale;
-    const lean = (i - (stalkCount - 1) / 2) * 4 + (rng() - 0.5) * 6;
-    const curve = (rng() - 0.5) * 22;
-    const baseX = (i - (stalkCount - 1) / 2) * 6 * scale;
+    const height = (DESIGN.heightMin + rng() * DESIGN.heightRange) * scale;
+    const lean = (i - (stalkCount - 1) / 2) * DESIGN.leanBase + (rng() - 0.5) * DESIGN.leanJitter;
+    const curve = (rng() - 0.5) * DESIGN.curveRange;
+    const baseX = (i - (stalkCount - 1) / 2) * DESIGN.stalkSpacing * scale;
     const spine: XY[] = [
       { x: baseX, y: 0 },
       { x: baseX + lean, y: -height * 0.4 },
       { x: baseX + lean + curve, y: -height * 0.8 },
       { x: baseX + lean + curve * 1.4, y: -height },
     ];
-    const stalkWidth = (1.6 + rng() * 0.6) * scale;
+    const stalkWidth = (DESIGN.stalkWidthMin + rng() * DESIGN.stalkWidthRange) * scale;
     nodes.push({
       kind: "path",
       d: ribbonPath(spine, (t) => stalkWidth * (1 - t * 0.4)),
@@ -52,7 +55,7 @@ export const generateCabomba: Generator = ({ seed, scale }) => {
       const prev = sampled[Math.max(0, s - 1)];
       const next = sampled[Math.min(sampled.length - 1, s + 1)];
       const tangentDeg = (Math.atan2(next.y - prev.y, next.x - prev.x) * 180) / Math.PI;
-      const leafletLen = (7 + rng() * 6) * scale;
+      const leafletLen = (DESIGN.leafletLenMin + rng() * DESIGN.leafletLenRange) * scale;
       nodes.push({
         kind: "group",
         children: [
@@ -90,5 +93,5 @@ export const generateCabomba: Generator = ({ seed, scale }) => {
     });
   }
 
-  return { nodes, bbox, anchors: [], swayHeight: 110 * scale };
+  return { nodes, bbox, anchors: [], swayHeight: DESIGN.swayHeightFactor * scale };
 };

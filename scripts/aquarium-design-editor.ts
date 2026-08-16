@@ -6,8 +6,8 @@
 // static `yarn aquarium:preview` gallery). See `src/docs/aquarium-guide.md`
 // before changing anything this reads from.
 //
-// Two independent tabs, two different save models — deliberately not the
-// same model, see each section below for why:
+// Four tabs, several different save models — deliberately not the same
+// model per tab, see each section below for why:
 //
 // Shape tab (body/fins): drag control points, see the REAL bake
 // (`bakeFish`) update live via `/api/bake`. Save is Copy-code only, like
@@ -24,6 +24,24 @@
 // point, so `scripts/lib/swim-const-patch.ts` can replace just the number
 // on each line and leave every comment untouched.
 //
+// Scene tab (procedural decor — `scene-design.ts`/`nature-scape.ts`): a
+// real server-rendered preview via `/api/scene-render`, drag pieces or edit
+// sliders. Species/water/substrate/bubbles/layers save to `scene-design.ts`
+// wholesale (`scene-design-serialize.ts`); placements save `xFraction`/
+// `scale`/`mirror` in place, keyed by `seed` (`placement-patch.ts`), since
+// `nature-scape.ts` carries curatorial prose between entries a wholesale
+// rewrite would destroy.
+//
+// Sprites tab (shipped-PNG decor — `sprite-manifest.ts`/
+// `nature-scape-sprites.ts`): same drag/preview UX as Scene's Placements
+// section but rendering real PNGs (`/api/sprite-render`, no bake — see
+// `renderSpriteScene`), keyed by ARRAY INDEX instead of `seed` since
+// `SpritePlacement` has no unique id (`sprite-placement-patch.ts`). A
+// Colours section edits the water/sand hex consts in
+// `render/sprite-layers.tsx` directly (`hex-const-patch.ts`, same
+// one-line-at-a-time idea as `swim-const-patch.ts` for a string instead of
+// a number).
+//
 // Run: yarn aquarium:design   (http://127.0.0.1:5479, override with PORT=)
 
 import { createServer, type IncomingMessage } from "node:http";
@@ -34,7 +52,19 @@ import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 
 import { loadSkiaNode } from "./lib/skia-node";
+import { readHexConstants, patchHexConstants } from "./lib/hex-const-patch";
+import { readPlacements, patchPlacements, type PlacementChange } from "./lib/placement-patch";
+import { serializeSceneDesign } from "./lib/scene-design-serialize";
+import {
+  readSpritePlacements,
+  patchSpritePlacements,
+  insertSpritePlacements,
+  type SpritePlacementChange,
+  type NewSpritePlacement,
+} from "./lib/sprite-placement-patch";
 import { readSwimConstants, patchSwimConstants, type SwimConstName } from "./lib/swim-const-patch";
+import { bakeNodes } from "@/shared/aquarium/core/bake";
+import type { Node } from "@/shared/aquarium/core/ir";
 import { bakeFish, densityAwareDpr } from "@/shared/aquarium/fish/bake-fish";
 import {
   ANAL_FIN,
@@ -47,12 +77,34 @@ import {
   type FinSpec,
 } from "@/shared/aquarium/fish/fins";
 import { BODY_PROFILES, type BodyProfile } from "@/shared/aquarium/fish/body-profile";
+import { composeSpriteScene, type SpriteSceneTheme } from "@/shared/aquarium/scene/compose-sprites";
+import { composeScene, GENERATORS } from "@/shared/aquarium/scene/compose";
+import { DEFAULT_SCENE_DESIGN, type SceneDesign } from "@/shared/aquarium/scene/scene-design";
+import { SCENE_SPRITES } from "@/shared/aquarium/scene/sprites/sprite-manifest";
+import { SPRITE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
+import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
+import { sandHeightFor } from "@/shared/constants/tank";
 import { COLOR_DEFS } from "@/shared/fish/catalog";
 import type { BodyId, DorsalId, FishTraits, LifeStage, TailId } from "@/shared/fish/types";
+import { TileMode } from "@shopify/react-native-skia/src/skia/types";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 const SWIM_PATH = join(root, "src/shared/aquarium/sim/swim.ts");
+const SCENE_DESIGN_PATH = join(root, "src/shared/aquarium/scene/scene-design.ts");
+const NATURE_SCAPE_PATH = join(root, "src/shared/aquarium/scene/themes/nature-scape.ts");
+const NATURE_SCAPE_SPRITES_PATH = join(
+  root,
+  "src/shared/aquarium/scene/themes/nature-scape-sprites.ts",
+);
+const SPRITE_LAYERS_PATH = join(root, "src/shared/aquarium/render/sprite-layers.tsx");
+const SPRITE_COLOR_NAMES = [
+  "SPRITE_WATER_TOP",
+  "SPRITE_WATER_MID",
+  "SPRITE_WATER_BOTTOM",
+  "SAND_BASE_COLOR",
+  "SAND_BASE_COLOR_BOTTOM",
+] as const;
 const PORT = Number(process.env.PORT) || 5479;
 
 function readJson(req: IncomingMessage): Promise<unknown> {
@@ -112,6 +164,298 @@ function applyShapeState(state: ShapeState): void {
   Object.assign(PECTORAL_FAR_FIN, state.fins.pectoralFar);
   CAUDAL_FIN.round = state.fins.caudal.round;
   CAUDAL_FIN.lyretail = state.fins.caudal.lyretail;
+}
+
+// Same pristine-snapshot-at-boot idea as PRISTINE_BODY_PROFILES/PRISTINE_FINS
+// above — what "Reset" restores to.
+const PRISTINE_SCENE_DESIGN: SceneDesign = structuredClone(DEFAULT_SCENE_DESIGN);
+
+/**
+ * Mutates the REAL module-scope `DEFAULT_SCENE_DESIGN` IN PLACE — same
+ * reasoning as `applyShapeState` above, but sharper here: every `scene/gen/
+ * *.ts` generator captures a reference to its own species' sub-object at
+ * import time (`const DESIGN = DEFAULT_SCENE_DESIGN.species.driftwood`), so
+ * REPLACING that sub-object (`DEFAULT_SCENE_DESIGN.species.driftwood = ...`)
+ * would leave the generator holding a stale reference. `Object.assign` onto
+ * the existing sub-object keeps its identity, so every generator's next call
+ * sees the new values.
+ */
+function applySceneDesign(design: SceneDesign): void {
+  Object.assign(DEFAULT_SCENE_DESIGN.species.driftwood, design.species.driftwood);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.anubias, design.species.anubias);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.vallisneria, design.species.vallisneria);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.stemBush, design.species.stemBush);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.seiryuStone, design.species.seiryuStone);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.substrateMound, design.species.substrateMound);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.pebbles, design.species.pebbles);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.kelp, design.species.kelp);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.bloom, design.species.bloom);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.cabomba, design.species.cabomba);
+  Object.assign(DEFAULT_SCENE_DESIGN.species.sword, design.species.sword);
+  Object.assign(DEFAULT_SCENE_DESIGN.water, design.water);
+  Object.assign(DEFAULT_SCENE_DESIGN.substrate, design.substrate);
+  Object.assign(DEFAULT_SCENE_DESIGN.bubbles, design.bubbles);
+  Object.assign(DEFAULT_SCENE_DESIGN.layers, design.layers);
+}
+
+interface RenderedPiece {
+  key: string;
+  species: string;
+  seed: number;
+  screenX: number;
+  screenY: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Composes and bakes the full background — decor via `composeScene`/
+ * `GENERATORS`, water/substrate as flat gradients — the SAME code path
+ * `scripts/aquarium-preview.ts`'s full-scene composite uses (`bakeNodes`,
+ * via `scripts/lib/skia-node.ts`'s real Skia), so the Scene tab's preview is
+ * pixel-identical to what ships, not an approximation of it. Placement
+ * overrides (in-progress drag values not yet saved) are applied to the REAL
+ * `NATURE_SCAPE.placements` objects in place, same in-place-mutation
+ * reasoning as `applySceneDesign` — `composeScene` reads `theme.placements`
+ * fresh on every call, so this doesn't need its own separate compose path.
+ */
+async function renderScene(
+  width: number,
+  height: number,
+  placementOverrides: Readonly<Record<number, PlacementChange>>,
+): Promise<{ dataUri: string; pieces: RenderedPiece[] }> {
+  for (const placement of NATURE_SCAPE.placements) {
+    const change = placementOverrides[placement.seed];
+    if (change) Object.assign(placement, change);
+  }
+
+  const substrateY = height - sandHeightFor(height);
+  const scene = composeScene(NATURE_SCAPE, width, height, substrateY);
+  const pieces: RenderedPiece[] = [];
+  const decorNodes: Node[] = scene.pieces.map((piece) => {
+    const attachTo =
+      piece.attachAngleDeg !== undefined
+        ? { x: 0, y: 0, angleDeg: piece.attachAngleDeg }
+        : undefined;
+    const generated = GENERATORS[piece.species]({
+      seed: piece.seed,
+      scale: piece.scale,
+      attachTo,
+      mirror: piece.mirror,
+    });
+    pieces.push({
+      key: piece.key,
+      species: piece.species,
+      seed: piece.seed,
+      screenX: piece.worldX + generated.bbox.x,
+      screenY: piece.worldY + generated.bbox.y,
+      width: generated.bbox.width,
+      height: generated.bbox.height,
+    });
+    return {
+      kind: "group",
+      children: generated.nodes,
+      transform: { translateX: piece.worldX, translateY: piece.worldY },
+    };
+  });
+
+  const Skia = await loadSkiaNode();
+  const surf = Skia.Surface.Make(width, height)!;
+  const canvas = surf.getCanvas();
+
+  const waterPaint = Skia.Paint();
+  waterPaint.setShader(
+    Skia.Shader.MakeLinearGradient(
+      Skia.Point(0, 0),
+      Skia.Point(0, height),
+      [Skia.Color(DEFAULT_SCENE_DESIGN.water.top), Skia.Color(DEFAULT_SCENE_DESIGN.water.bottom)],
+      [0, 1],
+      TileMode.Clamp,
+    ),
+  );
+  canvas.drawRect(Skia.XYWHRect(0, 0, width, height), waterPaint);
+
+  const sandPaint = Skia.Paint();
+  sandPaint.setShader(
+    Skia.Shader.MakeLinearGradient(
+      Skia.Point(0, substrateY),
+      Skia.Point(0, height),
+      [
+        Skia.Color(DEFAULT_SCENE_DESIGN.substrate.top),
+        Skia.Color(DEFAULT_SCENE_DESIGN.substrate.bottom),
+      ],
+      [0, 1],
+      TileMode.Clamp,
+    ),
+  );
+  canvas.drawRect(Skia.XYWHRect(0, substrateY, width, height - substrateY), sandPaint);
+
+  const bounds = { x: 0, y: 0, width, height: substrateY };
+  const baked = bakeNodes(Skia, decorNodes, bounds, 1);
+  if (baked) {
+    const srcRect = Skia.XYWHRect(0, 0, baked.image.width(), baked.image.height());
+    const destRect = Skia.XYWHRect(bounds.x, bounds.y, bounds.width, bounds.height);
+    canvas.drawImageRect(baked.image, srcRect, destRect, Skia.Paint());
+  }
+
+  const laneGuide = Skia.Paint();
+  laneGuide.setColor(Skia.Color("#ffffff33"));
+  for (const lane of scene.swimLaneRects) {
+    canvas.drawRect(Skia.XYWHRect(lane.x, 0, 1, height), laneGuide);
+    canvas.drawRect(Skia.XYWHRect(lane.x + lane.width, 0, 1, height), laneGuide);
+  }
+
+  const bytes = surf.makeImageSnapshot().encodeToBytes();
+  return { dataUri: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`, pieces };
+}
+
+interface RenderedSpritePiece {
+  key: string;
+  spriteId: string;
+  screenX: number;
+  screenY: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Sprite-mode counterpart to `renderScene` — draws real PNGs
+ * (`fs.readFileSync` + `Skia.Image.MakeImageFromEncoded`, same pattern
+ * `aquarium-preview.ts`'s sprite composite and `verify-aquarium.ts`'s sprite
+ * occupancy check use) instead of baking IR nodes, since sprite pieces have
+ * no generator to bake. Placement overrides are applied to the REAL
+ * `SPRITE_SCAPE.placements` array in place, keyed by ARRAY INDEX rather than
+ * a seed — `SpritePlacement` has no unique id (see
+ * `scripts/lib/sprite-placement-patch.ts`'s header for why). `additions`
+ * (new, not-yet-saved placements from the "+ Add" picker) are appended onto
+ * a COPY of the theme for composing only — never pushed into the real
+ * `SPRITE_SCAPE.placements` array, so there's no cleanup/pop needed after.
+ * Water/sand colours are NOT read from any shared mutable module-scope
+ * state (unlike `DEFAULT_SCENE_DESIGN`) — they're plain string consts in
+ * `render/sprite-layers.tsx` that this Node script never imports (importing
+ * a `.tsx` full of react-native-skia components isn't worth the risk here),
+ * so the caller passes the in-progress colour values straight through.
+ */
+async function renderSpriteScene(
+  width: number,
+  height: number,
+  placementOverrides: Readonly<Record<number, SpritePlacementChange>>,
+  colors: Readonly<Record<string, string>>,
+  additions: readonly NewSpritePlacement[] = [],
+): Promise<{ dataUri: string; pieces: RenderedSpritePiece[] }> {
+  SPRITE_SCAPE.placements.forEach((placement, i) => {
+    const change = placementOverrides[i];
+    if (change) Object.assign(placement, change);
+  });
+  // `additions` come straight off the wire as plain JSON — `layer` arrives
+  // as a bare string, not narrowed to `SceneLayer`. This is a local dev
+  // tool with no untrusted caller, so a cast at the boundary (rather than
+  // runtime validation) matches how every other route in this file already
+  // trusts its request body's shape.
+  const theme: SpriteSceneTheme = {
+    ...SPRITE_SCAPE,
+    placements: [...SPRITE_SCAPE.placements, ...additions] as SpriteSceneTheme["placements"],
+  };
+
+  const substrateY = height - sandHeightFor(height);
+  const scene = composeSpriteScene(theme, width, height, substrateY);
+
+  const Skia = await loadSkiaNode();
+  const surf = Skia.Surface.Make(width, height)!;
+  const canvas = surf.getCanvas();
+
+  const waterPaint = Skia.Paint();
+  waterPaint.setShader(
+    Skia.Shader.MakeLinearGradient(
+      Skia.Point(0, 0),
+      Skia.Point(0, height),
+      [
+        Skia.Color(colors.SPRITE_WATER_TOP),
+        Skia.Color(colors.SPRITE_WATER_MID),
+        Skia.Color(colors.SPRITE_WATER_BOTTOM),
+      ],
+      [0, 0.55, 1],
+      TileMode.Clamp,
+    ),
+  );
+  canvas.drawRect(Skia.XYWHRect(0, 0, width, height), waterPaint);
+
+  const sandBasePaint = Skia.Paint();
+  sandBasePaint.setShader(
+    Skia.Shader.MakeLinearGradient(
+      Skia.Point(0, substrateY),
+      Skia.Point(0, height),
+      [Skia.Color(colors.SAND_BASE_COLOR), Skia.Color(colors.SAND_BASE_COLOR_BOTTOM)],
+      [0, 1],
+      TileMode.Clamp,
+    ),
+  );
+  canvas.drawRect(Skia.XYWHRect(0, substrateY, width, height - substrateY), sandBasePaint);
+
+  const sandSprite = SCENE_SPRITES.sandPatch;
+  if (sandSprite) {
+    const sandImage = Skia.Image.MakeImageFromEncoded(
+      Skia.Data.fromBytes(readFileSync(join(root, sandSprite.file))),
+    );
+    if (sandImage) {
+      const srcRect = Skia.XYWHRect(0, 0, sandImage.width(), sandImage.height());
+      const destRect = Skia.XYWHRect(0, substrateY, width, height - substrateY);
+      canvas.drawImageRect(sandImage, srcRect, destRect, Skia.Paint());
+    }
+  }
+
+  const pieces: RenderedSpritePiece[] = [];
+  for (const piece of scene.pieces) {
+    const sprite = SCENE_SPRITES[piece.spriteId];
+    if (!sprite) continue;
+    const image = Skia.Image.MakeImageFromEncoded(
+      Skia.Data.fromBytes(readFileSync(join(root, sprite.file))),
+    );
+    if (!image) continue;
+    const srcRect = Skia.XYWHRect(0, 0, image.width(), image.height());
+    const screenX = piece.worldX + piece.rect.x;
+    const screenY = piece.worldY + piece.rect.y;
+    if (piece.mirror) {
+      canvas.save();
+      canvas.translate(piece.worldX, piece.worldY);
+      canvas.scale(-1, 1);
+      canvas.drawImageRect(
+        image,
+        srcRect,
+        Skia.XYWHRect(piece.rect.x, piece.rect.y, piece.rect.width, piece.rect.height),
+        Skia.Paint(),
+      );
+      canvas.restore();
+    } else {
+      canvas.drawImageRect(
+        image,
+        srcRect,
+        Skia.XYWHRect(screenX, screenY, piece.rect.width, piece.rect.height),
+        Skia.Paint(),
+      );
+    }
+    pieces.push({
+      key: piece.key,
+      spriteId: piece.spriteId,
+      screenX,
+      screenY,
+      width: piece.rect.width,
+      height: piece.rect.height,
+    });
+  }
+
+  const laneGuide2 = Skia.Paint();
+  laneGuide2.setColor(Skia.Color("#ffffff33"));
+  for (const lane of scene.swimLaneRects) {
+    canvas.drawRect(Skia.XYWHRect(lane.x, 0, 1, height), laneGuide2);
+    canvas.drawRect(Skia.XYWHRect(lane.x + lane.width, 0, 1, height), laneGuide2);
+  }
+
+  const spriteBytes = surf.makeImageSnapshot().encodeToBytes();
+  return {
+    dataUri: `data:image/png;base64,${Buffer.from(spriteBytes).toString("base64")}`,
+    pieces,
+  };
 }
 
 const BUNDLE_ALIAS: Record<string, string> = {
@@ -222,7 +566,13 @@ const TAIL_IDS: TailId[] = ["round", "lyretail"];
 const DORSAL_IDS: DorsalId[] = ["standard", "sailfin"];
 const sidebarColors = COLOR_DEFS.map((d) => ({ id: d.id, name: d.name }));
 
-function html(clientJs: string, swimConsts: ReturnType<typeof readSwimConstants>): string {
+function html(
+  clientJs: string,
+  swimConsts: ReturnType<typeof readSwimConstants>,
+  placements: ReturnType<typeof readPlacements>,
+  spritePlacements: ReturnType<typeof readSpritePlacements>,
+  spriteColors: ReturnType<typeof readHexConstants>,
+): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Molly aquarium designer</title>
 <style>
@@ -284,11 +634,26 @@ function html(clientJs: string, swimConsts: ReturnType<typeof readSwimConstants>
   #copyBox textarea { width:min(720px,86vw); height:min(60vh,500px); background:#0a1a24; color:var(--text);
                        border:1px solid var(--accent); border-radius:8px; padding:10px; font:12px ui-monospace,monospace; }
   #copyWrap { display:flex; flex-direction:column; gap:8px; }
+  #sceneStage { position:relative; flex:1; min-height:0; background:#0a1a24; overflow:auto;
+                display:flex; align-items:center; justify-content:center; }
+  #sceneImgWrap { position:relative; flex:none; }
+  #sceneImgWrap img { display:block; max-width:none; }
+  .piece-hit { position:absolute; border:1px solid transparent; cursor:grab; box-sizing:border-box; }
+  .piece-hit:hover { border-color:#ffd18a99; background:#ffd18a14; }
+  .piece-hit.dragging { cursor:grabbing; border-color:#ffd18a; background:#ffd18a22; }
+  select.small { padding:2px 5px; }
+  input[type=color] { width:30px; height:22px; padding:0; border:1px solid var(--line);
+                       background:none; border-radius:4px; }
+  .row input[type=text] { width:76px; font:11px ui-monospace,monospace; }
+  .row input[type=checkbox] { width:auto; }
+  .placement-hdr { font-size:11.5px; color:var(--text); margin:2px 0 1px; }
 </style></head><body>
 <div id="topbar">
   <span id="tabs">
     <button class="act tab on" data-tab="shape">Shape</button>
     <button class="act tab" data-tab="motion">Motion</button>
+    <button class="act tab" data-tab="scene">Scene</button>
+    <button class="act tab" data-tab="sprites">Sprites</button>
   </span>
   <span id="shapeControls">
     <label>Color <select id="color"></select></label>
@@ -300,6 +665,20 @@ function html(clientJs: string, swimConsts: ReturnType<typeof readSwimConstants>
     <label>Fish <input id="fishCount" type="number" min="1" max="20" value="8" style="width:52px"></label>
     <label><input id="currentToggle" type="checkbox"> Shared current</label>
     <label><input id="pauseToggle" type="checkbox"> Pause</label>
+  </span>
+  <span id="sceneControls" style="display:none">
+    <label>Canvas <select id="sceneSize" class="small">
+      <option value="390x844">390×844 (portrait)</option>
+      <option value="430x932">430×932 (portrait, large)</option>
+      <option value="844x390">844×390 (landscape)</option>
+    </select></label>
+  </span>
+  <span id="spritesControls" style="display:none">
+    <label>Canvas <select id="spriteSize" class="small">
+      <option value="390x844">390×844 (portrait)</option>
+      <option value="430x932">430×932 (portrait, large)</option>
+      <option value="844x390">844×390 (landscape)</option>
+    </select></label>
   </span>
   <span style="flex:1"></span>
   <button class="act" id="resetBtn">Reset tab</button>
@@ -314,6 +693,16 @@ function html(clientJs: string, swimConsts: ReturnType<typeof readSwimConstants>
       <div id="bakedPreview"><span class="hint">baking…</span></div>
     </div>
     <canvas id="motionCanvas" style="display:none"></canvas>
+    <div id="sceneStage" style="display:none">
+      <div id="sceneImgWrap">
+        <img id="sceneImg" alt="scene preview" />
+      </div>
+    </div>
+    <div id="spritesStage" style="display:none">
+      <div id="spriteImgWrap">
+        <img id="spriteImg" alt="sprite preview" />
+      </div>
+    </div>
   </div>
   <aside id="panel"></aside>
 </div>
@@ -332,6 +721,12 @@ const COLORS = ${JSON.stringify(sidebarColors)};
 const BODY_IDS = ${JSON.stringify(BODY_IDS)};
 const TAIL_IDS = ${JSON.stringify(TAIL_IDS)};
 const DORSAL_IDS = ${JSON.stringify(DORSAL_IDS)};
+const SCENE_DEFAULTS = ${JSON.stringify(PRISTINE_SCENE_DESIGN)};
+const PLACEMENT_DEFAULTS = ${JSON.stringify(placements)};
+const SPRITE_PLACEMENT_DEFAULTS = ${JSON.stringify(spritePlacements)};
+const SPRITE_COLOR_DEFAULTS = ${JSON.stringify(spriteColors)};
+const SPRITE_IDS = ${JSON.stringify(Object.keys(SCENE_SPRITES))};
+const SPRITE_LAYER_IDS = ${JSON.stringify(["far", "back", "mid", "front"])};
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const round3 = (n) => Math.round(n * 1000) / 1000;
@@ -339,6 +734,10 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 let tab = "shape";
 let shape = { bodyProfiles: clone(BODY_PROFILES), fins: clone(FIN_DEFAULTS) };
 let swim = Object.fromEntries(SWIM_DEFAULTS.map((c) => [c.name, c.value]));
+let sceneDesign = clone(SCENE_DEFAULTS);
+let placements = clone(PLACEMENT_DEFAULTS);
+let spritePlacements = clone(SPRITE_PLACEMENT_DEFAULTS);
+let spriteColors = Object.fromEntries(SPRITE_COLOR_DEFAULTS.map((c) => [c.name, c.value]));
 
 let bodyId = "standard", tailId = "round", dorsalId = "standard", colorId = COLORS[0].id;
 
@@ -886,19 +1285,593 @@ async function applyMotionBundle() {
 window.addEventListener("resize", () => { if (tab === "motion") resizeCanvas(); });
 
 // ---------------------------------------------------------------------------
+// Scene tab
+// ---------------------------------------------------------------------------
+//
+// Unlike Shape (drag handles over a real server bake) and Motion (the real
+// simulator bundled into the browser), this tab's preview is a full PNG
+// rendered server-side via \`renderScene()\` — the exact scene/gen/compose
+// pipeline \`scripts/aquarium-preview.ts\` uses — because that pipeline needs
+// real Skia (\`scripts/lib/skia-node.ts\`), which doesn't bundle for a
+// browser. Every slider edit re-requests that PNG, debounced like the Shape
+// tab's \`/api/bake\`.
+//
+// Two save models, matching the split the header comment above documents for
+// Shape vs Motion: species/water/substrate/bubbles/layers are a pure config
+// object (\`scene-design.ts\`), Saved by a full literal rewrite. Placements
+// live inside \`nature-scape.ts\`, which carries real curatorial prose
+// BETWEEN entries (the concave-U layout, rule-of-thirds rationale) — Save
+// there only patches each placement's xFraction/scale/mirror in place
+// (\`scripts/lib/placement-patch.ts\`); species/layer/attachment changes are
+// Copy-code only, same as the Shape tab's body-profile.ts/fins.ts split.
+
+const SCENE_SECTIONS = [
+  { id: "placements", label: "Placements" },
+  { id: "species.driftwood", label: "Driftwood" },
+  { id: "species.anubias", label: "Anubias" },
+  { id: "species.vallisneria", label: "Vallisneria" },
+  { id: "species.stemBush", label: "Stem bush" },
+  { id: "species.seiryuStone", label: "Seiryu stone" },
+  { id: "species.substrateMound", label: "Substrate mound" },
+  { id: "species.pebbles", label: "Pebbles" },
+  { id: "species.kelp", label: "Kelp" },
+  { id: "species.bloom", label: "Bloom" },
+  { id: "species.cabomba", label: "Cabomba" },
+  { id: "species.sword", label: "Sword plant" },
+  { id: "species.carpet", label: "Carpet" },
+  { id: "species.rotala", label: "Rotala" },
+  { id: "water", label: "Water" },
+  { id: "substrate", label: "Substrate" },
+  { id: "bubbles", label: "Bubbles" },
+  { id: "layers", label: "Layers" },
+];
+let activeSceneSection = SCENE_SECTIONS[0].id;
+
+const sceneGet = (path) => path.split(".").reduce((o, k) => o?.[k], sceneDesign);
+const sceneGetDefault = (path) => path.split(".").reduce((o, k) => o?.[k], SCENE_DEFAULTS);
+
+// Sensible slider bounds by field-name convention (Min/Range/Factor suffixes
+// this tool's own scene-design.ts uses); anything unlisted falls back to a
+// value-relative heuristic, same idea as tank-design-editor.ts's rangeFor.
+const SCENE_RANGE_HINTS = {
+  xFraction: [0, 1, 0.001], scale: [0.1, 3, 0.01],
+  heightMin: [0, 900, 1], heightRange: [0, 500, 1],
+  baseWidthMin: [0, 60, 0.5], baseWidthRange: [0, 40, 0.5],
+  widthMin: [0, 400, 1], widthRange: [0, 300, 1],
+  headingBase: [-180, 180, 1], headingRange: [0, 180, 1],
+  wanderDeg: [0, 60, 1],
+  trunkSegments: [2, 20, 1], branchSegments: [2, 20, 1],
+  branchCountMin: [0, 6, 1], branchCountRange: [0, 6, 1],
+  forkTMin: [0, 1, 0.01], forkTRange: [0, 1, 0.01],
+  forkAngleMin: [0, 90, 1], forkAngleRange: [0, 90, 1],
+  branchLenMin: [0, 1, 0.01], branchLenRange: [0, 1, 0.01],
+  branchWidthFactor: [0, 1, 0.01],
+  lowAnchorT: [0, 1, 0.01], lowAnchorAngleBase: [-180, 180, 1], lowAnchorAngleRange: [0, 90, 1],
+  leafCountMin: [0, 12, 1], leafCountRange: [0, 12, 1],
+  spreadBase: [0, 40, 1], spreadRange: [0, 40, 1], spreadMin: [0, 40, 1],
+  angleJitter: [0, 40, 1],
+  stemLenMin: [0, 60, 1], stemLenRange: [0, 60, 1],
+  leafLenMin: [0, 100, 1], leafLenRange: [0, 100, 1],
+  leafWidthFactorMin: [0, 1, 0.01], leafWidthFactorRange: [0, 1, 0.01], leafWidthFactor: [0, 1, 0.01],
+  rhizomeSpan: [0, 20, 0.5], rhizomeTilt: [0, 10, 0.5], rhizomeWidth: [0, 10, 0.5], stemWidth: [0, 6, 0.1],
+  unattachedBaseAngle: [-180, 180, 1],
+  leafTipLighten: [0, 1, 0.01],
+  bladeCountMin: [0, 12, 1], bladeCountRange: [0, 12, 1],
+  bladeSpacing: [0, 20, 0.5], stalkSpacing: [0, 20, 0.5],
+  leanBase: [0, 20, 0.5], leanJitter: [0, 20, 0.5], leanMin: [0, 60, 1], leanRange: [0, 60, 1],
+  curveRange: [0, 60, 1], curveMin: [0, 40, 1],
+  angleSpreadBase: [0, 40, 1], angleSpreadRange: [0, 40, 1],
+  vertexCountMin: [3, 20, 1], vertexCountRange: [0, 10, 1],
+  jitterMin: [0, 1.5, 0.01], jitterRange: [0, 1.5, 0.01],
+  countMin: [0, 20, 1], countRange: [0, 20, 1],
+  spreadRange: [0, 200, 1],
+  radiusMin: [0, 20, 0.5], radiusRange: [0, 20, 0.5],
+  frondCountMin: [0, 10, 1], frondCountRange: [0, 10, 1],
+  stalkCountMin: [0, 10, 1], stalkCountRange: [0, 10, 1],
+  stalkWidthMin: [0, 6, 0.1], stalkWidthRange: [0, 6, 0.1],
+  leafletLenMin: [0, 20, 0.5], leafletLenRange: [0, 20, 0.5],
+  swayHeightFactor: [0, 200, 1],
+  droopMin: [0, 30, 0.5], droopRange: [0, 30, 0.5],
+  petalRadiusMin: [0, 10, 0.1], petalRadiusRange: [0, 10, 0.1], petalCount: [3, 10, 1],
+  stemCountMin: [0, 8, 1], stemCountRange: [0, 8, 1],
+  count: [0, 40, 1], spriteSize: [4, 80, 1],
+  opacityBack: [0, 1, 0.01], opacityMid: [0, 1, 0.01], opacityFront: [0, 1, 0.01], opacityFar: [0, 1, 0.01],
+  currentLean: [0, 0.3, 0.005],
+  knotCountMin: [0, 6, 1], knotCountRange: [0, 6, 1],
+  knotRadiusMin: [0, 10, 0.1], knotRadiusRange: [0, 10, 0.1],
+  contactShadowRadius: [0, 4, 0.05], contactShadowStrength: [0, 1, 0.01],
+  facetCountMin: [0, 6, 1], facetCountRange: [0, 6, 1],
+  grainStrength: [0, 1, 0.01], speckleDensity: [0, 1, 0.01],
+  clumpCountMin: [0, 16, 1], clumpCountRange: [0, 16, 1],
+  leafRadiusMin: [0, 12, 0.1], leafRadiusRange: [0, 12, 0.1],
+  parallaxAmplitude: [0, 40, 0.5], parallaxPeriodSec: [10, 120, 1],
+  parallaxFar: [0, 1.5, 0.01], parallaxBack: [0, 1.5, 0.01], parallaxMid: [0, 1.5, 0.01], parallaxFront: [0, 1.5, 0.01],
+};
+
+function sceneRangeFor(key, value) {
+  if (SCENE_RANGE_HINTS[key]) return SCENE_RANGE_HINTS[key];
+  const a = Math.abs(value);
+  if (a === 0) return [-1, 1, 0.01];
+  if (a < 1) return [0, a * 3, 0.01];
+  if (a <= 20) return [0, a * 3, 0.1];
+  return [0, a * 3, 1];
+}
+
+function sceneSnap(value, step) {
+  if (!Number.isFinite(step) || step <= 0) return value;
+  const decimals = (String(step).split(".")[1] || "").length;
+  return Number((Math.round(value / step) * step).toFixed(decimals));
+}
+
+function isColorValue(v) { return typeof v === "string" && /^#[0-9a-f]{3,8}$/i.test(v); }
+
+function sceneChanged() {
+  renderSceneNav();
+  scheduleSceneRender();
+}
+
+function sceneNumberRow(label, obj, key, onChange) {
+  onChange = onChange || sceneChanged;
+  const [min, max, step] = sceneRangeFor(key, obj[key]);
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = '<span title="' + label + '">' + label + "</span>";
+  const slider = document.createElement("input");
+  slider.type = "range"; slider.min = min; slider.max = max; slider.step = step;
+  slider.value = obj[key];
+  const box = document.createElement("input");
+  box.type = "number"; box.step = step; box.value = obj[key];
+  const set = (v) => {
+    const raw = Number(v);
+    if (!Number.isFinite(raw)) return;
+    const n = sceneSnap(raw, step);
+    obj[key] = n; slider.value = n; box.value = n; onChange();
+  };
+  slider.addEventListener("input", () => set(slider.value));
+  box.addEventListener("change", () => set(box.value));
+  row.append(slider, box);
+  return row;
+}
+
+function sceneColorRow(label, obj, key, onChange) {
+  onChange = onChange || sceneChanged;
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = '<span title="' + label + '">' + label + "</span>";
+  const pick = document.createElement("input");
+  pick.type = "color"; pick.value = obj[key];
+  const text = document.createElement("input");
+  text.type = "text"; text.value = obj[key];
+  const set = (v) => { obj[key] = v; pick.value = v; text.value = v; onChange(); };
+  pick.addEventListener("input", () => set(pick.value));
+  text.addEventListener("change", () => { if (isColorValue(text.value)) set(text.value); });
+  row.append(pick, text);
+  return row;
+}
+
+function sceneBoolRow(label, obj, key, onChange) {
+  onChange = onChange || sceneChanged;
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = "<span>" + label + "</span>";
+  const cb = document.createElement("input");
+  cb.type = "checkbox"; cb.checked = !!obj[key];
+  cb.addEventListener("change", () => { obj[key] = cb.checked; onChange(); });
+  row.append(cb);
+  return row;
+}
+
+/** Every scene-design.ts leaf is a flat object of scalars — no nested emit needed, unlike tank-design's deep tree. */
+function sceneEmit(into, obj) {
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === "number") into.append(sceneNumberRow(k, obj, k));
+    else if (isColorValue(v)) into.append(sceneColorRow(k, obj, k));
+    else if (typeof v === "boolean") into.append(sceneBoolRow(k, obj, k));
+  }
+}
+
+function placementChangedFromDefault(p, i) {
+  const d = PLACEMENT_DEFAULTS[i];
+  return p.xFraction !== d.xFraction || p.scale !== d.scale || !!p.mirror !== !!d.mirror;
+}
+
+function placementsSection(panel) {
+  const tip = document.createElement("p");
+  tip.className = "hint";
+  tip.textContent = "Drag a piece in the preview to move it (updates xFraction), or edit the fields below. Position/scale/mirror save directly to nature-scape.ts. Adding/removing a placement, or changing species/layer/attachment, isn't supported here — use Copy code and edit nature-scape.ts by hand for that.";
+  panel.append(tip);
+  placements.forEach((p, i) => {
+    const hdr = document.createElement("div");
+    hdr.className = "placement-hdr";
+    hdr.textContent = p.species + " · " + p.layer +
+      (p.id ? " · id=" + p.id : "") + (p.attachToId ? " · on " + p.attachToId : "") +
+      " · seed=" + p.seed + (placementChangedFromDefault(p, i) ? " •" : "");
+    panel.append(hdr);
+    panel.append(sceneNumberRow("xFraction", p, "xFraction"));
+    panel.append(sceneNumberRow("scale", p, "scale"));
+    panel.append(sceneBoolRow("mirror", p, "mirror"));
+  });
+}
+
+function sceneSectionChanged(id) {
+  if (id === "placements") return placements.some((p, i) => placementChangedFromDefault(p, i));
+  return JSON.stringify(sceneGet(id)) !== JSON.stringify(sceneGetDefault(id));
+}
+
+function renderSceneNav() {
+  const nav = document.getElementById("nav");
+  nav.innerHTML = "";
+  for (const s of SCENE_SECTIONS) {
+    const b = document.createElement("button");
+    b.textContent = s.label;
+    b.className = (s.id === activeSceneSection ? "on " : "") + (sceneSectionChanged(s.id) ? "changed" : "");
+    b.addEventListener("click", () => { activeSceneSection = s.id; renderSceneNav(); renderScenePanel(); });
+    nav.append(b);
+  }
+}
+
+function renderScenePanel() {
+  const panel = document.getElementById("panel");
+  panel.innerHTML = "";
+  const section = SCENE_SECTIONS.find((s) => s.id === activeSceneSection);
+  const h = document.createElement("h2");
+  h.textContent = section.label;
+  panel.append(h);
+
+  if (activeSceneSection === "placements") placementsSection(panel);
+  else sceneEmit(panel, sceneGet(activeSceneSection));
+
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.textContent = activeSceneSection === "placements"
+    ? "Save placements writes into nature-scape.ts, preserving every comment. Run yarn verify:aquarium after."
+    : "Save scene writes scene-design.ts directly. Run yarn verify:aquarium after.";
+  panel.append(note);
+
+  // Redraw the overlay hit-boxes: only the Placements section needs them
+  // draggable, but switching sections shouldn't require a re-render to
+  // reflect that.
+  if (lastScenePieces) renderPieceOverlays(lastScenePieces, currentSceneSize().w);
+  updateSaveBtnLabel();
+}
+
+function currentSceneSize() {
+  const [w, h] = document.getElementById("sceneSize").value.split("x").map(Number);
+  return { w, h };
+}
+
+let sceneRenderTimer = null;
+function scheduleSceneRender() {
+  clearTimeout(sceneRenderTimer);
+  sceneRenderTimer = setTimeout(runSceneRender, 180);
+}
+
+let lastScenePieces = null;
+async function runSceneRender() {
+  const { w, h } = currentSceneSize();
+  const placementChanges = {};
+  for (const p of placements) {
+    placementChanges[p.seed] = { xFraction: p.xFraction, scale: p.scale, mirror: !!p.mirror };
+  }
+  try {
+    const res = await fetch("/api/scene-render", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ design: sceneDesign, placements: placementChanges, width: w, height: h }),
+    });
+    const body = await res.json();
+    if (!res.ok) { toast("Scene render failed: " + body.error); return; }
+    const img = document.getElementById("sceneImg");
+    const wrap = document.getElementById("sceneImgWrap");
+    img.src = body.dataUri;
+    wrap.style.width = w + "px";
+    wrap.style.height = h + "px";
+    lastScenePieces = body.pieces;
+    renderPieceOverlays(body.pieces, w);
+  } catch (err) {
+    toast("Scene render failed — check the server log");
+  }
+}
+
+function renderPieceOverlays(pieces, canvasWidth) {
+  const wrap = document.getElementById("sceneImgWrap");
+  wrap.querySelectorAll(".piece-hit").forEach((el) => el.remove());
+  if (activeSceneSection !== "placements") return;
+  for (const piece of pieces) {
+    const el = document.createElement("div");
+    el.className = "piece-hit";
+    el.style.left = piece.screenX + "px";
+    el.style.top = piece.screenY + "px";
+    el.style.width = Math.max(4, piece.width) + "px";
+    el.style.height = Math.max(4, piece.height) + "px";
+    el.title = piece.species + " (seed " + piece.seed + ")";
+    el.addEventListener("pointerdown", (e) => startPieceDrag(e, piece.seed, canvasWidth));
+    wrap.append(el);
+  }
+}
+
+let pieceDrag = null;
+function startPieceDrag(e, seed, canvasWidth) {
+  const placement = placements.find((p) => p.seed === seed);
+  if (!placement) return;
+  e.currentTarget.classList.add("dragging");
+  e.currentTarget.setPointerCapture(e.pointerId);
+  pieceDrag = { seed, startClientX: e.clientX, startXFraction: placement.xFraction, canvasWidth, el: e.currentTarget };
+}
+document.addEventListener("pointermove", (e) => {
+  if (!pieceDrag) return;
+  const placement = placements.find((p) => p.seed === pieceDrag.seed);
+  if (!placement) return;
+  const dx = e.clientX - pieceDrag.startClientX;
+  placement.xFraction = round3(
+    Math.min(1, Math.max(0, pieceDrag.startXFraction + dx / pieceDrag.canvasWidth)),
+  );
+  if (activeSceneSection === "placements") renderScenePanel();
+  scheduleSceneRender();
+});
+document.addEventListener("pointerup", (e) => {
+  if (!pieceDrag) return;
+  pieceDrag.el.classList.remove("dragging");
+  pieceDrag = null;
+});
+
+document.getElementById("sceneSize").addEventListener("change", () => scheduleSceneRender());
+
+// ---------------------------------------------------------------------------
+// Sprites tab — real painted PNGs instead of generated species; same
+// drag-to-reposition/live-preview UX as the Scene tab's Placements section,
+// reusing sceneNumberRow/sceneColorRow/sceneBoolRow with an explicit
+// onChange so edits here don't touch sceneDesign/placements state.
+// ---------------------------------------------------------------------------
+
+const SPRITES_SECTIONS = [
+  { id: "placements", label: "Placements" },
+  { id: "colors", label: "Colours" },
+];
+let activeSpritesSection = SPRITES_SECTIONS[0].id;
+
+function spritesChanged() {
+  renderSpritesNav();
+  scheduleSpriteRender();
+}
+
+// Adding/removing a row changes which DOM elements need to exist, not just
+// a value inside one — needs a full panel rebuild, unlike an in-place
+// slider/checkbox edit (which sceneNumberRow/sceneColorRow/sceneBoolRow
+// already handle via their own onChange).
+function spritePlacementsListChanged() {
+  renderSpritesNav();
+  renderSpritesPanel();
+  scheduleSpriteRender();
+}
+
+/** Indices >= SPRITE_PLACEMENT_DEFAULTS.length are additions from this session's "+ Add" — see insertSpritePlacements's header for why appending is safe but reordering/removing a SAVED entry isn't supported here. */
+function isNewSpritePlacement(i) {
+  return i >= SPRITE_PLACEMENT_DEFAULTS.length;
+}
+
+function spritePlacementChangedFromDefault(p, i) {
+  const d = SPRITE_PLACEMENT_DEFAULTS[i];
+  if (!d) return true; // a new, not-yet-saved addition
+  return p.xFraction !== d.xFraction || p.scale !== d.scale || !!p.mirror !== !!d.mirror;
+}
+
+function spriteAddRow(panel) {
+  const row = document.createElement("div");
+  row.className = "row";
+  const spriteSel = document.createElement("select");
+  spriteSel.className = "small";
+  spriteSel.innerHTML = SPRITE_IDS.map((id) => '<option value="' + id + '">' + id + "</option>").join("");
+  const layerSel = document.createElement("select");
+  layerSel.className = "small";
+  layerSel.innerHTML = SPRITE_LAYER_IDS.map((l) => '<option value="' + l + '">' + l + "</option>").join("");
+  layerSel.value = "mid";
+  const addBtn = document.createElement("button");
+  addBtn.className = "act";
+  addBtn.textContent = "+ Add";
+  addBtn.addEventListener("click", () => {
+    spritePlacements.push({ spriteId: spriteSel.value, layer: layerSel.value, xFraction: 0.5, scale: 1, mirror: false });
+    spritePlacementsListChanged();
+  });
+  row.append(spriteSel, layerSel, addBtn);
+  panel.append(row);
+}
+
+function spritePlacementsSection(panel) {
+  const tip = document.createElement("p");
+  tip.className = "hint";
+  tip.textContent = "Drag a piece in the preview to move it (updates xFraction), or edit the fields below. Position/scale/mirror save directly to nature-scape-sprites.ts. Add a new piece with the picker below (appears centered — drag it into place). Removing or reordering an already-saved placement, or changing its spriteId/layer, isn't supported here — use Copy code and edit nature-scape-sprites.ts by hand for that.";
+  panel.append(tip);
+  spriteAddRow(panel);
+  spritePlacements.forEach((p, i) => {
+    const isNew = isNewSpritePlacement(i);
+    const hdr = document.createElement("div");
+    hdr.className = "placement-hdr";
+    hdr.textContent = p.spriteId + " · " + p.layer + (isNew ? " · new" : "") + (spritePlacementChangedFromDefault(p, i) ? " •" : "");
+    if (isNew) {
+      const rm = document.createElement("button");
+      rm.className = "act";
+      rm.textContent = "✕";
+      rm.style.marginLeft = "8px";
+      rm.title = "Remove this not-yet-saved placement";
+      rm.addEventListener("click", () => {
+        spritePlacements.splice(i, 1);
+        spritePlacementsListChanged();
+      });
+      hdr.append(rm);
+    }
+    panel.append(hdr);
+    panel.append(sceneNumberRow("xFraction", p, "xFraction", spritesChanged));
+    panel.append(sceneNumberRow("scale", p, "scale", spritesChanged));
+    panel.append(sceneBoolRow("mirror", p, "mirror", spritesChanged));
+  });
+}
+
+function spriteColorsSection(panel) {
+  for (const c of SPRITE_COLOR_DEFAULTS) {
+    panel.append(sceneColorRow(c.name, spriteColors, c.name, spritesChanged));
+  }
+}
+
+function spritesSectionChanged(id) {
+  if (id === "placements") return spritePlacements.some((p, i) => spritePlacementChangedFromDefault(p, i));
+  return SPRITE_COLOR_DEFAULTS.some((c) => spriteColors[c.name] !== c.value);
+}
+
+function renderSpritesNav() {
+  const nav = document.getElementById("nav");
+  nav.innerHTML = "";
+  for (const s of SPRITES_SECTIONS) {
+    const b = document.createElement("button");
+    b.textContent = s.label;
+    b.className = (s.id === activeSpritesSection ? "on " : "") + (spritesSectionChanged(s.id) ? "changed" : "");
+    b.addEventListener("click", () => { activeSpritesSection = s.id; renderSpritesNav(); renderSpritesPanel(); });
+    nav.append(b);
+  }
+}
+
+function renderSpritesPanel() {
+  const panel = document.getElementById("panel");
+  panel.innerHTML = "";
+  const section = SPRITES_SECTIONS.find((s) => s.id === activeSpritesSection);
+  const h = document.createElement("h2");
+  h.textContent = section.label;
+  panel.append(h);
+
+  if (activeSpritesSection === "placements") spritePlacementsSection(panel);
+  else spriteColorsSection(panel);
+
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.textContent = activeSpritesSection === "placements"
+    ? "Save placements writes into nature-scape-sprites.ts, preserving every comment. Run yarn verify:aquarium after."
+    : "Save colours writes into render/sprite-layers.tsx directly (note: aquarium-preview.ts keeps its own copy of these — see that script's sprite composite). Run yarn verify:aquarium after.";
+  panel.append(note);
+
+  if (lastSpritePieces) renderSpritePieceOverlays(lastSpritePieces, currentSpriteSize().w);
+  updateSaveBtnLabel();
+}
+
+function currentSpriteSize() {
+  const [w, h] = document.getElementById("spriteSize").value.split("x").map(Number);
+  return { w, h };
+}
+
+let spriteRenderTimer = null;
+function scheduleSpriteRender() {
+  clearTimeout(spriteRenderTimer);
+  spriteRenderTimer = setTimeout(runSpriteRender, 180);
+}
+
+let lastSpritePieces = null;
+async function runSpriteRender() {
+  const { w, h } = currentSpriteSize();
+  const placementChanges = {};
+  const additions = [];
+  spritePlacements.forEach((p, i) => {
+    const entry = { xFraction: p.xFraction, scale: p.scale, mirror: !!p.mirror };
+    if (isNewSpritePlacement(i)) additions.push(Object.assign({ spriteId: p.spriteId, layer: p.layer }, entry));
+    else placementChanges[i] = entry;
+  });
+  try {
+    const res = await fetch("/api/sprite-render", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ placements: placementChanges, additions, colors: spriteColors, width: w, height: h }),
+    });
+    const body = await res.json();
+    if (!res.ok) { toast("Sprite render failed: " + body.error); return; }
+    const img = document.getElementById("spriteImg");
+    const wrap = document.getElementById("spriteImgWrap");
+    img.src = body.dataUri;
+    wrap.style.width = w + "px";
+    wrap.style.height = h + "px";
+    lastSpritePieces = body.pieces;
+    renderSpritePieceOverlays(body.pieces, w);
+  } catch (err) {
+    toast("Sprite render failed — check the server log");
+  }
+}
+
+function renderSpritePieceOverlays(pieces, canvasWidth) {
+  const wrap = document.getElementById("spriteImgWrap");
+  wrap.querySelectorAll(".piece-hit").forEach((el) => el.remove());
+  if (activeSpritesSection !== "placements") return;
+  pieces.forEach((piece, i) => {
+    const el = document.createElement("div");
+    el.className = "piece-hit";
+    el.style.left = piece.screenX + "px";
+    el.style.top = piece.screenY + "px";
+    el.style.width = Math.max(4, piece.width) + "px";
+    el.style.height = Math.max(4, piece.height) + "px";
+    el.title = piece.spriteId;
+    el.addEventListener("pointerdown", (e) => startSpritePieceDrag(e, i, canvasWidth));
+    wrap.append(el);
+  });
+}
+
+// Overlay index i matches spritePlacements[i] because composeSpriteScene
+// (server-side) iterates theme.placements in order and only skips an entry
+// if its manifest lookup fails — which won't happen for a manifest that's
+// kept in sync — so it never reorders relative to the client's array.
+let spritePieceDrag = null;
+function startSpritePieceDrag(e, index, canvasWidth) {
+  const placement = spritePlacements[index];
+  if (!placement) return;
+  e.currentTarget.classList.add("dragging");
+  e.currentTarget.setPointerCapture(e.pointerId);
+  spritePieceDrag = { index, startClientX: e.clientX, startXFraction: placement.xFraction, canvasWidth, el: e.currentTarget };
+}
+document.addEventListener("pointermove", (e) => {
+  if (!spritePieceDrag) return;
+  const placement = spritePlacements[spritePieceDrag.index];
+  if (!placement) return;
+  const dx = e.clientX - spritePieceDrag.startClientX;
+  placement.xFraction = round3(
+    Math.min(1, Math.max(0, spritePieceDrag.startXFraction + dx / spritePieceDrag.canvasWidth)),
+  );
+  if (activeSpritesSection === "placements") renderSpritesPanel();
+  scheduleSpriteRender();
+});
+document.addEventListener("pointerup", (e) => {
+  if (!spritePieceDrag) return;
+  spritePieceDrag.el.classList.remove("dragging");
+  spritePieceDrag = null;
+});
+
+document.getElementById("spriteSize").addEventListener("change", () => scheduleSpriteRender());
+
+// ---------------------------------------------------------------------------
 // Tabs / top bar / save / copy
 // ---------------------------------------------------------------------------
+
+function updateSaveBtnLabel() {
+  const btn = document.getElementById("saveBtn");
+  if (tab === "motion") btn.textContent = "Save to sim/swim.ts";
+  else if (tab === "scene") {
+    btn.textContent = activeSceneSection === "placements" ? "Save placements" : "Save scene";
+  } else if (tab === "sprites") {
+    btn.textContent = activeSpritesSection === "placements" ? "Save sprite placements" : "Save sprite colours";
+  }
+}
 
 function setTab(next) {
   tab = next;
   document.querySelectorAll("#tabs .tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === next));
   document.getElementById("shapeControls").style.display = next === "shape" ? "" : "none";
   document.getElementById("motionControls").style.display = next === "motion" ? "" : "none";
+  document.getElementById("sceneControls").style.display = next === "scene" ? "" : "none";
+  document.getElementById("spritesControls").style.display = next === "sprites" ? "" : "none";
   document.getElementById("shapeView").style.display = next === "shape" ? "flex" : "none";
   document.getElementById("motionCanvas").style.display = next === "motion" ? "block" : "none";
-  document.getElementById("saveBtn").style.display = next === "motion" ? "" : "none";
+  document.getElementById("sceneStage").style.display = next === "scene" ? "flex" : "none";
+  document.getElementById("spritesStage").style.display = next === "sprites" ? "flex" : "none";
+  document.getElementById("saveBtn").style.display = next === "shape" ? "none" : "";
   if (next === "shape") { renderShapePanel(); scheduleBake(); }
-  else { renderSwimPanel(); mountMotion(); }
+  else if (next === "motion") { renderSwimPanel(); mountMotion(); }
+  else if (next === "scene") { renderSceneNav(); renderScenePanel(); scheduleSceneRender(); }
+  else { renderSpritesNav(); renderSpritesPanel(); scheduleSpriteRender(); }
+  updateSaveBtnLabel();
 }
 document.querySelectorAll("#tabs .tab").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
 
@@ -939,10 +1912,18 @@ document.getElementById("resetBtn").addEventListener("click", () => {
   if (tab === "shape") {
     shape = { bodyProfiles: clone(BODY_PROFILES), fins: clone(FIN_DEFAULTS) };
     renderShapePanel(); scheduleBake();
-  } else {
+  } else if (tab === "motion") {
     swim = Object.fromEntries(SWIM_DEFAULTS.map((c) => [c.name, c.value]));
     renderSwimPanel();
     toast("Reset — reload the page to see the bundled simulator use shipped values again");
+  } else if (tab === "scene") {
+    sceneDesign = clone(SCENE_DEFAULTS);
+    placements = clone(PLACEMENT_DEFAULTS);
+    renderSceneNav(); renderScenePanel(); scheduleSceneRender();
+  } else {
+    spritePlacements = clone(SPRITE_PLACEMENT_DEFAULTS);
+    spriteColors = Object.fromEntries(SPRITE_COLOR_DEFAULTS.map((c) => [c.name, c.value]));
+    renderSpritesNav(); renderSpritesPanel(); scheduleSpriteRender();
   }
 });
 
@@ -957,6 +1938,47 @@ document.getElementById("copyBtn").addEventListener("click", () => {
     const lines = Object.entries(swim)
       .filter(([n, v]) => v !== swimInfo[n].value)
       .map(([n, v]) => n + " = " + v + ";");
+    showCopy(lines.length ? lines.join("\\n") : "(no changes)");
+    return;
+  }
+  if (tab === "scene") {
+    if (activeSceneSection === "placements") {
+      const literalPlacements = placements.map((p) => {
+        const out = { species: p.species, layer: p.layer, xFraction: p.xFraction, scale: p.scale, seed: p.seed };
+        if (p.id !== undefined) out.id = p.id;
+        if (p.attachToId !== undefined) out.attachToId = p.attachToId;
+        if (p.anchorIndex !== undefined) out.anchorIndex = p.anchorIndex;
+        if (p.mirror) out.mirror = true;
+        return out;
+      });
+      showCopy(
+        "// Paste into src/shared/aquarium/scene/themes/nature-scape.ts's NATURE_SCAPE, replacing placements:\\n" +
+        "placements: " + serializeLiteral(literalPlacements) + ","
+      );
+      return;
+    }
+    showCopy(
+      "// Paste into src/shared/aquarium/scene/scene-design.ts's DEFAULT_SCENE_DESIGN, replacing " + activeSceneSection + ":\\n" +
+      activeSceneSection + ": " + serializeLiteral(sceneGet(activeSceneSection)) + ","
+    );
+    return;
+  }
+  if (tab === "sprites") {
+    if (activeSpritesSection === "placements") {
+      const literalPlacements = spritePlacements.map((p) => {
+        const out = { spriteId: p.spriteId, layer: p.layer, xFraction: p.xFraction, scale: p.scale };
+        if (p.mirror) out.mirror = true;
+        return out;
+      });
+      showCopy(
+        "// Paste into src/shared/aquarium/scene/themes/nature-scape-sprites.ts's SPRITE_SCAPE, replacing placements:\\n" +
+        "placements: " + serializeLiteral(literalPlacements) + ","
+      );
+      return;
+    }
+    const lines = SPRITE_COLOR_DEFAULTS
+      .filter((c) => spriteColors[c.name] !== c.value)
+      .map((c) => 'const ' + c.name + ' = "' + spriteColors[c.name] + '";');
     showCopy(lines.length ? lines.join("\\n") : "(no changes)");
     return;
   }
@@ -1003,15 +2025,84 @@ function serializeLiteral(value, indent) {
 }
 
 document.getElementById("saveBtn").addEventListener("click", async () => {
-  const changes = Object.fromEntries(Object.entries(swim).filter(([n, v]) => v !== swimInfo[n].value));
-  if (Object.keys(changes).length === 0) { toast("No changes to save"); return; }
-  const res = await fetch("/api/save-swim", {
+  if (tab === "motion") {
+    const changes = Object.fromEntries(Object.entries(swim).filter(([n, v]) => v !== swimInfo[n].value));
+    if (Object.keys(changes).length === 0) { toast("No changes to save"); return; }
+    const res = await fetch("/api/save-swim", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ changes }),
+    });
+    const out = await res.json();
+    if (res.ok) toast("Saved sim/swim.ts — run yarn verify:aquarium");
+    else alert("Save failed: " + out.error);
+    return;
+  }
+
+  if (tab === "sprites") {
+    if (activeSpritesSection === "placements") {
+      const changes = {};
+      const additions = [];
+      spritePlacements.forEach((p, i) => {
+        if (isNewSpritePlacement(i)) {
+          additions.push({ spriteId: p.spriteId, layer: p.layer, xFraction: p.xFraction, scale: p.scale, mirror: !!p.mirror });
+        } else if (spritePlacementChangedFromDefault(p, i)) {
+          changes[i] = { xFraction: p.xFraction, scale: p.scale, mirror: !!p.mirror };
+        }
+      });
+      if (Object.keys(changes).length === 0 && additions.length === 0) { toast("No placement changes to save"); return; }
+      const res = await fetch("/api/save-sprite-placements", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ changes, additions }),
+      });
+      const out = await res.json();
+      if (res.ok) toast("Saved nature-scape-sprites.ts — run yarn verify:aquarium");
+      else alert("Save failed: " + out.error);
+      return;
+    }
+    const changes = {};
+    for (const c of SPRITE_COLOR_DEFAULTS) {
+      if (spriteColors[c.name] !== c.value) changes[c.name] = spriteColors[c.name];
+    }
+    if (Object.keys(changes).length === 0) { toast("No colour changes to save"); return; }
+    const res = await fetch("/api/save-sprite-colors", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ changes }),
+    });
+    const out = await res.json();
+    if (res.ok) toast("Saved render/sprite-layers.tsx — run yarn verify:aquarium");
+    else alert("Save failed: " + out.error);
+    return;
+  }
+
+  if (activeSceneSection === "placements") {
+    const changes = {};
+    placements.forEach((p, i) => {
+      if (placementChangedFromDefault(p, i)) {
+        changes[p.seed] = { xFraction: p.xFraction, scale: p.scale, mirror: !!p.mirror };
+      }
+    });
+    if (Object.keys(changes).length === 0) { toast("No placement changes to save"); return; }
+    const res = await fetch("/api/save-placements", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ changes }),
+    });
+    const out = await res.json();
+    if (res.ok) toast("Saved nature-scape.ts — run yarn verify:aquarium");
+    else alert("Save failed: " + out.error);
+    return;
+  }
+
+  const res = await fetch("/api/save-scene", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ changes }),
+    body: JSON.stringify(sceneDesign),
   });
   const out = await res.json();
-  if (res.ok) toast("Saved sim/swim.ts — run yarn verify:aquarium");
+  if (res.ok) toast("Saved scene-design.ts — run yarn verify:aquarium");
   else alert("Save failed: " + out.error);
 });
 
@@ -1024,7 +2115,15 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/") {
     try {
       const swimConsts = readSwimConstants(readFileSync(SWIM_PATH, "utf8"));
-      const page = html(buildClient(), swimConsts);
+      const placements = readPlacements(readFileSync(NATURE_SCAPE_PATH, "utf8"));
+      const spritePlacements = readSpritePlacements(
+        readFileSync(NATURE_SCAPE_SPRITES_PATH, "utf8"),
+      );
+      const spriteColors = readHexConstants(
+        readFileSync(SPRITE_LAYERS_PATH, "utf8"),
+        SPRITE_COLOR_NAMES,
+      );
+      const page = html(buildClient(), swimConsts, placements, spritePlacements, spriteColors);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(page);
     } catch (err) {
@@ -1086,6 +2185,121 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/api/scene-render") {
+    try {
+      const body = (await readJson(req)) as {
+        design: SceneDesign;
+        placements: Record<number, PlacementChange>;
+        width: number;
+        height: number;
+      };
+      applySceneDesign(body.design);
+      const { dataUri, pieces } = await renderScene(body.width, body.height, body.placements);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ dataUri, pieces }));
+    } catch (err) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/save-scene") {
+    try {
+      const design = (await readJson(req)) as SceneDesign;
+      const current = readFileSync(SCENE_DESIGN_PATH, "utf8");
+      writeFileSync(SCENE_DESIGN_PATH, serializeSceneDesign(current, design));
+      console.log("Saved scene-design.ts");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/save-placements") {
+    try {
+      const body = (await readJson(req)) as { changes: Record<number, PlacementChange> };
+      const current = readFileSync(NATURE_SCAPE_PATH, "utf8");
+      writeFileSync(NATURE_SCAPE_PATH, patchPlacements(current, body.changes));
+      console.log("Saved nature-scape.ts placements:", Object.keys(body.changes).join(", "));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/sprite-render") {
+    try {
+      const body = (await readJson(req)) as {
+        placements: Record<number, SpritePlacementChange>;
+        additions?: NewSpritePlacement[];
+        colors: Record<string, string>;
+        width: number;
+        height: number;
+      };
+      const { dataUri, pieces } = await renderSpriteScene(
+        body.width,
+        body.height,
+        body.placements,
+        body.colors,
+        body.additions ?? [],
+      );
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ dataUri, pieces }));
+    } catch (err) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/save-sprite-placements") {
+    try {
+      const body = (await readJson(req)) as {
+        changes: Record<number, SpritePlacementChange>;
+        additions?: NewSpritePlacement[];
+      };
+      let current = readFileSync(NATURE_SCAPE_SPRITES_PATH, "utf8");
+      current = patchSpritePlacements(current, body.changes);
+      if (body.additions && body.additions.length > 0) {
+        current = insertSpritePlacements(current, body.additions);
+      }
+      writeFileSync(NATURE_SCAPE_SPRITES_PATH, current);
+      console.log(
+        "Saved nature-scape-sprites.ts placements:",
+        Object.keys(body.changes).join(", "),
+        body.additions?.length ? `+${body.additions.length} new` : "",
+      );
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/save-sprite-colors") {
+    try {
+      const body = (await readJson(req)) as { changes: Record<string, string> };
+      const current = readFileSync(SPRITE_LAYERS_PATH, "utf8");
+      writeFileSync(SPRITE_LAYERS_PATH, patchHexConstants(current, body.changes));
+      console.log("Saved render/sprite-layers.tsx colours:", Object.keys(body.changes).join(", "));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: (err as Error).message }));
+    }
+    return;
+  }
+
   res.writeHead(404);
   res.end("Not found");
 });
@@ -1094,4 +2308,13 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`Aquarium designer: http://127.0.0.1:${PORT}`);
   console.log("Shape tab: Copy-code only (body-profile.ts/fins.ts keep their inline comments).");
   console.log("Motion tab: Save writes src/shared/aquarium/sim/swim.ts directly.");
+  console.log(
+    "Scene tab: species/water/substrate/bubbles/layers save to scene-design.ts directly;",
+  );
+  console.log(
+    "  placements save xFraction/scale/mirror in place, structural edits are Copy-code only.",
+  );
+  console.log(
+    "Sprites tab: placements save to nature-scape-sprites.ts in place; colours save to render/sprite-layers.tsx directly.",
+  );
 });

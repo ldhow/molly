@@ -258,7 +258,7 @@ both automatically, no script change needed.
 
 - `scene/gen/*.ts` — pure, seeded generators (`driftwood`, `anubias`,
   `vallisneria`, `stemBush`, `seiryuStone`, `substrateMound`, `pebbles`,
-  `kelp`, `bloom`), each returning IR nodes + a bounding box + (for driftwood) mount
+  `kelp`, `bloom`, `cabomba`, `sword`), each returning IR nodes + a bounding box + (for driftwood) mount
   **anchors** other pieces can attach to. `core/ir.ts`'s `GroupTransform`
   (translate/rotate/scale on a group) is what lets a leaf be authored
   pointing straight up and then placed at any angle — don't hand-rotate path
@@ -318,6 +318,135 @@ Note the spaciousness/corridor invariants in `verify-aquarium.ts` rasterize
 **mid+front only** — back-layer decor like kelp is deliberately out of their
 scope, since it draws behind the fish and cannot block them. Adding mass
 there is safe; adding it to mid/front is what those checks police.
+
+**Every background number lives in one place**, `scene/scene-design.ts` —
+each species' shape/size/colour ranges (`DriftwoodDesign`, `KelpDesign`, ...),
+plus water/substrate gradient stops, bubble count/size, and the back/mid/front
+opacity + current-lean constants `scene-layers.tsx` reads. Before this existed
+these were literals buried inside each `gen/*.ts` function body and a handful
+of `render/*.tsx` consts, uneditable without changing code; every generator
+and render file now imports its slice of `DEFAULT_SCENE_DESIGN` at module
+scope, the same pattern `fish/body-profile.ts`/`fins.ts` already use.
+
+`yarn aquarium:design`'s **Scene tab** (alongside the existing Shape and
+Motion tabs — see `scripts/aquarium-design-editor.ts`'s header comment) is
+the live editor for all of it: a slider/colour-picker panel per species plus
+Water/Substrate/Bubbles/Layers sections, a real server-rendered preview (the
+same `composeScene`/`bakeNodes` path `aquarium-preview.ts`'s full-scene
+composite uses, so what you see is pixel-identical to what ships), and drag-
+to-reposition on the preview itself for `nature-scape.ts`'s placements. Two
+save models, matching the split the tool's header comment documents for
+Shape vs Motion: species/water/substrate/bubbles/layers write `scene-
+design.ts` directly (a pure config literal — safe to rewrite wholesale);
+placements save only `xFraction`/`scale`/`mirror` in place inside `nature-
+scape.ts` (`scripts/lib/placement-patch.ts`), since that file carries real
+curatorial prose _between_ placement entries (the concave-U layout, rule-of-
+thirds rationale) that a whole-array rewrite would destroy — adding/removing
+a placement or changing its species/layer/attachment is Copy-code only, same
+split the Shape tab uses for `body-profile.ts`/`fins.ts`. Run
+`yarn verify:aquarium` after any Scene-tab save.
+
+### Far layer, carpet, rotala
+
+Two more species exist for composition, not botany, same spirit as kelp/bloom:
+**carpet** (`gen/carpet.ts`) is a low ground-cover clump scatter kept under
+`CarpetDesign.heightMax` on purpose so it never competes with the taller
+front/mid pieces for the corridor/spaciousness invariants, and **rotala**
+(`gen/plants.ts::generateRotala`) is a red-stem accent sharing `stemBush`'s
+body via an extracted `generateStemPlant` helper, just a warmer palette and
+its own rng stream. `SceneLayer` also gained a fourth value, `"far"` — dim
+(`layers.opacityFar`), distant silhouette decor drawn behind `"back"`, no
+fish band ever occupies it (`aquarium-canvas.tsx`'s `bandOf()` still only
+returns back/mid/front), and exempt from the composition invariants exactly
+like `"back"` (`verify-aquarium.ts`'s `midFront` filter is now an allowlist
+of `"mid"`/`"front"`, not a `!== "back"` exclusion).
+
+### Parallax
+
+`render/parallax.tsx`'s `useCameraX()` is a slow autonomous horizontal drift
+(a sine wave, `layers.parallaxAmplitude`/`parallaxPeriodSec`) — the closest
+thing this renderer has to a camera. `ParallaxGroup` applies a per-band
+fraction of it (`layers.parallaxFar/Back/Mid/Front`) so far decor drifts
+least and front decor most, which is what actually sells depth once a fourth
+band existed to show it against. Each fish band is wrapped in the SAME
+`ParallaxGroup` as its matching decor layer (in `aquarium-canvas.tsx`) so
+fish never slide against the scenery they weave between. `AquariumSubstrate`
+overscans by a fixed margin (`OVERSCAN` in `water.tsx`) comfortably past the
+max drift so panning never reveals canvas past the sand. Static tooling
+(verify/preview/editor) never renders through this component, so it composes
+at rest (camera = 0) — parallax needs no accounting there.
+
+### Substrate texture
+
+`AquariumSubstrate` moved from a flat gradient rect to `core/sksl/substrate.ts`'s
+shader — the same gradient plus static per-pixel grain and a sparse darker
+speckle scatter (`substrate.grainStrength`/`speckleDensity`/`speckleColor`),
+no time uniform since sand doesn't move. `aquarium-preview.ts`'s sand pass
+uses the identical effect so the preview stays pixel-matched to the app.
+
+### Sprite mode (A/B art comparison)
+
+A second, opt-in background-art path exists purely for comparing "generated"
+vs "shipped PNG" art side by side: `scene/sprites/` (`sprite-manifest.ts`'s
+data + `sprite-sources.ts`'s `require`s), `scene/compose-sprites.ts`, and
+`scene/themes/nature-scape-sprites.ts` mirror the procedural
+scene/compose/theme trio but for individual painted pieces instead of
+generated species — `render/sprite-layers.tsx` draws them with no bake/cache
+step, since the PNG already is the texture. `useSceneArtStore`
+(`@/shared/store/scene-art-store.ts`) is the toggle (Tank screen's "Scene:"
+button, shown whenever the Renderer toggle is on 2D V2), independent of the
+Renderer (2D/3D) toggle.
+
+The 22 pieces currently in `assets/images/scene/` (`driftwood-log`,
+`driftwood-branch`, `driftwood-branch2`, `rock-a`/`rock-b`/`rock-huge`/
+`rock-small`, `kelp`, `tall-grass`, `grass-spiky`, `rotala-tall`, `cabomba`,
+`anubias-a`/`anubias-b`, `fern`, `moss-ball`, `leafy-clump`, `leafy-bush`,
+`grass-tuft`, `sand-patch`, `pebble`, `pebble-brown`) are real painted art —
+cropped from two hand-supplied sheets by `scripts/extract-scene-pieces.ts`
+(now parameterized: `extract-scene-pieces.ts <file> [stripBottom]`), which
+reconstructs alpha (neither source has any — see that script's header), runs
+connected-component detection, and renders a labeled contact sheet so each
+crop can be identified by eye before naming it. `scene.png`'s TOP section —
+a complete pre-composed scene — is a style reference only (palette, mood,
+composition balance), never drawn directly; an earlier version of this mode
+tried exactly that (stretch the whole reference image to fill the canvas)
+and it looked good but couldn't interleave with fish depth bands or tune
+composition per canvas size the way individually-placed pieces can.
+`pieces.png` is a second, pure piece sheet (no reference strip, so
+`stripBottom=0`) that supplied the size-variety pieces added later
+(`rock-huge`/`rock-small`, `leafy-bush`, `grass-spiky`, `pebble-brown`).
+
+`driftwoodBranch`/`driftwoodLog` are placed once each (left focal point,
+smaller mirrored right-side echo via `mirror: true`) — the same
+one-PNG-both-sides trick `gen/driftwood.ts`'s `mirror` flag does
+procedurally. Sprite mode has no procedural water shader of its own, so
+`render/sprite-layers.tsx`'s `SpriteWater` is a static gradient using colours
+sampled from the reference art (noticeably brighter/more pastel-cyan than
+the procedural theme's default teal) rather than
+`DEFAULT_SCENE_DESIGN.water`. `SpriteSubstrate` draws a solid gradient fill
+(sampled from `sand-patch.png`'s own tone) before stretching the sand piece
+over it — the piece is a rounded clump, not a straight strip, and without
+the fill its curved edge shows water peeking through at the canvas corners.
+
+`yarn aquarium:design`'s **Sprites tab** (alongside Shape/Motion/Scene — see
+`scripts/aquarium-design-editor.ts`'s header) is the live editor for this
+mode: a Placements section (drag pieces in a real server-rendered preview,
+or edit `xFraction`/`scale`/`mirror` directly — saves into
+`nature-scape-sprites.ts` in place via `scripts/lib/sprite-placement-patch.ts`,
+keyed by array index since `SpritePlacement` has no unique id, unlike the
+procedural theme's `seed`) and a Colours section (water/sand swatches —
+saves into `render/sprite-layers.tsx` directly via
+`scripts/lib/hex-const-patch.ts`, the same one-line-at-a-time patch idea as
+`swim-const-patch.ts` but for a quoted hex string instead of a number).
+Adding/removing a placement or changing `spriteId`/`layer` is Copy-code
+only, same split every other tab uses for structural edits. Run
+`yarn verify:aquarium` after saving from this tab.
+
+If the manifest is ever empty (no sprite art available), every consumer
+(the canvas, `aquarium-preview.ts`'s second composite row,
+`verify-aquarium.ts`'s sprite occupancy section) degrades to "nothing to
+draw" rather than failing; see `sprite-manifest.ts`'s header for the process
+to add or replace a sprite.
 
 ## Behaviour
 

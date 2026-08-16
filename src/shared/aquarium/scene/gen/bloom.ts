@@ -12,25 +12,31 @@
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { unionBox } from "@/shared/aquarium/core/ir";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
 import { lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
 import { ribbonPath } from "./ribbon";
 
-const PETAL_COLORS = ["#d98ac4", "#c377d8", "#e79ec6"];
-const STEM_COLOR = "#2f6b4a";
+const DESIGN = DEFAULT_SCENE_DESIGN.species.bloom;
 
 export const generateBloom: Generator = ({ seed, scale }) => {
+  // Read at call time — see anubias.ts's identical note on why.
+  const PETAL_COLORS = [DESIGN.petalColor1, DESIGN.petalColor2, DESIGN.petalColor3];
+  const STEM_COLOR = DESIGN.stemColor;
   const rng = makeRng(`bloom-${seed}`);
-  const stemCount = 3 + Math.floor(rng() * 3);
+  // Kept deliberately small — see `BloomDesign.stemCountMin`'s doc comment
+  // in scene-design.ts for why this species stays a punctuation mark.
+  const stemCount = DESIGN.stemCountMin + Math.floor(rng() * DESIGN.stemCountRange);
   const nodes: Node[] = [];
   let bbox = { x: -4 * scale, y: -4 * scale, width: 8 * scale, height: 8 * scale };
 
   for (let i = 0; i < stemCount; i++) {
-    const angleDeg = -90 + (i - (stemCount - 1) / 2) * (15 + rng() * 9);
+    const angleDeg =
+      -90 + (i - (stemCount - 1) / 2) * (DESIGN.angleSpreadBase + rng() * DESIGN.angleSpreadRange);
     const rad = (angleDeg * Math.PI) / 180;
-    const stemLen = (16 + rng() * 16) * scale;
+    const stemLen = (DESIGN.stemLenMin + rng() * DESIGN.stemLenRange) * scale;
     const tipX = Math.cos(rad) * stemLen;
     const tipY = Math.sin(rad) * stemLen;
 
@@ -50,8 +56,8 @@ export const generateBloom: Generator = ({ seed, scale }) => {
     // as plain circles rather than shaped petals — at this size (a few px)
     // petal geometry is invisible and only costs path nodes.
     const petalColor = PETAL_COLORS[i % PETAL_COLORS.length];
-    const r = (3.4 + rng() * 1.6) * scale;
-    const petals = 5;
+    const r = (DESIGN.petalRadiusMin + rng() * DESIGN.petalRadiusRange) * scale;
+    const petals = DESIGN.petalCount;
     const rot = rng() * Math.PI * 2;
     for (let k = 0; k < petals; k++) {
       const a = rot + (k / petals) * Math.PI * 2;
@@ -82,5 +88,5 @@ export const generateBloom: Generator = ({ seed, scale }) => {
     });
   }
 
-  return { nodes, bbox, anchors: [], swayHeight: 14 * scale };
+  return { nodes, bbox, anchors: [], swayHeight: DESIGN.swayHeightFactor * scale };
 };

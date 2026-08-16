@@ -17,15 +17,28 @@ import { StyleSheet, View, type ViewStyle } from "react-native";
 
 import { sandHeightFor } from "@/shared/constants/tank";
 import { isMollyTankFish, type AnyTankFish, type MollyTankFish } from "@/shared/lib/tank-fish";
+import { useSceneArtStore } from "@/shared/store/scene-art-store";
 
+import { composeSpriteScene, type PlacedSprite } from "../scene/compose-sprites";
 import { composeScene, type PlacedPiece } from "../scene/compose";
+import { DEFAULT_SCENE_DESIGN } from "../scene/scene-design";
+import { SPRITE_SCAPE } from "../scene/themes/nature-scape-sprites";
 import { NATURE_SCAPE } from "../scene/themes/nature-scape";
 import type { SceneLayer } from "../scene/types";
 import { AquariumBubbles } from "./bubbles";
 import { CreatureLayer } from "./creature-layer";
 import { FishLayer } from "./fish-layer";
+import { ParallaxGroup, useCameraX } from "./parallax";
 import { SceneLayerGroup } from "./scene-layers";
+import { SpriteLayerGroup, SpriteSubstrate, SpriteWater } from "./sprite-layers";
 import { AquariumSubstrate, AquariumWater } from "./water";
+
+const PARALLAX_FACTOR: Record<SceneLayer, number> = {
+  far: DEFAULT_SCENE_DESIGN.layers.parallaxFar,
+  back: DEFAULT_SCENE_DESIGN.layers.parallaxBack,
+  mid: DEFAULT_SCENE_DESIGN.layers.parallaxMid,
+  front: DEFAULT_SCENE_DESIGN.layers.parallaxFront,
+};
 
 export type AquariumFish = MollyTankFish;
 
@@ -116,6 +129,7 @@ export function AquariumCanvas({ fish, mode = "tank", style }: Props) {
     .map((f) => ({ ...f, depth: depthOf(f.seed), band: bandOf(depthOf(f.seed)) }))
     .sort((a, b) => a.depth - b.depth);
 
+  const sceneArtMode = useSceneArtStore((s) => s.sceneArtMode);
   const substrateY = size.height - sandHeightFor(size.height);
   const scene = useMemo(
     () =>
@@ -125,10 +139,32 @@ export function AquariumCanvas({ fish, mode = "tank", style }: Props) {
     [size.width, size.height, substrateY],
   );
   const piecesByLayer = useMemo(() => {
-    const grouped: Record<SceneLayer, PlacedPiece[]> = { back: [], mid: [], front: [] };
+    const grouped: Record<SceneLayer, PlacedPiece[]> = { far: [], back: [], mid: [], front: [] };
     for (const piece of scene?.pieces ?? []) grouped[piece.layer].push(piece);
     return grouped;
   }, [scene]);
+
+  const spriteScene = useMemo(
+    () =>
+      size.width > 0 && size.height > 0
+        ? composeSpriteScene(SPRITE_SCAPE, size.width, size.height, substrateY)
+        : null,
+    [size.width, size.height, substrateY],
+  );
+  const spritesByLayer = useMemo(() => {
+    const grouped: Record<SceneLayer, PlacedSprite[]> = { far: [], back: [], mid: [], front: [] };
+    for (const piece of spriteScene?.pieces ?? []) grouped[piece.layer].push(piece);
+    return grouped;
+  }, [spriteScene]);
+
+  const cameraX = useCameraX();
+
+  const renderDecor = (layer: SceneLayer) =>
+    sceneArtMode === "sprites" ? (
+      <SpriteLayerGroup pieces={spritesByLayer[layer]} />
+    ) : (
+      <SceneLayerGroup pieces={piecesByLayer[layer]} />
+    );
 
   return (
     <View
@@ -140,15 +176,34 @@ export function AquariumCanvas({ fish, mode = "tank", style }: Props) {
     >
       {size.width > 0 && size.height > 0 ? (
         <Canvas style={StyleSheet.absoluteFill}>
-          <AquariumWater width={size.width} height={size.height} />
-          <AquariumSubstrate width={size.width} height={size.height} />
+          {sceneArtMode === "sprites" ? (
+            <SpriteWater width={size.width} height={size.height} />
+          ) : (
+            <AquariumWater width={size.width} height={size.height} />
+          )}
+          <ParallaxGroup factor={PARALLAX_FACTOR.front} cameraX={cameraX}>
+            {sceneArtMode === "sprites" ? (
+              <SpriteSubstrate width={size.width} height={size.height} />
+            ) : (
+              <AquariumSubstrate width={size.width} height={size.height} />
+            )}
+          </ParallaxGroup>
+          <ParallaxGroup factor={PARALLAX_FACTOR.far} cameraX={cameraX}>
+            {renderDecor("far")}
+          </ParallaxGroup>
           {dead.map((f) => renderDead(f, size))}
-          <SceneLayerGroup pieces={piecesByLayer.back} />
-          {alive.filter((f) => f.band === "back").map((f) => renderAlive(f, size, mode))}
-          <SceneLayerGroup pieces={piecesByLayer.mid} />
-          {alive.filter((f) => f.band === "mid").map((f) => renderAlive(f, size, mode))}
-          <SceneLayerGroup pieces={piecesByLayer.front} />
-          {alive.filter((f) => f.band === "front").map((f) => renderAlive(f, size, mode))}
+          <ParallaxGroup factor={PARALLAX_FACTOR.back} cameraX={cameraX}>
+            {renderDecor("back")}
+            {alive.filter((f) => f.band === "back").map((f) => renderAlive(f, size, mode))}
+          </ParallaxGroup>
+          <ParallaxGroup factor={PARALLAX_FACTOR.mid} cameraX={cameraX}>
+            {renderDecor("mid")}
+            {alive.filter((f) => f.band === "mid").map((f) => renderAlive(f, size, mode))}
+          </ParallaxGroup>
+          <ParallaxGroup factor={PARALLAX_FACTOR.front} cameraX={cameraX}>
+            {renderDecor("front")}
+            {alive.filter((f) => f.band === "front").map((f) => renderAlive(f, size, mode))}
+          </ParallaxGroup>
           <AquariumBubbles width={size.width} height={size.height} />
         </Canvas>
       ) : null}

@@ -26,6 +26,16 @@ export const NATURE_SCAPE: SceneTheme = {
   name: "nature-scape",
   swimLanes: [{ xFraction: [0.32, 0.72] }],
   placements: [
+    // Far layer: dim, distant silhouettes behind everything else — no fish
+    // ever occupy this band (see aquarium-canvas.tsx's `bandOf`). Small
+    // kelp/stone echoes of the back-layer edge decor, just enough mass for
+    // the parallax drift to actually read as depth. Exempt from the
+    // composition invariants exactly like `back` — see verify-aquarium.ts.
+    { species: "kelp", layer: "far", xFraction: 0.04, scale: 0.7, seed: 501 },
+    { species: "kelp", layer: "far", xFraction: 0.94, scale: 0.65, seed: 503, mirror: true },
+    { species: "seiryuStone", layer: "far", xFraction: 0.06, scale: 0.6, seed: 505 },
+    { species: "seiryuStone", layer: "far", xFraction: 0.92, scale: 0.55, seed: 507 },
+
     // Back layer: the substrate itself rises at the sides (real scapes
     // slope up toward the back/edges), framed by tall grass descending in
     // height toward the open centre.
@@ -122,5 +132,14 @@ export const NATURE_SCAPE: SceneTheme = {
     { species: "bloom", layer: "front", xFraction: 0.12, scale: 1.0, seed: 401 },
     { species: "bloom", layer: "front", xFraction: 0.85, scale: 0.82, seed: 403 },
     { species: "bloom", layer: "mid", xFraction: 0.24, scale: 0.7, seed: 405 },
+
+    // Carpet: low ground-cover texture at the swim lane's edges, kept short
+    // enough (`CarpetDesign.heightMax`) that it never competes with the
+    // taller front/mid pieces for the composition invariants.
+    { species: "carpet", layer: "front", xFraction: 0.3, scale: 0.9, seed: 601 },
+    { species: "carpet", layer: "front", xFraction: 0.74, scale: 0.8, seed: 603 },
+    // Rotala: a warm red-stem accent on the right, breaking up the all-green
+    // planting the way the reference photo's ludwigia clump does.
+    { species: "rotala", layer: "mid", xFraction: 0.78, scale: 0.75, seed: 611 },
   ],
 };

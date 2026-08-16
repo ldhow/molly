@@ -3,12 +3,11 @@
 // upward (-y).
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
+import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
 import { makeRng } from "@/shared/lib/rng";
 
-const STONE_DARK = "#2b3038";
-const STONE_MID = "#454c57";
-const STONE_LIGHT = "#6b7480";
+const DESIGN = DEFAULT_SCENE_DESIGN.species.seiryuStone;
 
 const F = (n: number) => n.toFixed(1);
 
@@ -19,10 +18,14 @@ function polygonD(points: readonly XY[]): string {
 }
 
 export const generateSeiryuStone: Generator = ({ seed, scale }) => {
+  // Read at call time — see anubias.ts's identical note on why.
+  const STONE_DARK = DESIGN.darkColor;
+  const STONE_MID = DESIGN.midColor;
+  const STONE_LIGHT = DESIGN.lightColor;
   const rng = makeRng(`seiryu-${seed}`);
-  const width = (92 + rng() * 58) * scale;
-  const height = (60 + rng() * 42) * scale;
-  const vertexCount = 8 + Math.floor(rng() * 4);
+  const width = (DESIGN.widthMin + rng() * DESIGN.widthRange) * scale;
+  const height = (DESIGN.heightMin + rng() * DESIGN.heightRange) * scale;
+  const vertexCount = DESIGN.vertexCountMin + Math.floor(rng() * DESIGN.vertexCountRange);
 
   // Jagged silhouette: for each angle around the base-anchored ellipse,
   // perturb the radius so facets read as angular rock, not a smooth blob —
@@ -32,7 +35,7 @@ export const generateSeiryuStone: Generator = ({ seed, scale }) => {
     const t = i / vertexCount;
     const angle = Math.PI + t * Math.PI; // sweep the TOP half only (0..π above the base line)
     const bottomFlatten = Math.sin(t * Math.PI); // 0 at the two base corners, 1 at the apex
-    const jitter = 1 - 0.22 + rng() * 0.44;
+    const jitter = DESIGN.jitterMin + rng() * DESIGN.jitterRange;
     const rx = (width / 2) * jitter;
     const ry = height * jitter * (0.4 + 0.6 * bottomFlatten);
     points.push({ x: Math.cos(angle) * rx, y: -Math.abs(Math.sin(angle)) * ry });
@@ -44,8 +47,39 @@ export const generateSeiryuStone: Generator = ({ seed, scale }) => {
   const d = polygonD(points);
   const apex = points.reduce((a, b) => (b.y < a.y ? b : a));
 
+  // Interior facets: seiryu stone reads as angular rock planes, not a smooth
+  // boulder — a few seam lines from an upper vertex down to the base center,
+  // each paired with a triangular light/dark wedge so adjacent faces catch
+  // the (implied) light differently.
+  const facetCount = DESIGN.facetCountMin + Math.floor(rng() * DESIGN.facetCountRange);
+  const facetNodes: Node[] = [];
+  const interior = points.slice(1, points.length - 1); // exclude the two base corners
+  for (let f = 0; f < facetCount && interior.length > 0; f++) {
+    const vi = interior[Math.floor(rng() * interior.length)];
+    const neighborIdx = Math.max(
+      0,
+      Math.min(interior.length - 1, points.indexOf(vi) - 1 + Math.floor(rng() * 3) - 1),
+    );
+    const neighbor = interior[neighborIdx] ?? vi;
+    const wedgeD = `M ${F(vi.x)} ${F(vi.y)} L ${F(neighbor.x)} ${F(neighbor.y)} L 0 0 Z`;
+    const lighter = rng() > 0.5;
+    facetNodes.push({
+      kind: "path",
+      d: wedgeD,
+      blend: lighter ? "screen" : "multiply",
+      paint: { type: "solid", color: lighter ? STONE_LIGHT : STONE_DARK, opacity: 0.18 },
+    });
+    facetNodes.push({
+      kind: "path",
+      d: `M ${F(vi.x)} ${F(vi.y)} L 0 0`,
+      paint: { type: "solid", color: DESIGN.seamColor, opacity: 0.3 },
+      stroke: { width: 0.9 },
+    });
+  }
+
   const nodes: Node[] = [
     { kind: "path", d, paint: { type: "solid", color: STONE_MID } },
+    ...facetNodes,
     {
       kind: "path",
       d,

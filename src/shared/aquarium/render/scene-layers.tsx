@@ -5,6 +5,7 @@ import { Group, Skia, Image as SkiaImage, useClock } from "@shopify/react-native
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
 import type { PlacedPiece } from "../scene/compose";
+import { DEFAULT_SCENE_DESIGN } from "../scene/scene-design";
 import { currentAt } from "../sim/swim";
 import { getCachedDecor } from "./decor-cache";
 
@@ -20,7 +21,12 @@ interface DecorPieceProps {
  * regardless of the piece's actual (non-rectangular) silhouette, which
  * shows up as a visible box rather than a tinted plant/rock.
  */
-const LAYER_OPACITY: Record<PlacedPiece["layer"], number> = { back: 0.7, mid: 1, front: 1 };
+const LAYER_OPACITY: Record<PlacedPiece["layer"], number> = {
+  far: DEFAULT_SCENE_DESIGN.layers.opacityFar,
+  back: DEFAULT_SCENE_DESIGN.layers.opacityBack,
+  mid: DEFAULT_SCENE_DESIGN.layers.opacityMid,
+  front: DEFAULT_SCENE_DESIGN.layers.opacityFront,
+};
 
 /**
  * How far a swaying piece leans with the shared tank current, on top of its
@@ -28,7 +34,7 @@ const LAYER_OPACITY: Record<PlacedPiece["layer"], number> = { back: 0.7, mid: 1,
  * so a plant still reads as fluttering in the flow rather than being
  * rigidly pushed by it.
  */
-const CURRENT_LEAN = 0.05;
+const CURRENT_LEAN = DEFAULT_SCENE_DESIGN.layers.currentLean;
 
 function DecorPiece({ piece, clock }: DecorPieceProps) {
   const baked = getCachedDecor(piece);

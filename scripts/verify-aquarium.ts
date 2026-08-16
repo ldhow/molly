@@ -6,6 +6,9 @@
 // Mirrors `scripts/verify-fish-3d.ts`'s shape: print PASS/FAIL per check,
 // exit 1 if anything failed.
 
+import fs from "node:fs";
+import path from "node:path";
+
 import { loadSkiaNode } from "./lib/skia-node";
 import { bakeNodes } from "@/shared/aquarium/core/bake";
 import { boxContainsBox } from "@/shared/aquarium/core/ir";
@@ -22,7 +25,10 @@ import {
   polygonSelfIntersects,
 } from "@/shared/aquarium/fish/geometry";
 import { linspace, pchip } from "@/shared/aquarium/fish/profile";
+import { composeSpriteScene, type PlacedSprite } from "@/shared/aquarium/scene/compose-sprites";
 import { composeScene, GENERATORS, type PlacedPiece } from "@/shared/aquarium/scene/compose";
+import { SCENE_SPRITES } from "@/shared/aquarium/scene/sprites/sprite-manifest";
+import { SPRITE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
 import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
 import {
   CAUDAL_FIN_AMP_MAX,
@@ -667,9 +673,10 @@ async function main() {
         `${scene.pieces.length} pieces`,
       );
 
-      // Back-layer decor doesn't count toward any of these — it reads as
-      // background, not an obstacle (same exemption the old check made).
-      const midFront = scene.pieces.filter((p) => p.layer !== "back");
+      // Back- and far-layer decor doesn't count toward any of these — both
+      // read as background, not an obstacle (same exemption the old
+      // back-only check made, extended to `far` when that layer was added).
+      const midFront = scene.pieces.filter((p) => p.layer === "mid" || p.layer === "front");
       const mid = scene.pieces.filter((p) => p.layer === "mid");
       const occAll = occupancyRaster(Skia, midFront, w, substrateY);
       const occMid = occupancyRaster(Skia, mid, w, substrateY);
@@ -740,6 +747,91 @@ async function main() {
         asymmetry >= 1.3 && asymmetry <= 2.6,
         `ratio=${asymmetry.toFixed(2)}`,
       );
+    }
+
+    // Sprite-mode composition — same six invariants, rasterizing the
+    // supplied PNGs instead of re-running a generator. Conditional: this
+    // stays green-by-skipping until real sprite art exists (see
+    // sprite-manifest.ts's "degrade gracefully" contract), so it can't fail
+    // CI before there's anything to check.
+    console.log("\n-- Scene composition (sprite mode) --");
+    const spriteIds = Object.keys(SCENE_SPRITES);
+    const missingSprites = spriteIds.filter(
+      (id) => !fs.existsSync(path.join(__dirname, "..", SCENE_SPRITES[id].file)),
+    );
+    if (spriteIds.length === 0 || missingSprites.length > 0) {
+      console.log(
+        spriteIds.length === 0
+          ? "  skip: no sprite assets supplied"
+          : `  skip: manifest references missing file(s): ${missingSprites.join(", ")}`,
+      );
+    } else {
+      function spriteOccupancyRaster(
+        Skia: Awaited<ReturnType<typeof loadSkiaNode>>,
+        pieces: PlacedSprite[],
+        canvasWidth: number,
+        substrateY: number,
+      ): number[] {
+        const surf = Skia.Surface.Make(Math.ceil(canvasWidth), Math.ceil(substrateY));
+        const occ: number[] = [];
+        if (!surf) return occ;
+        const canvas = surf.getCanvas();
+        for (const piece of pieces) {
+          const bytes = fs.readFileSync(
+            path.join(__dirname, "..", SCENE_SPRITES[piece.spriteId].file),
+          );
+          const image = Skia.Image.MakeImageFromEncoded(Skia.Data.fromBytes(bytes));
+          if (!image) continue;
+          const srcRect = Skia.XYWHRect(0, 0, image.width(), image.height());
+          const destRect = Skia.XYWHRect(
+            piece.worldX + piece.rect.x,
+            piece.worldY + piece.rect.y,
+            piece.rect.width,
+            piece.rect.height,
+          );
+          canvas.drawImageRect(image, srcRect, destRect, Skia.Paint());
+        }
+        const w = Math.ceil(canvasWidth);
+        const h = Math.ceil(substrateY);
+        const px = surf.makeImageSnapshot().readPixels() as Uint8Array | null;
+        if (!px) return occ;
+        for (let x = 0; x < w; x += SAMPLE_STEP) {
+          let topRow = h;
+          for (let y = 0; y < h; y++) {
+            if (px[(y * w + x) * 4 + 3] > ALPHA_THRESHOLD) {
+              topRow = y;
+              break;
+            }
+          }
+          occ.push((h - topRow) / h);
+        }
+        return occ;
+      }
+
+      for (const [w, h] of [
+        [390, 844],
+        [430, 932],
+        [844, 390],
+      ] as const) {
+        const substrateY = h - 60;
+        const spriteScene = composeSpriteScene(SPRITE_SCAPE, w, h, substrateY);
+        const midFront = spriteScene.pieces.filter((p) => p.layer === "mid" || p.layer === "front");
+        const occAll = spriteOccupancyRaster(Skia, midFront, w, substrateY);
+        const meanOcc = occAll.length ? occAll.reduce((a, b) => a + b, 0) / occAll.length : 0;
+        check(
+          `sprite ${w}x${h}: mean decor occupancy < 45% of the water column`,
+          meanOcc < 0.45,
+          `${(meanOcc * 100).toFixed(1)}%`,
+        );
+        const corridorFrac = occAll.length
+          ? occAll.filter((v) => v < 0.25).length / occAll.length
+          : 0;
+        check(
+          `sprite ${w}x${h}: >=40% of columns have a genuine corridor (occupancy < 25%)`,
+          corridorFrac >= 0.4,
+          `${(corridorFrac * 100).toFixed(1)}% of columns`,
+        );
+      }
     }
   }
 

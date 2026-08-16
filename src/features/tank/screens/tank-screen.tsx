@@ -6,6 +6,7 @@ import { EmptyState } from "@/shared/components/empty-state";
 import { TankView } from "@/shared/components/tank/tank-view";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 import { useRenderModeStore, type RenderMode } from "@/shared/store/render-mode-store";
+import { useSceneArtStore, type SceneArtMode } from "@/shared/store/scene-art-store";
 
 import { useAddDevFishMutation } from "../api/use-add-dev-fish-mutation";
 import { useOwnedFish } from "../api/use-owned-fish";
@@ -22,6 +23,17 @@ const RENDER_MODE_LABEL: Record<RenderMode, string> = {
   "3d": "3D",
 };
 
+/** A/B toggle for the 2D background art approach — only meaningful on the 2D V2 renderer, see scene-art-store.ts. */
+const NEXT_SCENE_ART_MODE: Record<SceneArtMode, SceneArtMode> = {
+  procedural: "sprites",
+  sprites: "procedural",
+};
+
+const SCENE_ART_MODE_LABEL: Record<SceneArtMode, string> = {
+  procedural: "Procedural",
+  sprites: "Sprites",
+};
+
 export function TankScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -30,6 +42,8 @@ export function TankScreen() {
   const removeDevFish = useRemoveDevFishMutation();
   const renderMode = useRenderModeStore((s) => s.renderMode);
   const setRenderMode = useRenderModeStore((s) => s.setRenderMode);
+  const sceneArtMode = useSceneArtStore((s) => s.sceneArtMode);
+  const setSceneArtMode = useSceneArtStore((s) => s.setSceneArtMode);
 
   return (
     <View style={styles.root}>
@@ -61,6 +75,16 @@ export function TankScreen() {
             >
               <Text style={styles.manageButtonText}>Renderer: {RENDER_MODE_LABEL[renderMode]}</Text>
             </Pressable>
+            {renderMode === "v2" ? (
+              <Pressable
+                style={styles.manageButton}
+                onPress={() => setSceneArtMode(NEXT_SCENE_ART_MODE[sceneArtMode])}
+              >
+                <Text style={styles.manageButtonText}>
+                  Scene: {SCENE_ART_MODE_LABEL[sceneArtMode]}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
           {__DEV__ ? (
             <View style={styles.devRow}>

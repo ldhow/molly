@@ -21,6 +21,14 @@ This tree imports only:
 - `@/shared/lib/{color,rng,seed,path2d}` — dependency-free pure helpers,
   already shared with the 3D renderer.
 - `@/shared/constants/*` — generic shared utilities, not renderer code.
+- `@/shared/store/scene-art-store.ts` — the procedural/sprites toggle, read
+  only by `render/aquarium-canvas.tsx`.
+
+One deliberate exception: `scene/sprites/sprite-sources.ts` imports from
+`@/assets/images/scene/*` (raster PNGs for the "sprites" background art
+mode, see `scene/sprites/sprite-manifest.ts`) — the only file in this tree
+allowed to, since Metro's asset `require` needs the real bundler and every
+other module here stays plain-Node-runnable.
 
 Note `@/shared/fish/render-spec.ts` is intentionally NOT in this list even
 though it still exists — the 3D renderer's skin-texture bake depends on it
@@ -58,7 +66,11 @@ Holding Tank tile, Fishdex cards, and the home-screen picker), and
   species without a `case` in that dispatcher yet. See
   `src/docs/aquarium-guide.md`'s "Creatures" section for the full picture.
 - `scene/` — procedural planted-aquarium decor: generators (`gen/`),
-  composition (`compose.ts`), and the authored theme (`themes/`).
+  composition (`compose.ts`), and the authored theme (`themes/`). Its
+  sprite-mode counterpart lives alongside it: `sprites/` (the PNG manifest +
+  RN `require` sources), `compose-sprites.ts`, and
+  `themes/nature-scape-sprites.ts` — see `sprites/sprite-manifest.ts`'s
+  header for how the two modes relate.
 - `sim/` — per-fish steering (`swim.ts`, `use-v2-swim.ts`) and personality
   (`personality.ts`) — shared as-is by every species, molly and otherwise.
 - `render/` — React/Skia components: `aquarium-canvas.tsx` (the tank view,
@@ -67,7 +79,11 @@ Holding Tank tile, Fishdex cards, and the home-screen picker), and
   non-swimming molly preview), `creature-layer.tsx` + `creature-cache.ts`
   (the other 5 species) + `creature-preview.tsx` (its non-molly
   counterpart), `dead-fish.ts` (shared corpse-rendering constants), `water.tsx`,
-  `scene-layers.tsx`, `decor-cache.ts`, `bubbles.tsx`.
+  `scene-layers.tsx` + `decor-cache.ts` (procedural decor) and
+  `sprite-layers.tsx` (its sprite-mode counterpart — `SpriteLayerGroup` +
+  `SpriteSubstrate` + `SpriteWater`, no bake/cache since the PNG already is
+  the texture), `parallax.tsx` (the shared drift camera both use),
+  `bubbles.tsx`.
 
 ## Verification
 

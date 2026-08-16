@@ -16,23 +16,25 @@ import { useDerivedValue } from "react-native-reanimated";
 import { sandHeightFor } from "@/shared/constants/tank";
 import { parseHex } from "@/shared/lib/color";
 
+import { getSubstrateEffect } from "../core/sksl/substrate";
 import { getWaterEffect } from "../core/sksl/water";
+import { DEFAULT_SCENE_DESIGN } from "../scene/scene-design";
 
 interface Props {
   width: number;
   height: number;
 }
 
-// Brightened toward the reference's luminous sunlit blue. The old top
-// (#1c4f66) was dark enough that the god-ray shafts and the kelp
-// silhouettes had nothing to read against — contrast, not ray opacity, was
-// what made the light invisible. The bottom stays deliberately dark so the
-// top-to-bottom depth gradient still reads.
-const WATER_TOP = "#2f86ab";
-const WATER_MID = "#175a78";
-const WATER_BOTTOM = "#08202e";
-const SUBSTRATE_TOP = "#c9b48a";
-const SUBSTRATE_BOTTOM = "#8f7d5c";
+// See `SceneDesign.water`'s doc comment in scene-design.ts for why the top
+// stop is brightened relative to a flatter reference blue.
+const WATER_TOP = DEFAULT_SCENE_DESIGN.water.top;
+const WATER_MID = DEFAULT_SCENE_DESIGN.water.mid;
+const WATER_BOTTOM = DEFAULT_SCENE_DESIGN.water.bottom;
+const SUBSTRATE_TOP = DEFAULT_SCENE_DESIGN.substrate.top;
+const SUBSTRATE_BOTTOM = DEFAULT_SCENE_DESIGN.substrate.bottom;
+const SUBSTRATE_SPECKLE = DEFAULT_SCENE_DESIGN.substrate.speckleColor;
+const SUBSTRATE_GRAIN_STRENGTH = DEFAULT_SCENE_DESIGN.substrate.grainStrength;
+const SUBSTRATE_SPECKLE_DENSITY = DEFAULT_SCENE_DESIGN.substrate.speckleDensity;
 
 function toUnit(hex: string): [number, number, number] {
   const rgb = parseHex(hex) ?? [0, 0, 0];
@@ -77,17 +79,49 @@ export function AquariumWater({ width, height }: Props) {
   );
 }
 
+const SUBSTRATE_COLOR_TOP = toUnit(SUBSTRATE_TOP);
+const SUBSTRATE_COLOR_BOTTOM = toUnit(SUBSTRATE_BOTTOM);
+const SUBSTRATE_COLOR_SPECKLE = toUnit(SUBSTRATE_SPECKLE);
+
+// Wider than the canvas on both edges so the parallax camera (up to
+// `parallaxAmplitude * parallaxFront` px, see `render/parallax.tsx`) never
+// pans past the sand into empty canvas at either side.
+const OVERSCAN = 20;
+
 export function AquariumSubstrate({ width, height }: Props) {
   const sandHeight = sandHeightFor(height);
   const y = height - sandHeight;
+  const effect = getSubstrateEffect(Skia);
+  const overscanWidth = width + OVERSCAN * 2;
+
+  const uniforms = useDerivedValue<Uniforms>(() => ({
+    width: overscanWidth,
+    height: sandHeight,
+    colorTop: SUBSTRATE_COLOR_TOP,
+    colorBottom: SUBSTRATE_COLOR_BOTTOM,
+    speckleColor: SUBSTRATE_COLOR_SPECKLE,
+    grainStrength: SUBSTRATE_GRAIN_STRENGTH,
+    speckleDensity: SUBSTRATE_SPECKLE_DENSITY,
+  }));
+
+  if (!effect) {
+    return (
+      <Group>
+        <Rect x={-OVERSCAN} y={y} width={overscanWidth} height={sandHeight}>
+          <LinearGradient
+            start={vec(0, y)}
+            end={vec(0, height)}
+            colors={[SUBSTRATE_TOP, SUBSTRATE_BOTTOM]}
+          />
+        </Rect>
+      </Group>
+    );
+  }
+
   return (
-    <Group>
-      <Rect x={0} y={y} width={width} height={sandHeight}>
-        <LinearGradient
-          start={vec(0, y)}
-          end={vec(0, height)}
-          colors={[SUBSTRATE_TOP, SUBSTRATE_BOTTOM]}
-        />
+    <Group transform={[{ translateY: y }]}>
+      <Rect x={-OVERSCAN} y={0} width={overscanWidth} height={sandHeight}>
+        <Shader source={effect} uniforms={uniforms} />
       </Rect>
     </Group>
   );
