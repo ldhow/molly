@@ -18,14 +18,14 @@ import { StyleSheet, View, type ViewStyle } from "react-native";
 import { sandHeightFor } from "@/shared/constants/tank";
 import { isMollyTankFish, type AnyTankFish, type MollyTankFish } from "@/shared/lib/tank-fish";
 
+import { composeScene, type PlacedPiece } from "../scene/compose";
+import { NATURE_SCAPE } from "../scene/themes/nature-scape";
+import type { SceneLayer } from "../scene/types";
 import { AquariumBubbles } from "./bubbles";
 import { CreatureLayer } from "./creature-layer";
 import { FishLayer } from "./fish-layer";
 import { SceneLayerGroup } from "./scene-layers";
 import { AquariumSubstrate, AquariumWater } from "./water";
-import { composeScene, type PlacedPiece } from "../scene/compose";
-import { NATURE_SCAPE } from "../scene/themes/nature-scape";
-import type { SceneLayer } from "../scene/types";
 
 export type AquariumFish = MollyTankFish;
 

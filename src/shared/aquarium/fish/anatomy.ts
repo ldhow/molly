@@ -5,8 +5,8 @@
 // renderer's shape. (An earlier version of this file fit the curve to the
 // legacy renderer's exact body path via a now-deleted `legacy-fit.ts`,
 // specifically so the old catalog's 1,726 hand-drawn pattern shapes kept
-// landing correctly; this renderer no longer draws those shapes at all — see
-// `pattern-defs.ts` — so that constraint no longer applies.)
+// landing correctly; this renderer draws its own procedural patterns
+// instead (see `pigment.ts`), so that constraint no longer applies.)
 //
 // Fins are NOT part of this outline. They used to be additive bumps on the
 // same profile, which is what made the fish read as a lumpy potato rather
@@ -57,8 +57,11 @@ import { linspace, pchip, polygonToPathD, type Curve1D } from "./profile";
  * escape hatch if a body still blows the budget after fin re-tuning — only
  * populate it with a measured number, never guess.
  */
-const FIN_REF_HALF_HEIGHT = 26;
-const FIN_SCALE_BY_BODY: Record<BodyId, number> = { standard: 1, balloon: 1 };
+// Exported (not just module-local) so tooling — `scripts/aquarium-design-editor.ts`'s
+// shape tab — can build the SAME `FinBuildContext` these numbers feed into,
+// instead of hand-duplicating them.
+export const FIN_REF_HALF_HEIGHT = 26;
+export const FIN_SCALE_BY_BODY: Record<BodyId, number> = { standard: 1, balloon: 1 };
 
 function buildBaseCurves(body: BodyId): {
   top: Curve1D;

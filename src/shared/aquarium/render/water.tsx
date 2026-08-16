@@ -31,8 +31,8 @@ interface Props {
 const WATER_TOP = "#2f86ab";
 const WATER_MID = "#175a78";
 const WATER_BOTTOM = "#08202e";
-const SUBSTRATE_TOP = "#5a4632";
-const SUBSTRATE_BOTTOM = "#3c2e20";
+const SUBSTRATE_TOP = "#c9b48a";
+const SUBSTRATE_BOTTOM = "#8f7d5c";
 
 function toUnit(hex: string): [number, number, number] {
   const rgb = parseHex(hex) ?? [0, 0, 0];

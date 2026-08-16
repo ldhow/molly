@@ -3,11 +3,11 @@
 // and scale math a real completed session produces (see `useAddDevFishMutation`
 // and `toTankFish` in `use-owned-fish.ts`), so what's on screen looks like a
 // real tank, not a synthetic stand-in.
-import type { TankFish } from "@/shared/components/tank/tank-canvas";
 import { STAGE_SCALE, TANK_FISH_SCALE } from "@/shared/constants/tank";
 import { COLOR_DEFS, patternSeedOf, rollTraits } from "@/shared/fish/catalog";
 import type { LifeStage } from "@/shared/fish/types";
 import { seedFromString } from "@/shared/lib/seed";
+import type { MollyTankFish } from "@/shared/lib/tank-fish";
 
 // Mostly adults (what a populated tank looks like), with a few younger fish
 // so squish/scale differences are visible in the same screen.
@@ -17,9 +17,10 @@ function mockFish(
   id: string,
   color: (typeof COLOR_DEFS)[number]["id"],
   stage: LifeStage,
-): TankFish {
+): MollyTankFish {
   return {
     key: id,
+    speciesId: "molly",
     traits: { ...rollTraits(color), patternSeed: patternSeedOf(id) },
     stage,
     status: "alive",
@@ -31,7 +32,7 @@ function mockFish(
 }
 
 /** `count` live, swimming fish spanning every color and a few life stages. */
-export function mockAliveFish(count: number): TankFish[] {
+export function mockAliveFish(count: number): MollyTankFish[] {
   return Array.from({ length: count }, (_, i) => {
     const color = COLOR_DEFS[i % COLOR_DEFS.length].id;
     const stage = STAGE_MIX[i % STAGE_MIX.length];
@@ -40,7 +41,7 @@ export function mockAliveFish(count: number): TankFish[] {
 }
 
 /** `count` corpses on the sand, to confirm dead rendering is unaffected. */
-export function mockDeadFish(count: number): TankFish[] {
+export function mockDeadFish(count: number): MollyTankFish[] {
   return Array.from({ length: count }, (_, i) => {
     const color = COLOR_DEFS[(i * 5) % COLOR_DEFS.length].id;
     const fish = mockFish(`preview-dead-${i}-${color}`, color, "adult");

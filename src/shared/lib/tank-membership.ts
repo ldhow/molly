@@ -1,7 +1,7 @@
 import type { SessionRow } from "@/db/schema";
 
 /** Perf cap — the Skia tank never bakes/renders more than this many fish. */
-export const TANK_CAPACITY = 25;
+export const TANK_CAPACITY = 12;
 
 export const DEAD_FISH_TTL_MS = 24 * 60 * 60 * 1000;
 

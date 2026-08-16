@@ -73,14 +73,9 @@ interface Override {
 const OVERRIDES: Partial<Record<ColorId, Override>> = {
   zebra: {
     pattern: {
-      type: "bands",
+      type: "stripes",
       color: "#15181d",
-      count: 7,
-      width: 0.03,
-      lean: 3,
-      taper: 0.35,
-      breakStyle: "none",
-      softness: 1.2,
+      style: "clean",
     },
     // The old all-white placeholder palette was fine only because the
     // 1,726 hand-drawn shapes WERE the fish's entire visual identity — a
@@ -95,26 +90,16 @@ const OVERRIDES: Partial<Record<ColorId, Override>> = {
   },
   caramelZebra: {
     pattern: {
-      type: "bands",
+      type: "stripes",
       color: "#241b12",
-      count: 9,
-      width: 0.022,
-      lean: 5,
-      taper: 0.45,
-      breakStyle: "none",
-      softness: 1.0,
+      style: "clean",
     },
   },
   tiger: {
     pattern: {
-      type: "bands",
+      type: "stripes",
       color: "#1a1208",
-      count: 8,
-      width: 0.02,
-      lean: 8,
-      taper: 0.5,
-      breakStyle: "fork",
-      softness: 0.9,
+      style: "clean",
     },
   },
   sakura: {
@@ -127,7 +112,7 @@ const OVERRIDES: Partial<Record<ColorId, Override>> = {
     },
   },
   sanke: {
-    pattern: { type: "patches", style: "koi", colors: ["#e23b2e", "#1c1e24"] },
+    pattern: { type: "patches", style: "koi", colors: ["#FF0000", "#1c1e24"] },
   },
   electricBlue: {
     pattern: { type: "speckle", color: "#8fd8ff", spread: "body", metallic: true, clustered: true },

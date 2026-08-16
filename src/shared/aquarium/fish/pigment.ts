@@ -290,64 +290,7 @@ export function patternPrimitives(
     }
 
     case "stripes": {
-      const density = pattern.density ?? 1;
-      const scale = pattern.scale ?? 1;
-      const randomness = pattern.randomness ?? 1;
-      const clean = pattern.style === "clean";
-      const barCount = Math.max(3, Math.round(7 * density));
-      // Skeleton spans the mid-trunk (not nose-to-peduncle) — u in [0.25,
-      // 0.77], the same fraction of the body the original hand-tuned
-      // absolute range covered, now expressed relative to `geom` so it
-      // still lands on the trunk on any body shape.
-      const skelStart = lerp(geom.nose.x, rear, 0.25);
-      const skelEnd = lerp(geom.nose.x, rear, 0.77);
-      const skeleton = Array.from({ length: barCount }, (_, i) =>
-        lerp(skelStart, skelEnd, barCount === 1 ? 0.5 : i / (barCount - 1)),
-      );
-      const hi = top - 5;
-      const lo = bot + 5;
-      const bar = (d: string) => {
-        out.push({ kind: "path", d, paint: solid(pattern.color, 0.5), blur: 1.6, clip: bodyD });
-        out.push({ kind: "path", d, paint: solid(pattern.color, 0.92), blur: 0.35, clip: bodyD });
-      };
-      const fullBar = (x: number, w: number, lean: number) =>
-        `M ${f(x - w)} ${f(hi)} Q ${f(x - w + lean)} 0 ${f(x - w - 1)} ${f(lo)} ` +
-        `L ${f(x + w - 1)} ${f(lo)} Q ${f(x + w + lean)} 0 ${f(x + w)} ${f(hi)} Z`;
-      const upperBar = (x: number, w: number, lean: number, jitter: number, gapTop: number) =>
-        `M ${f(x - w + jitter)} ${f(hi)} Q ${f(x - w + lean)} ${f(top * 0.6)} ${f(x - w)} ${f(gapTop)} ` +
-        `L ${f(x + w + jitter)} ${f(gapTop)} Q ${f(x + w + lean)} ${f(top * 0.6)} ${f(x + w)} ${f(hi)} Z`;
-      const lowerBar = (x: number, w: number, lean: number, jitter: number, gapBottom: number) =>
-        `M ${f(x - w)} ${f(gapBottom)} Q ${f(x - w + lean)} ${f(bot * 0.6)} ${f(x - w + jitter)} ${f(lo)} ` +
-        `L ${f(x + w + jitter)} ${f(lo)} Q ${f(x + w + lean)} ${f(bot * 0.6)} ${f(x + w)} ${f(gapBottom)} Z`;
-
-      for (const baseX of skeleton) {
-        const jitterSpan = (clean ? 2 : 3) * randomness;
-        const x = baseX + lerp(-jitterSpan, jitterSpan, rng());
-        const w = (clean ? lerp(1.7, 4.3, rng()) : lerp(1.5, 3.9, rng())) * scale;
-        const lean = lerp(-3.6, -0.6, rng()) * randomness;
-
-        if (clean) {
-          if (rng() < Math.min(0.9, 0.28 * randomness)) {
-            const nearTop = rng() < 0.5;
-            const gapSpan = lerp(3, 5.5, rng()) * randomness;
-            const gapCenter = nearTop
-              ? lerp(top * 0.7, top * 0.3, rng())
-              : lerp(bot * 0.3, bot * 0.7, rng());
-            const jitter = lerp(-1.2, 1.2, rng()) * randomness;
-            bar(upperBar(x, w, lean, jitter, gapCenter - gapSpan / 2));
-            bar(lowerBar(x, w, lean, jitter, gapCenter + gapSpan / 2));
-          } else {
-            bar(fullBar(x, w, lean));
-          }
-        } else {
-          const gapTop = lerp(-7.5, -1.5, rng()) * randomness;
-          const gapBottom = gapTop + lerp(4, 10, rng()) * randomness;
-          const jitter = lerp(-3, 3, rng()) * randomness;
-          bar(upperBar(x, w, lean, jitter, gapTop));
-          bar(lowerBar(x, w, lean, jitter, gapBottom));
-        }
-      }
-      return out;
+      return drawStripe(id, pattern, geom, material, seed, out);
     }
 
     case "bands": {
@@ -441,9 +384,12 @@ export function patternPrimitives(
       if (pattern.style === "koi") {
         const bodyLen = rear - nx;
         patch(blob(nx + bodyLen * 0.2, -3, bodyLen * 0.17, bodyLen * 0.2, 0.16), primary, 0.82);
-        patch(blob(X(0.6), Yb(0.64), 9, 7, 0.4), secondary ?? "#1c1e24", 0.9);
-        patch(blob(X(0.47), Yv(0.16), 11, 9, 0.4), secondary ?? "#1c1e24", 0.9);
-        patch(blob(X(0.74), Yv(0.32), 9, 7, 0.4), secondary ?? "#1c1e24", 0.9);
+        drawStripe(id, pattern, geom, material, seed, out, {
+          minWidth: 1.5,
+          maxWidth: 3.0,
+          includedHead: false,
+        });
+
         return out;
       }
       if (pattern.style === "calico") {
@@ -693,3 +639,150 @@ export function scalePrimitives(
   }
   return out;
 }
+
+const drawStripe = (
+  id: string,
+  pattern: AquariumPattern,
+  geom: PigmentGeom,
+  material: Material,
+  seed: number,
+  out: Node[],
+  options?: {
+    minWidth?: number;
+    maxWidth?: number;
+    includedHead?: boolean;
+  },
+) => {
+  if (!(pattern.type === "stripes")) {
+    return out;
+  }
+  const { includedHead = true, minWidth = 3.5, maxWidth = 7.0 } = options ?? {};
+  const rng = makeRng(seededKey(`pattern-${id}`, seed));
+  const bodyD = geom.d;
+  const solid = (color: string, opacity = 1): Paint => ({
+    type: "solid",
+    color,
+    opacity: Math.min(1, opacity * material.patternContrast),
+  });
+  const top = geom.backPeak.y;
+  const bot = geom.bellyLow.y;
+  const rear = geom.peduncleTop.x;
+
+  const density = pattern.density ?? 1;
+  const scale = pattern.scale ?? 1;
+  const randomness = pattern.randomness ?? 1;
+  const clean = pattern.style === "clean";
+  const barCount = Math.max(3, Math.round(7 * density));
+
+  const skelStart = lerp(geom.nose.x, rear, includedHead ? 0 : 0.25);
+  const skelEnd = lerp(geom.nose.x, rear, 0.77);
+
+  const skeleton: number[] = [];
+
+  const baseSpacing = (skelEnd - skelStart) / Math.max(1, barCount - 1);
+
+  let currentX = skelStart;
+
+  for (let i = 0; i < barCount; i++) {
+    skeleton.push(currentX);
+
+    if (i < barCount - 1) {
+      const spacingRandom = lerp(0.65, 1.35, rng());
+      currentX += baseSpacing * spacingRandom;
+    }
+  }
+
+  // Keep the last stripe inside the stripe area.
+  if (skeleton.length > 1) {
+    const last = skeleton[skeleton.length - 1];
+
+    if (last > skelEnd) {
+      const overflow = last - skelEnd;
+
+      for (let i = 0; i < skeleton.length; i++) {
+        skeleton[i] -= overflow * (i / (skeleton.length - 1));
+      }
+    }
+  }
+
+  const hi = top - 5;
+  const lo = bot + 5;
+
+  const bar = (d: string) => {
+    out.push({
+      kind: "path",
+      d,
+      paint: solid(pattern.color, 0.5),
+      blur: 1.6,
+      clip: bodyD,
+    });
+
+    out.push({
+      kind: "path",
+      d,
+      paint: solid(pattern.color, 0.92),
+      blur: 0.35,
+      clip: bodyD,
+    });
+  };
+
+  // Stripe always starts from the top of the back.
+  // The end point is randomized: either around the middle of the body
+  // or extends all the way to the bottom.
+  const stripeBar = (
+    x: number,
+    topWidth: number,
+    bottomWidth: number,
+    lean: number,
+    endY: number,
+  ) => {
+    const length = Math.abs(endY - hi);
+
+    // Sharp tip at the bottom.
+    const tipInset = Math.min(topWidth * 0.9, length * 0.18);
+
+    const topBodyY = hi + tipInset;
+    const bottomBodyY = endY - tipInset;
+
+    return (
+      `M ${f(x)} ${f(hi)} ` +
+      // Top: wide
+      `L ${f(x + topWidth)} ${f(topBodyY)} ` +
+      // Taper down to a smaller width
+      `L ${f(x + bottomWidth + lean)} ${f(bottomBodyY)} ` +
+      // Bottom: sharp tip
+      `L ${f(x)} ${f(endY)} ` +
+      // Other side
+      `L ${f(x - bottomWidth + lean)} ${f(bottomBodyY)} ` +
+      `L ${f(x - topWidth)} ${f(topBodyY)} ` +
+      `Z`
+    );
+  };
+
+  for (const baseX of skeleton) {
+    const jitterSpan = (clean ? 2 : 3) * randomness;
+
+    const x = baseX + lerp(-jitterSpan, jitterSpan, rng());
+
+    const w = (clean ? lerp(minWidth, maxWidth, rng()) : lerp(3.0, 6.5, rng())) * scale;
+    const lean = lerp(-3.6, -0.6, rng()) * randomness;
+    const bottomWidth = w * lerp(0.45, 0.18, rng());
+    // Always start from the top of the back.
+    // Randomly end anywhere from the middle of the body
+    // to the bottom of the belly.
+    const endY = lerp(top * 0.15, lo, Math.pow(rng(), 0.7));
+    if (clean) {
+      if (rng() < Math.min(0.9, 0.28 * randomness)) {
+        bar(stripeBar(x, w, bottomWidth, lean, endY));
+      } else {
+        // Normal pointed stripe.
+        bar(stripeBar(x, w, bottomWidth, lean, endY));
+      }
+    } else {
+      bar(stripeBar(x, w, bottomWidth, lean, endY));
+      bar(stripeBar(x, w, bottomWidth, lean, endY));
+    }
+  }
+
+  return out;
+};

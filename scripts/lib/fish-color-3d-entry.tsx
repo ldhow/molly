@@ -11,9 +11,9 @@ import { createRoot } from "react-dom/client";
 import { useEffect, useState } from "react";
 
 import { TankCanvas3D } from "@/shared/components/tank/tank-canvas-3d";
-import type { TankFish } from "@/shared/components/tank/tank-canvas";
 import { COLOR_DEFS, standardTraits } from "@/shared/fish/catalog";
 import type { ColorDef, FishTraits, LifeStage } from "@/shared/fish/types";
+import type { MollyTankFish } from "@/shared/lib/tank-fish";
 
 import { invalidateSkin } from "../../src/shared/components/tank/fish-skin-texture";
 
@@ -77,11 +77,12 @@ function App() {
     return () => window.clearInterval(id);
   }, []);
 
-  const fish: TankFish = {
+  const fish: MollyTankFish = {
     // Keying on `gen` forces Fish3D/DeadFish3D to fully unmount+remount on
     // every edit, which is what re-triggers requestSkin() — a live prop
     // change alone wouldn't, since the skin bake only happens in a mount effect.
     key: `preview-${state.traits.color}-${state.gen}`,
+    speciesId: "molly",
     traits: state.traits,
     stage: state.stage,
     status: state.status,

@@ -26,6 +26,10 @@ export default function TabsLayout() {
       <Tabs.Screen name="tank" options={{ title: "Tank", tabBarIcon: icon("🐟") }} />
       <Tabs.Screen name="stats" options={{ title: "Stats", tabBarIcon: icon("📊") }} />
       <Tabs.Screen name="fishdex" options={{ title: "Fishdex", tabBarIcon: icon("📖") }} />
+      <Tabs.Screen
+        name="test"
+        options={{ title: "Test", tabBarIcon: icon("☠️"), href: __DEV__ ? undefined : null }}
+      />
     </Tabs>
   );
 }

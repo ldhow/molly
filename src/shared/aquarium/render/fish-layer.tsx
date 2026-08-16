@@ -15,23 +15,22 @@ import {
   ColorMatrix,
   FilterMode,
   Group,
-  Image as SkiaImage,
   ImageShader,
   MipmapMode,
   Paint,
   Rect,
   Shader,
   Skia,
+  Image as SkiaImage,
   type Matrix4,
   type Transforms3d,
   type Uniforms,
 } from "@shopify/react-native-skia";
+import { useMemo } from "react";
 import { PixelRatio } from "react-native";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
-import { useMemo } from "react";
 
 import { sandHeightFor } from "@/shared/constants/tank";
-import { DEAD_GRAYSCALE_MATRIX, DEAD_OPACITY } from "@/shared/fish/render-spec";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
 
 import type { BakedArt } from "../core/bake";
@@ -54,6 +53,7 @@ import type { SceneLayer } from "../scene/types";
 import { biasedDepthRange, personalityFor } from "../sim/personality";
 import { Z_MAX } from "../sim/swim";
 import { useV2Swim, type V2WanderBox } from "../sim/use-v2-swim";
+import { DEAD_GRAYSCALE_MATRIX, DEAD_OPACITY } from "./dead-fish";
 import { getCachedFish } from "./fish-cache";
 
 function lerp(a: number, b: number, t: number): number {
@@ -329,7 +329,7 @@ export function FishLayer({
     // NOTE: this is app-level tuning only — `verify-aquarium.ts`'s swim
     // trace exercises the engine at speedFactor 1, so its cruise-speed floor
     // is unaffected by this number.
-    speedFactor: (mode === "center" ? 0.32 : 0.6) * personality.speedFactor,
+    speedFactor: (mode === "center" ? 0.7 : 1) * personality.speedFactor,
     // Molly-only: the five creature species in `creature-layer.tsx` pass
     // nothing here and keep their existing independent motion. Measured with
     // individual wander averaged out (400 fish, 60s): this sways the tank's

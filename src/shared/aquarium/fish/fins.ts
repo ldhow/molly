@@ -192,12 +192,30 @@ export const DORSAL_FIN: Record<DorsalId, FinSpec> = {
     axisDeg: -80,
     ref: "H",
     rays: [
-      { dAngleDeg: -46, lenFrac: 0.72 },
-      { dAngleDeg: -26, lenFrac: 1.02 },
-      { dAngleDeg: -6, lenFrac: 1.18 },
-      { dAngleDeg: 14, lenFrac: 1.12 },
-      { dAngleDeg: 34, lenFrac: 0.92 },
-      { dAngleDeg: 52, lenFrac: 0.62 },
+      {
+        dAngleDeg: -5.335,
+        lenFrac: 0.614,
+      },
+      {
+        dAngleDeg: 15.413,
+        lenFrac: 1.159,
+      },
+      {
+        dAngleDeg: 39.297,
+        lenFrac: 1.654,
+      },
+      {
+        dAngleDeg: 53.243,
+        lenFrac: 1.948,
+      },
+      {
+        dAngleDeg: 72.491,
+        lenFrac: 1.717,
+      },
+      {
+        dAngleDeg: 83.322,
+        lenFrac: 0.965,
+      },
     ],
     bulge: 0.18,
     scallop: 0.03,
@@ -218,14 +236,38 @@ export const DORSAL_FIN: Record<DorsalId, FinSpec> = {
     axisDeg: -84,
     ref: "H",
     rays: [
-      { dAngleDeg: -58, lenFrac: 0.78 },
-      { dAngleDeg: -42, lenFrac: 1.28 },
-      { dAngleDeg: -27, lenFrac: 1.52 },
-      { dAngleDeg: -11, lenFrac: 1.62 },
-      { dAngleDeg: 6, lenFrac: 1.6 },
-      { dAngleDeg: 22, lenFrac: 1.44 },
-      { dAngleDeg: 38, lenFrac: 1.14 },
-      { dAngleDeg: 54, lenFrac: 0.76 },
+      {
+        dAngleDeg: 26.707,
+        lenFrac: 0.838,
+      },
+      {
+        dAngleDeg: 40.972,
+        lenFrac: 1.68,
+      },
+      {
+        dAngleDeg: 65.574,
+        lenFrac: 2.829,
+      },
+      {
+        dAngleDeg: 76.156,
+        lenFrac: 2.626,
+      },
+      {
+        dAngleDeg: 82.502,
+        lenFrac: 2.622,
+      },
+      {
+        dAngleDeg: 91.377,
+        lenFrac: 2.166,
+      },
+      {
+        dAngleDeg: 98.547,
+        lenFrac: 1.659,
+      },
+      {
+        dAngleDeg: 88.467,
+        lenFrac: 0.739,
+      },
     ],
     bulge: 0.14,
     scallop: 0.05,
@@ -242,10 +284,22 @@ export const ANAL_FIN: FinSpec = {
   axisDeg: 32,
   ref: "H",
   rays: [
-    { dAngleDeg: -30, lenFrac: 0.8 },
-    { dAngleDeg: -8, lenFrac: 0.9 },
-    { dAngleDeg: 14, lenFrac: 0.82 },
-    { dAngleDeg: 34, lenFrac: 0.62 },
+    {
+      dAngleDeg: 123.695,
+      lenFrac: 0.461,
+    },
+    {
+      dAngleDeg: 3.514,
+      lenFrac: 1.059,
+    },
+    {
+      dAngleDeg: 0.51,
+      lenFrac: 0.459,
+    },
+    {
+      dAngleDeg: 84.55,
+      lenFrac: 0.215,
+    },
   ],
   bulge: 0.16,
   scallop: 0.02,
@@ -261,10 +315,22 @@ export const PELVIC_NEAR_FIN: FinSpec = {
   axisDeg: 80,
   ref: "H",
   rays: [
-    { dAngleDeg: -26, lenFrac: 0.52 },
-    { dAngleDeg: -4, lenFrac: 0.66 },
-    { dAngleDeg: 18, lenFrac: 0.6 },
-    { dAngleDeg: 38, lenFrac: 0.46 },
+    {
+      dAngleDeg: -34.344,
+      lenFrac: 0.485,
+    },
+    {
+      dAngleDeg: -27.382,
+      lenFrac: 0.849,
+    },
+    {
+      dAngleDeg: 15.122,
+      lenFrac: 0.582,
+    },
+    {
+      dAngleDeg: 52.732,
+      lenFrac: 0.197,
+    },
   ],
   bulge: 0.2,
   scallop: 0.02,
@@ -279,9 +345,24 @@ export const PELVIC_FAR_FIN: FinSpec = {
   sink: 4,
   axisDeg: 80,
   ref: "H",
-  // 0.88x, not 0.8x — the deeper new belly leaves less clearance margin
-  // between a shrunk far-pelvic's tip and the body than the old body did.
-  rays: PELVIC_NEAR_FIN.rays.map((r) => ({ ...r, lenFrac: r.lenFrac * 0.88 })),
+  rays: [
+    {
+      dAngleDeg: 18.055,
+      lenFrac: 0.433,
+    },
+    {
+      dAngleDeg: 62.589,
+      lenFrac: 0.529,
+    },
+    {
+      dAngleDeg: 94.092,
+      lenFrac: 0.371,
+    },
+    {
+      dAngleDeg: 110.604,
+      lenFrac: 0.139,
+    },
+  ],
   bulge: 0.2,
   scallop: 0.02,
   alpha: 0.45,
@@ -292,23 +373,27 @@ export const PELVIC_FAR_FIN: FinSpec = {
 export const PECTORAL_NEAR_FIN: FinSpec = {
   uRoot: 0.3,
   side: "flank",
-  // 0.60 of the way from the spine to the belly edge at u=0.3 — close
-  // enough to the surface that a modest ray length clears it, unlike a
-  // fraction of the fixed fin-size reference (which put the old hub only
-  // ~1.5 units from the spine on a body that's ±20+ units deep there).
   flankY: 0.6,
   sink: 0,
   axisDeg: 66,
   ref: "H",
-  // Sized so `balloon`'s much deeper belly (halfHeight 38 vs standard's
-  // 28.5, against the fixed FIN_REF_HALF_HEIGHT reference) still clears —
-  // the flank hub sits proportionally deeper there, so a fixed-length ray
-  // that clears standard's flank falls short on balloon.
   rays: [
-    { dAngleDeg: -26, lenFrac: 0.92 },
-    { dAngleDeg: -4, lenFrac: 1.1 },
-    { dAngleDeg: 18, lenFrac: 1.02 },
-    { dAngleDeg: 38, lenFrac: 0.8 },
+    {
+      dAngleDeg: -84.128,
+      lenFrac: 0.343,
+    },
+    {
+      dAngleDeg: -89.485,
+      lenFrac: 0.885,
+    },
+    {
+      dAngleDeg: -65.577,
+      lenFrac: 0.9,
+    },
+    {
+      dAngleDeg: -46.817,
+      lenFrac: 0.826,
+    },
   ],
   bulge: 0.14,
   scallop: 0.02,
@@ -324,9 +409,24 @@ export const PECTORAL_FAR_FIN: FinSpec = {
   sink: 0,
   axisDeg: 58,
   ref: "H",
-  // 0.88x, not 0.8x — flankY 0.72 sits deeper than near's 0.6, so a smaller
-  // fraction of near's (already balloon-clearing) length falls short again.
-  rays: PECTORAL_NEAR_FIN.rays.map((r) => ({ ...r, lenFrac: r.lenFrac * 0.88 })),
+  rays: [
+    {
+      dAngleDeg: 32.32,
+      lenFrac: 0.274,
+    },
+    {
+      dAngleDeg: 52.853,
+      lenFrac: 0.199,
+    },
+    {
+      dAngleDeg: 57.553,
+      lenFrac: 0.164,
+    },
+    {
+      dAngleDeg: 48.664,
+      lenFrac: 0.115,
+    },
+  ],
   bulge: 0.14,
   scallop: 0.02,
   alpha: 0.3,
@@ -341,17 +441,31 @@ export const CAUDAL_FIN: Record<TailId, FinSpec> = {
     sink: 0,
     axisDeg: 0,
     ref: "L",
-    // Fuller and wider than the legacy proportions on purpose — a stubbier
-    // body needs a bigger caudal fan to keep the bake bounds width from
-    // collapsing (which is what pushes the spine-warp injectivity budget up
-    // — see spine.ts), and it's the right storybook look besides.
     rays: [
-      { dAngleDeg: -58, lenFrac: 0.255 },
-      { dAngleDeg: -34, lenFrac: 0.295 },
-      { dAngleDeg: -11, lenFrac: 0.325 },
-      { dAngleDeg: 12, lenFrac: 0.318 },
-      { dAngleDeg: 35, lenFrac: 0.278 },
-      { dAngleDeg: 57, lenFrac: 0.225 },
+      {
+        dAngleDeg: -59.225,
+        lenFrac: 0.165,
+      },
+      {
+        dAngleDeg: -36.261,
+        lenFrac: 0.33,
+      },
+      {
+        dAngleDeg: -14.533,
+        lenFrac: 0.422,
+      },
+      {
+        dAngleDeg: 17.413,
+        lenFrac: 0.43,
+      },
+      {
+        dAngleDeg: 37.978,
+        lenFrac: 0.34,
+      },
+      {
+        dAngleDeg: 61.249,
+        lenFrac: 0.192,
+      },
     ],
     bulge: 0.2,
     scallop: 0.02,
@@ -372,20 +486,54 @@ export const CAUDAL_FIN: Record<TailId, FinSpec> = {
   lyretail: {
     uRoot: 0.965,
     side: "rear",
-    sink: 0,
+    sink: 1,
     axisDeg: 0,
     ref: "L",
     rays: [
-      { dAngleDeg: -34, lenFrac: 0.84 },
-      { dAngleDeg: -21, lenFrac: 0.6 },
-      { dAngleDeg: -7, lenFrac: 0.38 },
-      { dAngleDeg: 7, lenFrac: 0.37 },
-      { dAngleDeg: 21, lenFrac: 0.6 },
-      { dAngleDeg: 35, lenFrac: 0.87 },
+      {
+        dAngleDeg: -63.946,
+        lenFrac: 0.107,
+      },
+      {
+        dAngleDeg: -51.919,
+        lenFrac: 0.238,
+      },
+      {
+        dAngleDeg: -23.721,
+        lenFrac: 0.837,
+      },
+      {
+        dAngleDeg: -28.761,
+        lenFrac: 0.484,
+      },
+      {
+        dAngleDeg: -12.949,
+        lenFrac: 0.333,
+      },
+      {
+        dAngleDeg: 18.66,
+        lenFrac: 0.349,
+      },
+      {
+        dAngleDeg: 30.611,
+        lenFrac: 0.5,
+      },
+      {
+        dAngleDeg: 25.162,
+        lenFrac: 0.854,
+      },
+      {
+        dAngleDeg: 53.209,
+        lenFrac: 0.267,
+      },
+      {
+        dAngleDeg: 64.262,
+        lenFrac: 0.143,
+      },
     ],
-    bulge: [0.06, -0.26, -0.26, -0.26, 0.06],
-    scallop: 0.02,
-    alpha: 1,
+    bulge: [0.12, 0.12, 0.22, -0.12, -0.14, -0.08, 0.12, 0.14, 0.1],
+    scallop: 0.03,
+    alpha: 1.1,
     rayAlpha: 0.32,
     layer: "behind",
   },

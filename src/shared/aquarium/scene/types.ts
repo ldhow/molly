@@ -19,7 +19,9 @@ export type SpeciesId =
   | "substrateMound"
   | "pebbles"
   | "kelp"
-  | "bloom";
+  | "bloom"
+  | "cabomba"
+  | "sword";
 
 /** A point on an already-placed piece of decor that another piece can mount to. */
 export interface Anchor {

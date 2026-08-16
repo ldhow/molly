@@ -1,17 +1,18 @@
-import type { TankFish } from "@/shared/components/tank/tank-canvas";
 import { TANK_FISH_SCALE, STAGE_SCALE } from "@/shared/constants/tank";
 import { COLOR_DEFS, patternSeedOf, rollTraits } from "@/shared/fish/catalog";
 import type { LifeStage } from "@/shared/fish/types";
 import { seedFromString } from "@/shared/lib/seed";
+import type { MollyTankFish } from "@/shared/lib/tank-fish";
 
 function fish(
   id: string,
   color: (typeof COLOR_DEFS)[number]["id"],
   stage: LifeStage,
   status: "alive" | "dead" = "alive",
-): TankFish {
+): MollyTankFish {
   return {
     key: id,
+    speciesId: "molly",
     traits: { ...rollTraits(color), patternSeed: patternSeedOf(id) },
     stage,
     status,
@@ -20,7 +21,7 @@ function fish(
   };
 }
 
-export const SCENARIOS: Record<string, TankFish[]> = {
+export const SCENARIOS: Record<string, MollyTankFish[]> = {
   "life-stages": [
     fish("stage-egg", "black", "egg"),
     fish("stage-fry", "gold", "fry"),

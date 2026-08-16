@@ -1,25 +1,24 @@
-# The 2D V2 renderer — how it works
+# The 2D renderer — how it works
 
-A second, self-contained 2D tank renderer living entirely under
-[`src/shared/aquarium/`](../shared/aquarium/), selectable via the render-mode
-toggle on the Tank screen (labelled **2D V2**) alongside the original 2D
-renderer and the 3D renderer. Read this before changing anything under
-`src/shared/aquarium/` — it's the equivalent of `fish-art-guide.md` /
-`tank-3d-guide.md` for this tree.
+The tank's 2D renderer, living entirely under
+[`src/shared/aquarium/`](../shared/aquarium/) — official as of the legacy
+renderer's removal, selectable via the render-mode toggle on the Tank screen
+(labelled **2D**) alongside the 3D renderer. Read this before changing
+anything under `src/shared/aquarium/` — it's the equivalent of
+`fish-art-guide.md` / `tank-3d-guide.md` for this tree.
 
-## Why a second renderer, and how it's kept separate
+## Why this renderer looks the way it does
 
-The old 2D renderer draws a fish as three separately-baked layers (body,
-tail, pectoral) with a rigid tail rotation and a body ripple that shears
-cross-sections sideways instead of bending them. 2D V2 instead bakes body +
-fins (each its own translucent shape, `fish/fins.ts`) into ONE texture and
-animates the whole thing with a rigid spine bend, so the whole animal moves
-as one piece even though the silhouette isn't a single outline anymore — the
-"one organism bends together" property comes from the shared warp on one
-baked texture, not from the outline itself being one path.
+The legacy renderer this replaced drew a fish as three separately-baked
+layers (body, tail, pectoral) with a rigid tail rotation and a body ripple
+that shears cross-sections sideways instead of bending them. This renderer
+instead bakes body + fins (each its own translucent shape, `fish/fins.ts`)
+into ONE texture and animates the whole thing with a rigid spine bend, so the
+whole animal moves as one piece even though the silhouette isn't a single
+outline anymore — the "one organism bends together" property comes from the
+shared warp on one baked texture, not from the outline itself being one path.
 
-The whole thing lives in one directory so it can be deleted in one motion once
-it replaces the old renderer:
+The whole thing lives in one directory, deliberately self-contained:
 
 ```
 src/shared/aquarium/
@@ -31,13 +30,15 @@ src/shared/aquarium/
 ```
 
 It imports **only**: `@/shared/fish/{types,catalog}` (trait/colour data,
-read-only), `@/shared/fish/render-spec.ts`'s `DEAD_GRAYSCALE_MATRIX`/
-`DEAD_OPACITY` constants (data, not code), and generic shared libs
-(`@/shared/lib/*`, `@/shared/constants/tank.ts`). Never the old renderer's
-components — including `@/shared/hooks/use-fish-swim.ts`: 2D V2 owns its own
-steering (`sim/swim.ts`), see **Behaviour** below. See
-[`aquarium/README.md`](../shared/aquarium/README.md) for the deletion
-checklist.
+read-only) and generic shared libs (`@/shared/lib/*`,
+`@/shared/constants/tank.ts`). Not `@/shared/fish/render-spec.ts` — that
+module still exists but is now 3D-only (its skin-texture bake), so this tree
+keeps its own `render/dead-fish.ts` copy of the dead-fish constants instead
+of reaching into it. Not `@/shared/hooks/use-fish-swim.ts` either — that hook
+was the legacy renderer's steering and is now 3D-only; this tree owns its own
+(`sim/swim.ts`), see **Behaviour** below. See
+[`aquarium/README.md`](../shared/aquarium/README.md) for the full import
+allowlist.
 
 ## How a fish is built
 
@@ -173,13 +174,13 @@ source={warpEffect}><ImageShader .../></Shader></Rect>`, degrading to a
 
 ## Creatures — the other 5 species
 
-2D V2 is also the ONLY renderer that draws non-molly species (otter, turtle,
-frog, axolotl, snail) — the legacy 2D and 3D renderers only ever see the
-molly individuals in a tank (`tank-view.tsx` filters the rest out before
-handing `TankFish[]` to them). See `@/shared/lib/tank-fish.ts`'s header for
-the `MollyTankFish`/`CreatureTankFish` discriminated-union trick that makes
-that filter free (a `MollyTankFish[]` is structurally assignable wherever the
-legacy `TankFish[]` is expected, so those two renderers needed zero changes).
+This tree is also the ONLY renderer that draws non-molly species (otter,
+turtle, frog, axolotl, snail) — 3D only ever sees the molly individuals in a
+tank (`tank-view.tsx` filters the rest out before handing `MollyTankFish[]`
+to it). See `@/shared/lib/tank-fish.ts`'s header for the
+`MollyTankFish`/`CreatureTankFish` discriminated-union trick that makes that
+filter free (a `MollyTankFish[]` is structurally assignable wherever
+`AnyTankFish[]` is expected).
 
 **Module pattern**, one directory per species under `creatures/<species>/`:
 
@@ -320,13 +321,13 @@ there is safe; adding it to mid/front is what those checks police.
 
 ## Behaviour
 
-2D V2 owns its own steering (`sim/swim.ts` + `sim/use-v2-swim.ts`) — it does
-NOT bias the shared `@/shared/hooks/use-fish-swim.ts` /
-`@/shared/lib/swim-model.ts` engine the old 2D and 3D renderers use (an
-earlier version of this doc described it that way; that stopped being true
-once "don't flip, turn around by moving" needed a real heading, not a binary
-`facingRight`). `sim/swim.ts` only _imports_ `wrapToPi`/`MAX_DT` from the
-shared model — both pure, side-effect-free — everything else is its own.
+This renderer owns its own steering (`sim/swim.ts` + `sim/use-v2-swim.ts`) —
+it does NOT bias the shared `@/shared/hooks/use-fish-swim.ts` /
+`@/shared/lib/swim-model.ts` engine 3D uses (an earlier version of this doc
+described it that way; that stopped being true once "don't flip, turn around
+by moving" needed a real heading, not a binary `facingRight`). `sim/swim.ts`
+only _imports_ `wrapToPi`/`MAX_DT` from the shared model — both pure,
+side-effect-free — everything else is its own.
 
 **Why a real heading, not a flip.** The old model steers `(x, y)` and signals
 facing with a boolean; `use-fish-swim.ts` renders a direction change as

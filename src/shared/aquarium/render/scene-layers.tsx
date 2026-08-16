@@ -1,7 +1,7 @@
 "use no memo"; // Reads a clock SharedValue inside useDerivedValue per piece —
 // same "use no memo" reasoning as fish-layer.tsx.
 
-import { Group, Image as SkiaImage, Skia, useClock } from "@shopify/react-native-skia";
+import { Group, Skia, Image as SkiaImage, useClock } from "@shopify/react-native-skia";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
 import type { PlacedPiece } from "../scene/compose";

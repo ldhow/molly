@@ -1,7 +1,6 @@
-import { Canvas, Group } from "@shopify/react-native-skia";
 import { StyleSheet, Text, View } from "react-native";
 
-import { FishBody } from "@/shared/components/tank/fish-sprite";
+import { FishPreview } from "@/shared/aquarium/render/fish-preview";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 import { standardTraits } from "@/shared/fish/catalog";
 import { formatRarity, RARITY_COLORS } from "@/shared/fish/rarity";
@@ -20,24 +19,14 @@ export function FishdexCard({ def, unlocked }: Props) {
   const rarityColor = RARITY_COLORS[def.rarity.tier];
   return (
     <View style={[styles.card, !unlocked && styles.lockedCard]}>
-      <Canvas style={styles.canvas}>
-        <Group
-          transform={[
-            { translateX: PREVIEW_W / 2 },
-            { translateY: PREVIEW_H / 2 + 4 },
-            { scale: 0.52 },
-          ]}
-        >
-          <FishBody
-            traits={standardTraits(def.id)}
-            stage="adult"
-            clock={null}
-            phase={0}
-            silhouette={!unlocked}
-            vector
-          />
-        </Group>
-      </Canvas>
+      <View style={styles.canvas}>
+        <FishPreview
+          traits={standardTraits(def.id)}
+          stage="adult"
+          width={PREVIEW_W}
+          height={PREVIEW_H}
+        />
+      </View>
       <Text style={styles.name}>{unlocked ? def.name : "???"}</Text>
       <Text style={[styles.rarity, { color: rarityColor }]}>{formatRarity(def.rarity)}</Text>
       <Text style={styles.hint} numberOfLines={3}>

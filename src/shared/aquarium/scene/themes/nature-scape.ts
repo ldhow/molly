@@ -48,6 +48,9 @@ export const NATURE_SCAPE: SceneTheme = {
     { species: "vallisneria", layer: "back", xFraction: 0.24, scale: 0.72, seed: 27 },
     { species: "vallisneria", layer: "back", xFraction: 0.94, scale: 1.05, seed: 41 },
     { species: "vallisneria", layer: "back", xFraction: 0.99, scale: 0.88, seed: 59 },
+    { species: "cabomba", layer: "back", xFraction: 0.35, scale: 1.1, seed: 81 },
+    { species: "cabomba", layer: "back", xFraction: 0.65, scale: 0.95, seed: 83 },
+    { species: "sword", layer: "front", xFraction: 0.65, scale: 0.95, seed: 83 },
     { species: "stemBush", layer: "back", xFraction: 0.83, scale: 0.85, seed: 73 },
 
     // Mid layer: the driftwood centerpiece (left, dominant) with anubias

@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { TankCanvas } from "@/shared/components/tank/tank-canvas";
+import { TankView } from "@/shared/components/tank/tank-view";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 
 import { mockAliveFish, mockDeadFish } from "../utils/mock-fish";
@@ -12,11 +12,11 @@ const COUNT_OPTIONS = [5, 15, 25] as const;
 const DEAD_OPTIONS = [0, 3] as const;
 
 /**
- * Dev-only: watch the tank's live Skia/Reanimated swim animation — the same
- * `TankCanvas`/`FishSprite` code the app ships — without a device build or
- * DB writes. Fish are generated in memory (see `mock-fish.ts`) and thrown
- * away on unmount. Reachable via the "DEV: preview animation" button on the
- * real Tank screen, or by navigating to /tank-preview directly.
+ * Dev-only: watch the tank's live swim animation — the same `TankView` code
+ * the app ships (so it follows the renderer toggle too) — without a device
+ * build or DB writes. Fish are generated in memory (see `mock-fish.ts`) and
+ * thrown away on unmount. Reachable via the "DEV: preview animation" button
+ * on the real Tank screen, or by navigating to /tank-preview directly.
  */
 export function TankPreviewScreen() {
   const insets = useSafeAreaInsets();
@@ -33,7 +33,7 @@ export function TankPreviewScreen() {
 
   return (
     <View style={styles.root}>
-      <TankCanvas fish={fish} style={StyleSheet.absoluteFill as never} />
+      <TankView fish={fish} style={StyleSheet.absoluteFill as never} />
       <View
         style={[
           styles.overlay,

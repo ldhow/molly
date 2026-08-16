@@ -27,13 +27,10 @@ export function tank3dAlias(root: string, libDir: string): Record<string, string
     "@/shared/lib/seed": join(root, "src/shared/lib/seed.ts"),
     "@/shared/constants/tank": join(root, "src/shared/constants/tank.ts"),
     "@/shared/fish/skin-map": join(root, "src/shared/fish/skin-map.ts"),
+    "@/shared/lib/tank-fish": join(root, "src/shared/lib/tank-fish.ts"),
     "@/shared/components/tank/tank-canvas-3d": join(
       root,
       "src/shared/components/tank/tank-canvas-3d.tsx",
-    ),
-    "@/shared/components/tank/tank-canvas": join(
-      root,
-      "src/shared/components/tank/tank-canvas.tsx",
     ),
     "@/shared/components/tank/fish-mesh-3d": join(
       root,

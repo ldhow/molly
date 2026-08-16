@@ -1,9 +1,8 @@
-import { Canvas, Group } from "@shopify/react-native-skia";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { useMemo, useState } from "react";
 import { CreaturePreview } from "@/shared/aquarium/render/creature-preview";
-import { FishBody } from "@/shared/components/tank/fish-sprite";
+import { FishPreview } from "@/shared/aquarium/render/fish-preview";
 import { Button } from "@/shared/components/button";
 import { ScreenContainer } from "@/shared/components/screen-container";
 import { palette, radius, spacing } from "@/shared/constants/theme";
@@ -78,23 +77,14 @@ export function FocusHomeScreen() {
 
         <View style={styles.previewCard}>
           {isMolly ? (
-            <Canvas style={styles.previewCanvas}>
-              <Group
-                transform={[
-                  { translateX: PREVIEW_W / 2 },
-                  { translateY: PREVIEW_H / 2 },
-                  { scale: 0.82 },
-                ]}
-              >
-                <FishBody
-                  traits={standardTraits(colorId)}
-                  stage="adult"
-                  clock={null}
-                  phase={0}
-                  silhouette={!selectedUnlocked}
-                />
-              </Group>
-            </Canvas>
+            <View style={styles.previewCanvas}>
+              <FishPreview
+                traits={standardTraits(colorId)}
+                stage="adult"
+                width={PREVIEW_W}
+                height={PREVIEW_H}
+              />
+            </View>
           ) : selectedUnlocked ? (
             <CreaturePreview
               speciesId={speciesId}

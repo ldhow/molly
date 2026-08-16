@@ -39,7 +39,6 @@ import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
 import { sandHeightFor } from "@/shared/constants/tank";
 import { getSpeciesDef } from "@/shared/creature/catalog";
-import { DEAD_GRAYSCALE_MATRIX, DEAD_OPACITY } from "@/shared/fish/render-spec";
 
 import type { BakedArt } from "../core/bake";
 import { densityAwareDpr } from "../core/bake";
@@ -51,6 +50,7 @@ import { biasedDepthRange, personalityFor } from "../sim/personality";
 import { Z_MAX } from "../sim/swim";
 import { useV2Swim, type V2WanderBox } from "../sim/use-v2-swim";
 import { getCachedCreature } from "./creature-cache";
+import { DEAD_GRAYSCALE_MATRIX, DEAD_OPACITY } from "./dead-fish";
 
 function lerp(a: number, b: number, t: number): number {
   "worklet"; // see fish-layer.tsx's identical helper for why this directive

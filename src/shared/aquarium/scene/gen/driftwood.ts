@@ -6,9 +6,9 @@
 // Local space: origin at the base (where it meets the substrate), x right,
 // y NEGATIVE upward — matches `plants.tsx`'s existing convention.
 
-import type { Anchor, Generator } from "@/shared/aquarium/scene/types";
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { unionBox } from "@/shared/aquarium/core/ir";
+import type { Anchor, Generator } from "@/shared/aquarium/scene/types";
 import { makeRng } from "@/shared/lib/rng";
 
 import { ribbonPath } from "./ribbon";

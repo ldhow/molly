@@ -179,13 +179,13 @@ function pickModeDuration(mode: SwimMode, rand: () => number): number {
   "worklet";
   switch (mode) {
     case "cruise":
-      return lerp(2.5, 6, rand());
+      return lerp(10, 18, rand());
     // Longer glides and hovers than the shared model — "slow, rewarding",
     // watching a fish drift rather than dart from spot to spot.
     case "glide":
-      return lerp(1.6, 3.0, rand());
+      return lerp(8, 14, rand());
     case "hover":
-      return lerp(2.0, 4.5, rand());
+      return lerp(3, 6, rand());
     case "burst":
       return lerp(0.5, 0.9, rand());
     default:

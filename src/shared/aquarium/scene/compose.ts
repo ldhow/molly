@@ -6,14 +6,16 @@
 // Dependency-free: no React/RN/Skia. `render/scene-layers.tsx` bakes and
 // draws what this produces.
 
-import type { Anchor, Generator, SceneLayer, SceneTheme, SpeciesId } from "./types";
 import { generateAnubias } from "./gen/anubias";
 import { generateBloom } from "./gen/bloom";
+import { generateCabomba } from "./gen/cabomba";
 import { generateDriftwood } from "./gen/driftwood";
 import { generateKelp } from "./gen/kelp";
 import { generateStemBush, generateVallisneria } from "./gen/plants";
 import { generateSeiryuStone } from "./gen/rock";
 import { generatePebbles, generateSubstrateMound } from "./gen/substrate";
+import { generateSwordPlant } from "./gen/sword";
+import type { Anchor, Generator, SceneLayer, SceneTheme, SpeciesId } from "./types";
 
 const GENERATORS: Record<SpeciesId, Generator> = {
   driftwood: generateDriftwood,
@@ -25,6 +27,8 @@ const GENERATORS: Record<SpeciesId, Generator> = {
   pebbles: generatePebbles,
   kelp: generateKelp,
   bloom: generateBloom,
+  cabomba: generateCabomba,
+  sword: generateSwordPlant,
 };
 
 export interface PlacedPiece {

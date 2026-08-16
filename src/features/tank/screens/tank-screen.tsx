@@ -11,16 +11,14 @@ import { useAddDevFishMutation } from "../api/use-add-dev-fish-mutation";
 import { useOwnedFish } from "../api/use-owned-fish";
 import { useRemoveDevFishMutation } from "../api/use-remove-dev-fish-mutation";
 
-/** Cycles the toggle through all three renderers, 2D first. */
+/** Toggles between the two renderers. */
 const NEXT_RENDER_MODE: Record<RenderMode, RenderMode> = {
-  "2d": "v2",
   v2: "3d",
-  "3d": "2d",
+  "3d": "v2",
 };
 
 const RENDER_MODE_LABEL: Record<RenderMode, string> = {
-  "2d": "2D",
-  v2: "2D V2",
+  v2: "2D",
   "3d": "3D",
 };
 
@@ -58,7 +56,7 @@ export function TankScreen() {
               <Text style={styles.manageButtonText}>Manage tank</Text>
             </Pressable>
             <Pressable
-              style={[styles.manageButton, renderMode !== "2d" && styles.manageButtonActive]}
+              style={[styles.manageButton, renderMode === "3d" && styles.manageButtonActive]}
               onPress={() => setRenderMode(NEXT_RENDER_MODE[renderMode])}
             >
               <Text style={styles.manageButtonText}>Renderer: {RENDER_MODE_LABEL[renderMode]}</Text>

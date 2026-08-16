@@ -1,5 +1,5 @@
-// The 3D counterpart to tank-canvas.tsx — same external prop shape (drop-in
-// via tank-view.tsx), real geometry instead of Skia sprites.
+// The 3D counterpart to the 2D V2 renderer — same external prop shape
+// (drop-in via tank-view.tsx), real geometry instead of Skia sprites.
 //
 // This file has four `useFrame` call sites (TankScene, Water, Decor, and one
 // each inside Fish3D/DeadFish3D in fish-3d.tsx). There is no single "tick"
@@ -15,10 +15,10 @@ import { StyleSheet, View, type ViewStyle } from "react-native";
 import type * as THREE from "three";
 
 import type { WanderBox } from "@/shared/lib/swim-model";
+import type { MollyTankFish } from "@/shared/lib/tank-fish";
 
 import { DeadFish3D, Fish3D } from "./fish-3d";
 import { pumpSkinQueue } from "./fish-skin-texture";
-import type { TankFish } from "./tank-canvas";
 import {
   createBubbles,
   createDriftwood,
@@ -37,7 +37,7 @@ import { DEFAULT_TANK_DESIGN } from "./tank-design";
 import { disposeTree } from "./three-dispose";
 
 interface Props {
-  fish: TankFish[];
+  fish: MollyTankFish[];
   /** "center": session mode — the single growing fish drifts near the middle. */
   mode?: "tank" | "center";
   style?: ViewStyle;
@@ -107,7 +107,7 @@ export function TankCanvas3D({ fish, mode = "tank", style }: Props) {
  * whatever aspect the device actually has — a fixed world-space box would put
  * fish off-screen on a portrait phone.
  */
-function TankScene({ fish, mode }: { fish: TankFish[]; mode: "tank" | "center" }) {
+function TankScene({ fish, mode }: { fish: MollyTankFish[]; mode: "tank" | "center" }) {
   const viewport = useThree((s) => s.viewport);
 
   // One skin bake per frame at most. Fish show their palette gradient until

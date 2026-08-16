@@ -1,37 +1,19 @@
 # The aquarium renderer
 
-A second, self-contained 2D tank renderer, selectable via the render-mode
-toggle (labelled **2D V2**) alongside the original 2D renderer
-(`@/shared/components/tank/tank-canvas.tsx`) and the 3D renderer
+The 2D tank renderer — official as of the legacy renderer's removal — selectable
+via the render-mode toggle (labelled **2D**) alongside the 3D renderer
 (`@/shared/components/tank/tank-canvas-3d.tsx`). See
 [`src/docs/aquarium-guide.md`](../../docs/aquarium-guide.md) for the full
 design rationale — this file is the quick orientation map.
-
-## Deleting the old 2D renderer
-
-Once this renderer replaces it:
-
-1. Delete `src/shared/components/tank/{fish-sprite,fish-picture,undulating-body,tank-canvas,plants,water-background,bubbles}.tsx`.
-2. Delete `src/shared/fish/render-spec.ts` and `scripts/fish-preview.ts` /
-   `scripts/lib/fish-svg.ts` / `scripts/fish-color-editor.ts` (the
-   declarative/imperative/SVG three-backend pipeline that art targeted).
-3. Keep `src/shared/fish/{types,catalog,raster,skin-map}.ts` — the 3D
-   renderer still depends on them for skin baking. Fold `fish/pattern-defs.ts`'s
-   `OVERRIDES` back into `catalog.ts` at this point (see that file's header)
-   — the reason it's a separate override layer (not touching the legacy
-   renderer's pattern data) goes away once there's no legacy renderer left.
-4. In `render-mode-store.ts`, drop the `"2d"` variant (or rename `"v2"` to
-   `"2d"`) and update `tank-view.tsx`'s branch accordingly.
-5. Update `CLAUDE.md`'s "How a fish is drawn" section to describe this tree
-   instead.
 
 ## What imports what
 
 This tree imports only:
 
-- `@/shared/fish/{types,catalog}` — trait/colour DATA, read-only. Never the
-  old renderer's components — including `@/shared/hooks/use-fish-swim.ts`:
-  this tree owns its own steering (`fish/sim/swim.ts`).
+- `@/shared/fish/{types,catalog}` — trait/colour DATA, read-only. This tree
+  owns its own steering (`sim/swim.ts`), never
+  `@/shared/hooks/use-fish-swim.ts` (deleted with the legacy renderer — that
+  hook is now 3D-only, unused here).
 - `@/shared/creature/{types,catalog}` — species DATA (`SpeciesId`,
   `SpeciesDef`, `getSpeciesDef`), read-only, the same role `fish/catalog.ts`
   plays for molly. Only `creatures/` and `render/creature-layer.tsx` touch
@@ -39,14 +21,18 @@ This tree imports only:
 - `@/shared/lib/{color,rng,seed,path2d}` — dependency-free pure helpers,
   already shared with the 3D renderer.
 - `@/shared/constants/*` — generic shared utilities, not renderer code.
-- `@/shared/fish/render-spec.ts`'s `DEAD_GRAYSCALE_MATRIX`/`DEAD_OPACITY`
-  constants (data, not code) — so dead fish look the same across renderers
-  until the old one is deleted.
+
+Note `@/shared/fish/render-spec.ts` is intentionally NOT in this list even
+though it still exists — the 3D renderer's skin-texture bake depends on it
+(`skin-map.ts`/`raster.ts`), which is the only reason it's still around.
+`render/dead-fish.ts` holds this tree's own `DEAD_GRAYSCALE_MATRIX`/
+`DEAD_OPACITY` copy so `fish-layer.tsx`/`creature-layer.tsx` never need to
+reach into `render-spec.ts`.
 
 Nothing outside `src/shared/aquarium/` should import from inside it except
-`render/aquarium-canvas.tsx` (via `tank-view.tsx`), `render/creature-preview.tsx`
-(via the home-screen picker, Fishdex, and Holding Tank tile — the non-molly
-species have no legacy-renderer art to preview through instead), and
+`render/aquarium-canvas.tsx` (via `tank-view.tsx`), `render/fish-preview.tsx`
+and `render/creature-preview.tsx` (the static per-tile previews used by the
+Holding Tank tile, Fishdex cards, and the home-screen picker), and
 `index.ts`'s exports.
 
 ## Structure
@@ -75,13 +61,13 @@ species have no legacy-renderer art to preview through instead), and
   composition (`compose.ts`), and the authored theme (`themes/`).
 - `sim/` — per-fish steering (`swim.ts`, `use-v2-swim.ts`) and personality
   (`personality.ts`) — shared as-is by every species, molly and otherwise.
-- `render/` — React/Skia components: `aquarium-canvas.tsx` (drop-in for
-  `TankCanvas`, dispatches each individual to `fish-layer.tsx` or
-  `creature-layer.tsx`), `fish-layer.tsx` + `fish-cache.ts` (molly),
-  `creature-layer.tsx` + `creature-cache.ts` (the other 5 species) +
-  `creature-preview.tsx` (the static non-swimming preview every non-molly UI
-  surface uses), `water.tsx`, `scene-layers.tsx`, `decor-cache.ts`,
-  `bubbles.tsx`.
+- `render/` — React/Skia components: `aquarium-canvas.tsx` (the tank view,
+  dispatches each individual to `fish-layer.tsx` or `creature-layer.tsx`),
+  `fish-layer.tsx` + `fish-cache.ts` (molly) + `fish-preview.tsx` (the static
+  non-swimming molly preview), `creature-layer.tsx` + `creature-cache.ts`
+  (the other 5 species) + `creature-preview.tsx` (its non-molly
+  counterpart), `dead-fish.ts` (shared corpse-rendering constants), `water.tsx`,
+  `scene-layers.tsx`, `decor-cache.ts`, `bubbles.tsx`.
 
 ## Verification
 
