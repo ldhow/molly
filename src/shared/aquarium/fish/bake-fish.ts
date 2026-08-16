@@ -31,6 +31,7 @@ import type { ColorDef, FishTraits, LifeStage } from "@/shared/fish/types";
 import { darken, rgba } from "@/shared/lib/color";
 
 import { buildFishAnatomy, type FishAnatomy, type FishFins } from "./anatomy";
+import { EYE_RADIUS, eyeNodes, eyeStyleFor, type EyeStyleId } from "./eyes";
 import type { FinShape } from "./fins";
 import { aquariumColorDef } from "./pattern-defs";
 import {
@@ -47,6 +48,69 @@ export const STAGE_SQUISH: Record<LifeStage, number> = {
   egg: 1,
   fry: 0.72,
   juvenile: 0.88,
+  adult: 1,
+};
+
+type FinKey = keyof FishFins;
+
+/**
+ * Per-fin alpha multiplier by life stage — how "grown in" each fin is.
+ * `fry` has none at all (a fry is a featureless blob with a nub of a tail);
+ * `juvenile` has every fin but dimmer than its adult value; `adult`'s `1`
+ * multipliers make `fin(...)`'s output identical to the pre-stage code path,
+ * which matters because the tank screen and post-session result sheet both
+ * hardcode `stage: "adult"` and must not visually change. `egg` is unused —
+ * it never reaches `buildFishAquariumSpec` at all, see `bakeFish`.
+ */
+const STAGE_FIN_ALPHA: Record<LifeStage, Record<FinKey, number>> = {
+  egg: {
+    dorsal: 0,
+    anal: 0,
+    pelvicNear: 0,
+    pelvicFar: 0,
+    pectoralNear: 0,
+    pectoralFar: 0,
+    caudal: 0,
+  },
+  fry: {
+    dorsal: 0,
+    anal: 0,
+    pelvicNear: 0,
+    pelvicFar: 0,
+    pectoralNear: 0,
+    pectoralFar: 0,
+    caudal: 0.5,
+  },
+  juvenile: {
+    dorsal: 0.6,
+    anal: 0.55,
+    pelvicNear: 0.55,
+    pelvicFar: 0.4,
+    pectoralNear: 0.7,
+    pectoralFar: 0.5,
+    caudal: 0.85,
+  },
+  adult: {
+    dorsal: 1,
+    anal: 1,
+    pelvicNear: 1,
+    pelvicFar: 1,
+    pectoralNear: 1,
+    pectoralFar: 1,
+    caudal: 1,
+  },
+};
+
+/**
+ * Opacity of the pattern/scale/shimmer/sparkle detail group by life stage —
+ * "how developed is this fish's colouring." `1` (adult) pushes those nodes
+ * unwrapped, byte-identical to the pre-stage code path; `0` (fry) skips
+ * building them at all.
+ */
+const STAGE_DETAIL_OPACITY: Record<LifeStage, number> = {
+  egg: 0,
+  fry: 0,
+  juvenile: 0.5,
   adult: 1,
 };
 
@@ -133,7 +197,18 @@ function finsBbox(fins: FishFins): Box {
   )!;
 }
 
-export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAquariumSpec {
+export function buildFishAquariumSpec(
+  traits: FishTraits,
+  def: ColorDef,
+  stage: LifeStage = "adult",
+  /**
+   * Forces one eye style instead of the seed-derived one. TOOLING ONLY —
+   * `scripts/aquarium-preview.ts` uses it to lay out one cell per style. It
+   * is deliberately NOT part of `fishBakeKey`, so the app must never pass
+   * it: two fish differing only by an override would collide in the cache.
+   */
+  eyeStyle?: EyeStyleId,
+): FishAquariumSpec {
   const anatomy = buildFishAnatomy(traits);
   const { landmarks, outlineD, silhouetteStrokeD, fins } = anatomy;
   const aquaDef = aquariumColorDef(def);
@@ -154,13 +229,6 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
     peduncleTop: landmarks.peduncleTop,
     halfHeight: landmarks.halfHeight,
   };
-  const trunkBbox: Box = {
-    x: landmarks.nose.x,
-    y: landmarks.backPeak.y,
-    width: landmarks.peduncleTop.x - landmarks.nose.x,
-    height: landmarks.bellyLow.y - landmarks.backPeak.y,
-  };
-
   const bp = landmarks.backPeak.y;
   const belly = landmarks.bellyLow.y;
   const px = landmarks.peduncleTop.x;
@@ -207,8 +275,17 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
     ],
   });
   const rayColor = darken(p.finRay, 0.1);
-  const fin = (f: FinShape) =>
-    finMembraneNodes(f, finPaint(f.pivot, f.tip), rayColor, outlineColor);
+  const finAlphaMul = STAGE_FIN_ALPHA[stage];
+  // Returns `null` (rather than a zero-opacity node) when a fin hasn't grown
+  // in yet at this stage — `fry` skips every fin but the caudal this way.
+  // `mul >= 1` (adult, the common case) reuses `f` unchanged so the output is
+  // byte-identical to the pre-stage code path.
+  const fin = (f: FinShape, key: FinKey): Node | null => {
+    const mul = finAlphaMul[key];
+    if (mul <= 0) return null;
+    const scaled = mul >= 1 ? f : { ...f, alpha: f.alpha * mul };
+    return finMembraneNodes(scaled, finPaint(f.pivot, f.tip), rayColor, outlineColor);
+  };
 
   // The caudal's own root tone: `p.mid` is the body skin gradient's own
   // middle stop, and the caudal hub sits at `peduncleMidY` — "the vertical
@@ -232,18 +309,37 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
   };
 
   const nodes: Node[] = [];
+  const pushIf = (target: Node[], node: Node | null) => {
+    if (node) target.push(node);
+  };
 
   // Behind the body, buried at the root by the opaque skin fill drawn next.
-  nodes.push(fin(fins.pectoralFar));
-  nodes.push(fin(fins.pelvicFar));
+  pushIf(nodes, fin(fins.pectoralFar, "pectoralFar"));
+  pushIf(nodes, fin(fins.pelvicFar, "pelvicFar"));
   // `strokeD: null` — the caudal's outer margin is already inked as part of
   // `silhouetteStrokeD` below (one continuous line with the body), and its
   // hub-radiating edges are buried under the skin fill same as any other
   // "behind" fin; stroking `fin.d` here too would double-ink the same rim.
-  nodes.push(finMembraneNodes(fins.caudal, caudalPaint, rayColor, outlineColor, null));
-  nodes.push(fin(fins.dorsal));
-  nodes.push(fin(fins.anal));
-  nodes.push(fin(fins.pelvicNear));
+  const caudalMul = finAlphaMul.caudal;
+  if (caudalMul > 0) {
+    const caudalFin =
+      caudalMul >= 1 ? fins.caudal : { ...fins.caudal, alpha: fins.caudal.alpha * caudalMul };
+    nodes.push(finMembraneNodes(caudalFin, caudalPaint, rayColor, outlineColor, null));
+  }
+  pushIf(nodes, fin(fins.dorsal, "dorsal"));
+  pushIf(nodes, fin(fins.anal, "anal"));
+  pushIf(nodes, fin(fins.pelvicNear, "pelvicNear"));
+
+  // How developed this fish's colouring is at this stage — pattern, scale
+  // texture, shimmer and sparkle all fall under "detail" and fade in
+  // together (0 for `fry`: a flat, featureless little body; 1 for `adult`:
+  // unwrapped, byte-identical to the pre-stage code path).
+  const detailOpacity = STAGE_DETAIL_OPACITY[stage];
+  const pushStaged = (target: Node[], children: Node[]) => {
+    if (!children.length) return;
+    if (detailOpacity >= 1) target.push(...children);
+    else target.push({ kind: "group", children, opacity: detailOpacity, isolate: true });
+  };
 
   // The opaque body skin — everything above this line has its root buried.
   const skinAlbedo: Node[] = [
@@ -261,11 +357,20 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
         ],
       },
     },
-    ...patternPrimitives(def.id, aquaDef.pattern, pigmentGeom, material, seed),
   ];
-  const shimmer = def.shimmer ? shimmerPrimitive(def.shimmer, pigmentGeom, material, seed) : null;
-  if (shimmer) skinAlbedo.push(shimmer.base);
-  skinAlbedo.push(...scalePrimitives(def, pigmentGeom, trunkBbox, outlineD, seed));
+  const shimmer =
+    detailOpacity > 0 && def.shimmer
+      ? shimmerPrimitive(def.shimmer, pigmentGeom, material, seed)
+      : null;
+  const detailNodes: Node[] =
+    detailOpacity > 0
+      ? [
+          ...patternPrimitives(def.id, aquaDef.pattern, pigmentGeom, material, seed),
+          ...(shimmer ? [shimmer.base] : []),
+          ...scalePrimitives(def, pigmentGeom, material, outlineD, seed),
+        ]
+      : [];
+  pushStaged(skinAlbedo, detailNodes);
 
   const skin: Node[] = [...skinAlbedo];
   // Curvature-aware core shadow, replacing the old straight top-to-bottom
@@ -464,12 +569,14 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
       ],
     },
   });
-  if (shimmer?.accents.length) nodes.push(...shimmer.accents);
-  nodes.push(...sparklePrimitives(pigmentGeom, def.rarity.tier, seed));
+  pushStaged(nodes, [
+    ...(shimmer?.accents ?? []),
+    ...(detailOpacity > 0 ? sparklePrimitives(pigmentGeom, def.rarity.tier, seed) : []),
+  ]);
 
   // Only the near pectoral overlays the flank AFTER the skin — a real
   // pectoral sits on top, not buried behind it.
-  nodes.push(fin(fins.pectoralNear));
+  pushIf(nodes, fin(fins.pectoralNear, "pectoralNear"));
 
   // Mouth.
   const nx = landmarks.nose.x;
@@ -512,30 +619,112 @@ export function buildFishAquariumSpec(traits: FishTraits, def: ColorDef): FishAq
     },
   });
 
-  // Eye — the structure (sclera / ring / pupil / catchlight) was already
-  // right; the mascot pass just scales it up and thickens the ring so it
-  // reads as a drawn cartoon eye rather than a modest naturalistic dot.
-  const eye = { cx: xAt(U_EYE), cy: topAt(U_EYE) * 0.42 };
-  const r = 6.3;
-  nodes.push({ kind: "circle", ...eye, r, paint: { type: "solid", color: "#f8f5ee" } });
-  nodes.push({
-    kind: "path",
-    d: `M ${F(eye.cx - r)} ${F(eye.cy)} a ${r} ${r} 0 1 0 ${F(r * 2)} 0 a ${r} ${r} 0 1 0 ${F(-r * 2)} 0`,
-    paint: { type: "solid", color: "#12161f", opacity: 0.95 },
-    stroke: { width: 1.7 },
-  });
-  nodes.push({ kind: "circle", ...eye, r: 3.7, paint: { type: "solid", color: "#0b0e14" } });
-  nodes.push({
-    kind: "circle",
-    cx: eye.cx - 1.7,
-    cy: eye.cy - 1.9,
-    r: 1.7,
-    paint: { type: "solid", color: "#f9fcff", opacity: 0.97 },
-  });
+  // Eye — the mascot pass's scaled-up sclera/ring/pupil/catchlight structure
+  // is kept intact; `eyes.ts` adds the iris it was missing (the thing that
+  // most made it read as a painted dot) and turns the single hardcoded eye
+  // into a set of styles picked per individual from `seed`. Position still
+  // comes from the head's own `u`-fraction landmarks; the RADIUS stays an
+  // authored constant, not a body-derived one — see `eyes.ts`'s header.
+  nodes.push(
+    ...eyeNodes(eyeStyle ?? eyeStyleFor(def.id, seed), {
+      center: { x: xAt(U_EYE), y: topAt(U_EYE) * 0.42 },
+      r: EYE_RADIUS,
+      outlineColor,
+      irisColor: p.fin,
+    }),
+  );
 
   const bounds = inflateBox(unionBox(landmarks.bbox, finsBbox(fins)), BOUNDS_PAD);
 
   return { nodes, bounds, anatomy };
+}
+
+const EGG_RX = 17;
+const EGG_RY = 21;
+
+/** Standard 4-cubic circle-to-ellipse Bezier approximation. */
+function ellipsePathD(cx: number, cy: number, rx: number, ry: number): string {
+  const k = 0.5522847498;
+  const ox = rx * k;
+  const oy = ry * k;
+  return (
+    `M ${F(cx - rx)} ${F(cy)} ` +
+    `C ${F(cx - rx)} ${F(cy - oy)} ${F(cx - ox)} ${F(cy - ry)} ${F(cx)} ${F(cy - ry)} ` +
+    `C ${F(cx + ox)} ${F(cy - ry)} ${F(cx + rx)} ${F(cy - oy)} ${F(cx + rx)} ${F(cy)} ` +
+    `C ${F(cx + rx)} ${F(cy + oy)} ${F(cx + ox)} ${F(cy + ry)} ${F(cx)} ${F(cy + ry)} ` +
+    `C ${F(cx - ox)} ${F(cy + ry)} ${F(cx - rx)} ${F(cy + oy)} ${F(cx - rx)} ${F(cy)} Z`
+  );
+}
+
+/**
+ * The `egg` stage bypass — a plain yellow oval, independent of `traits`
+ * (what colour it hatches into stays a surprise): no eyes, no fins, no
+ * pattern, and no dependency on `buildFishAnatomy`/`fins.ts` at all.
+ */
+export function buildEggAquariumSpec(): { nodes: Node[]; bounds: Box } {
+  const eggD = ellipsePathD(0, 0, EGG_RX, EGG_RY);
+  const shellOutline = darken("#f6c945", 0.5);
+
+  const nodes: Node[] = [
+    {
+      kind: "path",
+      d: eggD,
+      paint: {
+        type: "linear",
+        from: { x: 0, y: -EGG_RY },
+        to: { x: 0, y: EGG_RY },
+        stops: [
+          { offset: 0, color: "#fde79a" },
+          { offset: 0.5, color: "#f6c945" },
+          { offset: 1, color: "#dba213" },
+        ],
+      },
+    },
+    // Grounding shadow — same soft occlusion-crescent trick the body uses.
+    {
+      kind: "circle",
+      cx: 0,
+      cy: EGG_RY * 0.55,
+      r: EGG_RY * 0.7,
+      blend: "multiply",
+      blur: EGG_RY * 0.25,
+      clip: eggD,
+      paint: { type: "solid", color: rgba(shellOutline, 0.3) },
+    },
+    // Glossy highlight — a wet shell reads as reflective, not matte.
+    {
+      kind: "path",
+      d: eggD,
+      blend: "screen",
+      blur: 1.5,
+      clip: eggD,
+      paint: {
+        type: "radial",
+        center: { x: -EGG_RX * 0.35, y: -EGG_RY * 0.5 },
+        radius: EGG_RX * 0.55,
+        scale: { x: 1, y: 1.3 },
+        stops: [
+          { offset: 0, color: "rgba(255,255,255,0.85)" },
+          { offset: 0.6, color: "rgba(255,255,255,0.25)" },
+          { offset: 1, color: "rgba(255,255,255,0)" },
+        ],
+      },
+    },
+    // Shell keyline.
+    {
+      kind: "path",
+      d: eggD,
+      paint: { type: "solid", color: shellOutline, opacity: 0.55 },
+      stroke: { width: 1.4 },
+      blur: 0.2,
+    },
+  ];
+
+  const bounds = inflateBox(
+    { x: -EGG_RX, y: -EGG_RY, width: EGG_RX * 2, height: EGG_RY * 2 },
+    BOUNDS_PAD,
+  );
+  return { nodes, bounds };
 }
 
 /** `(traits, stage)` -> a cache key stable across renders, per the React Compiler note in the plan. */
@@ -548,9 +737,15 @@ export function bakeFish(
   traits: FishTraits,
   stage: LifeStage,
   dpr: number,
+  /** Tooling-only eye-style override — see `buildFishAquariumSpec`. */
+  eyeStyle?: EyeStyleId,
 ): BakedArt | null {
+  if (stage === "egg") {
+    const { nodes, bounds } = buildEggAquariumSpec();
+    return bakeNodes(Skia, nodes, bounds, dpr, STAGE_SQUISH.egg);
+  }
   const def = getColorDef(traits.color);
-  const { nodes, bounds } = buildFishAquariumSpec(traits, def);
+  const { nodes, bounds } = buildFishAquariumSpec(traits, def, stage, eyeStyle);
   return bakeNodes(Skia, nodes, bounds, dpr, STAGE_SQUISH[stage]);
 }
 

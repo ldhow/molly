@@ -21,12 +21,24 @@ interface Props {
   fish: AnyTankFish[];
   mode?: "tank" | "center";
   style?: ViewStyle;
+  /** 2D-only — forwarded to `AquariumCanvas`. Ignored by the 3D renderer, which always draws its own full scene. */
+  background?: "full" | "plain";
+  /** 2D-only — forwarded to `AquariumCanvas`. */
+  shrinkToTankScale?: boolean;
 }
 
-export function TankView({ fish, mode, style }: Props) {
+export function TankView({ fish, mode, style, background, shrinkToTankScale }: Props) {
   const renderMode = useRenderModeStore((s) => s.renderMode);
   if (renderMode === "3d") {
     return <TankCanvas3D fish={fish.filter(isMollyTankFish)} mode={mode} style={style} />;
   }
-  return <AquariumCanvas fish={fish} mode={mode} style={style} />;
+  return (
+    <AquariumCanvas
+      fish={fish}
+      mode={mode}
+      style={style}
+      background={background}
+      shrinkToTankScale={shrinkToTankScale}
+    />
+  );
 }

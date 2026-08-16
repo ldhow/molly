@@ -116,7 +116,29 @@ else:
   shadow + a full-width blur-6 gloss stripe — averaged out to flat mid-tone
   at real viewing size.
 - The eye keeps its sclera/ring/pupil/catchlight structure but is scaled up
-  (`r` 4.8 → 6.3) with a thicker ring (1 → 1.7).
+  (`r` 4.8 → 6.3) with a thicker ring (1 → 1.7). Those numbers are still the
+  baseline, but they are no longer the whole story — the eye now lives in
+  `fish/eyes.ts` as a set of styles (`classic`/`ringed`/`almond`/`deep`/
+  `hooded`), one picked per individual from its own `patternSeed`. Every
+  style adds an **iris** between sclera and pupil, which the single old eye
+  lacked and which is the main reason it read as a painted dot. The bold ring
+  and the catchlight are deliberately kept: realism here comes from adding
+  missing structure, NOT from softening the mascot treatment. Iris tint comes
+  from the variety's own `palette.fin`, lifted by `irisTone()` only as far as
+  it takes to stay distinct from the near-black pupil (goldDust, black and
+  chocolate have nearly black fins). Eye **radius is an authored constant**,
+  never derived from `halfHeight` — the same call `anatomy.ts` makes for fins
+  via `FIN_REF_HALF_HEIGHT`; only the eye's position tracks the body.
+- Scales (vảy cá) are real surface texture, not a whisper. `pigment.ts`'s
+  `scalePrimitives` lays plates out in body-relative `(u, v)` — reading
+  `topAt`/`bottomAt` so rows bow with the belly, converge at the peduncle,
+  and shrink with local body depth toward head and tail. It used to grid the
+  trunk's **bounding box**, which gave straight rows of identically-sized
+  scales: a rectangular texture on a non-rectangular animal. Each plate is
+  drawn twice (a dark free margin plus a lighter arc lifted just inside it);
+  the pair is what reads as overlap, and one arc alone reads as dashes. The
+  whole set returns as **one clipped group** — `emit.ts` does a
+  save/clipPath/restore per node carrying `clip`, and there are ~300 arcs.
 
 Per-variety palettes are untouched by that pass and stay authentic: Gold
 Dust really does have a black head and dark fins, Sanke its red/black koi

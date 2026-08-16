@@ -21,7 +21,10 @@
 // Dependency-free: no React/RN/Skia. Runs under plain Node.
 
 import { getColorDef } from "@/shared/fish/catalog";
-import type { ColorDef, ColorId, FishPattern, PatternTuning } from "@/shared/fish/types";
+import { isGeneratedColorId, resolveRecipe } from "@/shared/fish/generated-breed";
+import type { BuiltinColorId, ColorDef, FishPattern, PatternTuning } from "@/shared/fish/types";
+
+import { aquariumPatternOf } from "./generated-pattern";
 
 type NonCustomPattern = Exclude<FishPattern, { type: "custom" }>;
 type SpecklePattern = Extract<NonCustomPattern, { type: "speckle" }>;
@@ -70,7 +73,10 @@ interface Override {
   palette?: Partial<ColorDef["palette"]>;
 }
 
-const OVERRIDES: Partial<Record<ColorId, Override>> = {
+// Keyed by `BuiltinColorId`, not `ColorId`: overrides exist to re-draw the six
+// hand-authored `custom` varieties, and a generated breed never needs one (it
+// emits this renderer's pattern vocabulary directly — see `aquariumColorDef`).
+const OVERRIDES: Partial<Record<BuiltinColorId, Override>> = {
   zebra: {
     pattern: {
       type: "stripes",
@@ -128,7 +134,18 @@ const OVERRIDES: Partial<Record<ColorId, Override>> = {
 
 /** Applies this renderer's pattern/palette overrides, if any, over a `catalog.ts` color def. Every other variety passes through unchanged. */
 export function aquariumColorDef(def: ColorDef): AquariumColorDef {
-  const override = OVERRIDES[def.id];
+  // A generated breed's rich pattern. Keyed off the ID, never off `def.pattern`
+  // — by the time a def reaches here its pattern has already been downgraded,
+  // so the id is the only signal left. `def` is spread FIRST and only
+  // `pattern` replaced, because `bake-fish.ts` reads palette/rarity/shimmer off
+  // the un-upgraded def while reading pattern off this one: the two views have
+  // to agree on everything else or a fish is lit for one breed and painted as
+  // another.
+  if (isGeneratedColorId(def.id)) {
+    const recipe = resolveRecipe(def.id);
+    if (recipe) return { ...def, pattern: aquariumPatternOf(recipe) };
+  }
+  const override = OVERRIDES[def.id as BuiltinColorId];
   if (!override) return def as AquariumColorDef;
   return {
     ...def,
@@ -138,6 +155,6 @@ export function aquariumColorDef(def: ColorDef): AquariumColorDef {
 }
 
 /** Convenience wrapper — `aquariumColorDef(getColorDef(id))`. */
-export function getAquariumColorDef(id: ColorId): AquariumColorDef {
+export function getAquariumColorDef(id: BuiltinColorId): AquariumColorDef {
   return aquariumColorDef(getColorDef(id));
 }

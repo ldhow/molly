@@ -161,6 +161,8 @@ export interface CreatureLayerProps {
   depth?: number;
   /** Depth band, tank mode only — see aquarium-canvas.tsx's `bandOf`. */
   band?: SceneLayer;
+  /** Apply the tank-mode shrink even in `mode="center"` — see `fish-layer.tsx`'s `FishLayerProps.shrinkToTankScale`. */
+  shrinkToTankScale?: boolean;
 }
 
 /** Mirrors `fish-layer.tsx`'s `AQUARIUM_FISH_SCALE` — kept as a separate constant so a future per-renderer tuning divergence doesn't require touching the fish file. */
@@ -180,16 +182,18 @@ export function CreatureLayer({
   mode = "tank",
   depth,
   band,
+  shrinkToTankScale = false,
 }: CreatureLayerProps) {
   const dead = status === "dead";
   const hasDepth = mode === "tank" && depth !== undefined;
   const phase = seed * Math.PI * 2;
 
-  const scale = mode === "tank" ? baseScale * AQUARIUM_CREATURE_SCALE : baseScale;
+  const shrink = mode === "tank" || shrinkToTankScale;
+  const scale = shrink ? baseScale * AQUARIUM_CREATURE_SCALE : baseScale;
 
   const dpr = densityAwareDpr(
     PixelRatio.get(),
-    mode === "tank" ? MAX_RENDER_SCALE_TANK : MAX_RENDER_SCALE_CENTER,
+    shrink ? MAX_RENDER_SCALE_TANK : MAX_RENDER_SCALE_CENTER,
   );
   const baked = getCachedCreature(speciesId, variant, dpr);
 

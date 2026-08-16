@@ -2,7 +2,17 @@ import type { SessionRow } from "@/db/schema";
 
 import { bucketFromString } from "../lib/seed";
 import { rollFrom } from "../lib/roll";
-import type { BodyId, ColorDef, ColorId, DorsalId, FishTraits, RollableDef, TailId } from "./types";
+import { generatedColorDefFor } from "./generated-breed";
+import type {
+  BodyId,
+  BuiltinColorDef,
+  ColorDef,
+  ColorId,
+  DorsalId,
+  FishTraits,
+  RollableDef,
+  TailId,
+} from "./types";
 
 /**
  * How many procedural pattern variants each color rolls between. Fish that
@@ -26,7 +36,7 @@ export function patternSeedOf(id: string): number {
  * The 16 color/pattern varieties, in unlock order (user-specified table).
  * Palettes are back→mid→belly gradient stops; patterns layer on top.
  */
-export const COLOR_DEFS: readonly ColorDef[] = [
+export const COLOR_DEFS: readonly BuiltinColorDef[] = [
   {
     id: "goldDust",
     order: 1,
@@ -2453,10 +2463,27 @@ export const COLOR_DEFS: readonly ColorDef[] = [
 
 export const DEFAULT_COLOR_ID: ColorId = "goldDust";
 
-const colorById = new Map(COLOR_DEFS.map((def) => [def.id, def]));
+const colorById = new Map<string, BuiltinColorDef>(COLOR_DEFS.map((def) => [def.id, def]));
 
+/**
+ * Resolve any colour id to a def. Three tiers, in order:
+ *
+ * 1. one of the 16 hand-authored varieties (returned by identity, so
+ *    `getColorDef("goldDust") === COLOR_DEFS[0]` still holds);
+ * 2. a procedurally generated breed — `gen:<seed>` ids carry their whole
+ *    recipe, so `generated-breed.ts` rebuilds the identical def from the id
+ *    alone, with no catalog entry and no DB column;
+ * 3. the Gold Dust fallback for anything unrecognized, unchanged.
+ *
+ * The pattern on a generated def is deliberately DOWNGRADED to a legal
+ * `FishPattern` here (see `toColorDef`) so the legacy renderer's exhaustive
+ * pattern switch — and therefore the 3D skin bake — keeps working. The 2D V2
+ * renderer re-upgrades it in `aquarium/fish/pattern-defs.ts`.
+ */
 export function getColorDef(id: string): ColorDef {
-  return colorById.get(id as ColorId) ?? COLOR_DEFS[0];
+  const builtin = colorById.get(id);
+  if (builtin) return builtin;
+  return generatedColorDefFor(id) ?? COLOR_DEFS[0];
 }
 
 // ---------------------------------------------------------------------------

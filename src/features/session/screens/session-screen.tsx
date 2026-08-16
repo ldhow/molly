@@ -90,7 +90,13 @@ function ActiveSessionView({ session }: { session: ActiveSession }) {
 
   return (
     <View style={styles.root}>
-      <TankView mode="center" style={StyleSheet.absoluteFill as never} fish={[previewFish]} />
+      <TankView
+        mode="center"
+        background="plain"
+        shrinkToTankScale
+        style={StyleSheet.absoluteFill as never}
+        fish={[previewFish]}
+      />
 
       <View
         style={[

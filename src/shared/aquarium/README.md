@@ -10,8 +10,13 @@ design rationale — this file is the quick orientation map.
 
 This tree imports only:
 
-- `@/shared/fish/{types,catalog}` — trait/colour DATA, read-only. This tree
-  owns its own steering (`sim/swim.ts`), never
+- `@/shared/fish/{types,catalog,generated-breed}` — trait/colour DATA,
+  read-only. `generated-breed.ts` is the procedural breed generator behind
+  `gen:<seed>` colour ids; it's dependency-free plain-Node code like the other
+  two, and it declares its own pattern vocabulary (rather than importing this
+  tree's `AquariumPattern`) because `catalog.ts` imports it — see
+  `fish/generated-pattern.ts` for the compile-time bridge that keeps the two
+  unions from drifting. This tree owns its own steering (`sim/swim.ts`), never
   `@/shared/hooks/use-fish-swim.ts` (deleted with the legacy renderer — that
   hook is now 3D-only, unused here).
 - `@/shared/creature/{types,catalog}` — species DATA (`SpeciesId`,

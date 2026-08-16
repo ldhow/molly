@@ -11,6 +11,7 @@ import path from "node:path";
 
 import { loadSkiaNode } from "./lib/skia-node";
 import { bakeFish, densityAwareDpr } from "@/shared/aquarium/fish/bake-fish";
+import { EYE_STYLE_IDS, type EyeStyleId } from "@/shared/aquarium/fish/eyes";
 import { bakeNodes } from "@/shared/aquarium/core/bake";
 import { bakeCreature } from "@/shared/aquarium/creatures/bake-creature";
 import type { Box, Node } from "@/shared/aquarium/core/ir";
@@ -24,6 +25,7 @@ import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
 import { SPECIES_LIST } from "@/shared/creature/catalog";
 import type { SpeciesDef, SpeciesId } from "@/shared/creature/types";
 import { COLOR_DEFS } from "@/shared/fish/catalog";
+import { generateBreedRecipe, generatedColorId, strainCode } from "@/shared/fish/generated-breed";
 import type { BodyId, DorsalId, FishTraits, LifeStage, TailId } from "@/shared/fish/types";
 import { parseHex } from "@/shared/lib/color";
 import { processTransform } from "@shopify/react-native-skia/src/skia/types/Matrix";
@@ -45,8 +47,12 @@ async function main() {
   const Skia = await loadSkiaNode();
   const dpr = densityAwareDpr(2, 1.2);
 
-  const toDataUri = (traits: FishTraits, stage: LifeStage): string | null => {
-    const baked = bakeFish(Skia, traits, stage, dpr);
+  const toDataUri = (
+    traits: FishTraits,
+    stage: LifeStage,
+    eyeStyle?: EyeStyleId,
+  ): string | null => {
+    const baked = bakeFish(Skia, traits, stage, dpr, eyeStyle);
     if (!baked) return null;
     const bytes = baked.image.encodeToBytes();
     return `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`;
@@ -76,6 +82,25 @@ async function main() {
       }
     }
   }
+
+  // Eye styles: one cell per style, on a plain palette and a heavily
+  // patterned one. The app picks a style per fish from its own seed, so this
+  // grid uses `bakeFish`'s tooling-only override to lay them out side by
+  // side — otherwise a given colour only ever shows the one style its seed
+  // bucket happens to land on. Rendered large (see `.eye-cell`): the eye is
+  // ~6px of a ~200px fish and is invisible at the default cell width.
+  console.log(`Baking ${EYE_STYLE_IDS.length} eye styles...`);
+  const eyeRows = (["goldDust", "sanke"] as const).map((color) => ({
+    name: color,
+    cells: EYE_STYLE_IDS.map((style): Cell => ({
+      label: style,
+      dataUri: toDataUri(
+        { color, body: "standard", tail: "round", dorsal: "standard" },
+        "adult",
+        style,
+      ),
+    })),
+  }));
 
   // Yaw strip: the baked fish through fish-layer.tsx's exact perspective
   // matrix at 9 yaw values, so `EDGE_ON_MIN_WIDTH`/`PERSPECTIVE_RATIO` are
@@ -376,6 +401,72 @@ async function main() {
     return { name: def.name, id: def.id, rarity: def.rarity.tier, cells };
   });
 
+  // Procedurally generated breeds (`shared/fish/generated-breed.ts`). This is
+  // the art-judgement surface for the generator: 60 breeds at a glance is
+  // where a bad hue band, a washed-out palette or a runaway pattern parameter
+  // becomes obvious, without a device or a build.
+  //
+  // Seeds come from a fixed multiplicative stride, NOT Math.random() — a
+  // random gallery churns the entire HTML on every run, which makes the diff
+  // useless for spotting what a tuning change actually did.
+  console.log("Baking 60 generated breeds...");
+  const genSeed = (i: number) => ((i + 1) * 2654435761) >>> 0;
+  const genDataUri = (seed: number, stage: LifeStage, patternSeed = 0) =>
+    toDataUri(
+      {
+        color: generatedColorId(seed),
+        body: "standard",
+        tail: "round",
+        dorsal: "standard",
+        patternSeed,
+      },
+      stage,
+    );
+
+  const genCells: Cell[] = Array.from({ length: 60 }, (_, i) => {
+    const seed = genSeed(i);
+    const recipe = generateBreedRecipe(seed);
+    return {
+      label: `${recipe.name} · ${strainCode(seed)} · ${recipe.pattern.type} · ${recipe.rarity.tier}`,
+      dataUri: genDataUri(seed, "adult"),
+    };
+  });
+
+  // Grouped by pattern type as well: judging `bands` against `bands` is much
+  // faster at spotting a bad parameter range than judging it against a wall
+  // of mixed patterns.
+  const GEN_GROUP_SAMPLE = 300;
+  const genByType = new Map<string, Cell[]>();
+  for (let i = 0; i < GEN_GROUP_SAMPLE && genByType.size <= 7; i++) {
+    const seed = genSeed(i);
+    const recipe = generateBreedRecipe(seed);
+    const bucket = genByType.get(recipe.pattern.type) ?? [];
+    if (bucket.length >= 6) continue;
+    bucket.push({
+      label: `${recipe.name} · ${strainCode(seed)}`,
+      dataUri: genDataUri(seed, "adult"),
+    });
+    genByType.set(recipe.pattern.type, bucket);
+  }
+  const genTypeRows = [...genByType.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([type, cells]) => ({ name: type, id: type, rarity: `${cells.length} shown`, cells }));
+
+  // One breed through the two axes that aren't its own identity — life stage
+  // (the squish factors) and `patternSeed` (the 8 per-individual jitter
+  // buckets). The second one is the check that intra-breed variation exists
+  // but doesn't destroy the breed's identity.
+  const showcaseSeed = genSeed(3);
+  const showcaseRecipe = generateBreedRecipe(showcaseSeed);
+  const genStageCells: Cell[] = STAGES.map((stage) => ({
+    label: stage,
+    dataUri: genDataUri(showcaseSeed, stage),
+  }));
+  const genVariantCells: Cell[] = Array.from({ length: 8 }, (_, i) => ({
+    label: `patternSeed ${i}`,
+    dataUri: genDataUri(showcaseSeed, "adult", i),
+  }));
+
   const cellHtml = (c: Cell) =>
     `<div class="cell"><div class="label">${c.label}</div>${
       c.dataUri
@@ -397,6 +488,7 @@ async function main() {
   .grid { display: flex; flex-wrap: wrap; gap: 12px; }
   .yaw-cell img { width: 170px; }
   .scene-cell img { width: 320px; background: none; }
+  .eye-cell img { width: 300px; }
 </style></head><body>
 <h1>Aquarium fish preview</h1>
 <p>Generated by <code>yarn aquarium:preview</code> from the exact code the app runs (real Skia, via scripts/lib/skia-node.ts).</p>
@@ -409,6 +501,14 @@ ${colorRows
   .join("\n")}
 <h2>All 8 body/tail/dorsal combinations (goldDust)</h2>
 <div class="grid">${anatomyCells.map(cellHtml).join("")}</div>
+<h2>Eye styles — every variant in <code>fish/eyes.ts</code></h2>
+<p>The app picks one per fish from its own <code>patternSeed</code>; these are forced side by side via <code>bakeFish</code>'s tooling-only override. Iris colour comes from each variety's own palette.</p>
+${eyeRows
+  .map(
+    (r) =>
+      `<div class="row"><div class="name">${r.name}</div><div class="cells">${r.cells.map((c) => `<div class="cell eye-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">bake failed</div>`}</div>`).join("")}</div></div>`,
+  )
+  .join("\n")}
 <h2>Yaw strip — fish-layer.tsx's perspective matrix at 9 headings</h2>
 <p>yaw 0°/±180° = broadside (art is nose-left, so 0° here is mirrored nose-right); ±90° = edge-on, floored at EDGE_ON_MIN_WIDTH. Art is nose-left by default (unmirrored, w&gt;0).</p>
 <div class="grid">${yawCells.map((c) => `<div class="cell yaw-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">bake failed</div>`}</div>`).join("")}</div>
@@ -417,6 +517,22 @@ ${colorRows
 <div class="grid">${sceneCells.map((c) => `<div class="cell scene-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">bake failed</div>`}</div>`).join("")}</div>
 <h2>Sprite-scape composite — approach "B" (shipped PNGs) for A/B comparison against the composite above</h2>
 <div class="grid">${spriteSceneCells.map((c) => `<div class="cell scene-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">no sprite assets supplied</div>`}</div>`).join("")}</div>
+<h2>Generated breeds — 60 deterministic seeds</h2>
+<p>Procedural molly breeds from <code>shared/fish/generated-breed.ts</code> — no catalog entry, no DB column, the <code>gen:&lt;seed&gt;</code> id IS the recipe. Seeds are a fixed stride so this section only changes when the generator does.</p>
+<div class="grid">${genCells.map(cellHtml).join("")}</div>
+<h2>Generated breeds — grouped by pattern type</h2>
+<p>Up to 6 per type, for judging one generator's parameter range at a time.</p>
+${genTypeRows
+  .map(
+    (r) =>
+      `<div class="row"><div class="name">${r.name}</div><div class="rarity">${r.rarity}</div><div class="cells">${r.cells.map(cellHtml).join("")}</div></div>`,
+  )
+  .join("\n")}
+<h2>One generated breed — ${showcaseRecipe.name} · ${strainCode(showcaseSeed)} (<code>${showcaseRecipe.id}</code>)</h2>
+<p>${showcaseRecipe.description}</p>
+<p>Life stages, then the 8 per-individual <code>patternSeed</code> buckets — variation should be visible without the breed losing its identity.</p>
+<div class="grid">${genStageCells.map(cellHtml).join("")}</div>
+<div class="grid">${genVariantCells.map(cellHtml).join("")}</div>
 <h2>Creatures — every non-molly species x its own variant list</h2>
 <p>Real anatomy where it's shipped (see <code>creatures/&lt;species&gt;/</code>), the placeholder blob otherwise (see <code>creatures/bake-placeholder.ts</code>).</p>
 ${creatureRows

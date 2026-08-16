@@ -46,6 +46,10 @@ interface Props {
   fish: AnyTankFish[];
   mode?: "tank" | "center";
   style?: ViewStyle;
+  /** "plain" skips sand/decor/bubbles — just water + fish, for screens where the fish itself is the whole point (e.g. the session screen's growing fish), not an inhabitant of a wider scene. Defaults to the full nature-scape tank. */
+  background?: "full" | "plain";
+  /** Forwarded to `FishLayer`/`CreatureLayer` — see `FishLayerProps.shrinkToTankScale`. */
+  shrinkToTankScale?: boolean;
 }
 
 /** Deterministic [0,1) "how far back" a fish sits — same rule as tank-canvas.tsx. */
@@ -91,6 +95,7 @@ function renderAlive(
   f: AnyTankFish & { depth: number; band: SceneLayer },
   bounds: Bounds,
   mode: "tank" | "center",
+  shrinkToTankScale: boolean,
 ) {
   return isMollyTankFish(f) ? (
     <FishLayer
@@ -104,6 +109,7 @@ function renderAlive(
       mode={mode}
       depth={f.depth}
       band={f.band}
+      shrinkToTankScale={shrinkToTankScale}
     />
   ) : (
     <CreatureLayer
@@ -117,11 +123,19 @@ function renderAlive(
       mode={mode}
       depth={f.depth}
       band={f.band}
+      shrinkToTankScale={shrinkToTankScale}
     />
   );
 }
 
-export function AquariumCanvas({ fish, mode = "tank", style }: Props) {
+export function AquariumCanvas({
+  fish,
+  mode = "tank",
+  style,
+  background = "full",
+  shrinkToTankScale = false,
+}: Props) {
+  const plain = background === "plain";
   const [size, setSize] = useState({ width: 0, height: 0 });
   const dead = fish.filter((f) => f.status === "dead");
   const alive = fish
@@ -133,10 +147,10 @@ export function AquariumCanvas({ fish, mode = "tank", style }: Props) {
   const substrateY = size.height - sandHeightFor(size.height);
   const scene = useMemo(
     () =>
-      size.width > 0 && size.height > 0
+      !plain && size.width > 0 && size.height > 0
         ? composeScene(NATURE_SCAPE, size.width, size.height, substrateY)
         : null,
-    [size.width, size.height, substrateY],
+    [plain, size.width, size.height, substrateY],
   );
   const piecesByLayer = useMemo(() => {
     const grouped: Record<SceneLayer, PlacedPiece[]> = { far: [], back: [], mid: [], front: [] };
@@ -146,10 +160,10 @@ export function AquariumCanvas({ fish, mode = "tank", style }: Props) {
 
   const spriteScene = useMemo(
     () =>
-      size.width > 0 && size.height > 0
+      !plain && size.width > 0 && size.height > 0
         ? composeSpriteScene(SPRITE_SCAPE, size.width, size.height, substrateY)
         : null,
-    [size.width, size.height, substrateY],
+    [plain, size.width, size.height, substrateY],
   );
   const spritesByLayer = useMemo(() => {
     const grouped: Record<SceneLayer, PlacedSprite[]> = { far: [], back: [], mid: [], front: [] };
@@ -181,30 +195,46 @@ export function AquariumCanvas({ fish, mode = "tank", style }: Props) {
           ) : (
             <AquariumWater width={size.width} height={size.height} />
           )}
-          <ParallaxGroup factor={PARALLAX_FACTOR.front} cameraX={cameraX}>
-            {sceneArtMode === "sprites" ? (
-              <SpriteSubstrate width={size.width} height={size.height} />
-            ) : (
-              <AquariumSubstrate width={size.width} height={size.height} />
-            )}
-          </ParallaxGroup>
-          <ParallaxGroup factor={PARALLAX_FACTOR.far} cameraX={cameraX}>
-            {renderDecor("far")}
-          </ParallaxGroup>
+          {!plain && (
+            <ParallaxGroup factor={PARALLAX_FACTOR.front} cameraX={cameraX}>
+              {sceneArtMode === "sprites" ? (
+                <SpriteSubstrate width={size.width} height={size.height} />
+              ) : (
+                <AquariumSubstrate width={size.width} height={size.height} />
+              )}
+            </ParallaxGroup>
+          )}
+          {!plain && (
+            <ParallaxGroup factor={PARALLAX_FACTOR.far} cameraX={cameraX}>
+              {renderDecor("far")}
+            </ParallaxGroup>
+          )}
           {dead.map((f) => renderDead(f, size))}
-          <ParallaxGroup factor={PARALLAX_FACTOR.back} cameraX={cameraX}>
-            {renderDecor("back")}
-            {alive.filter((f) => f.band === "back").map((f) => renderAlive(f, size, mode))}
-          </ParallaxGroup>
-          <ParallaxGroup factor={PARALLAX_FACTOR.mid} cameraX={cameraX}>
-            {renderDecor("mid")}
-            {alive.filter((f) => f.band === "mid").map((f) => renderAlive(f, size, mode))}
-          </ParallaxGroup>
-          <ParallaxGroup factor={PARALLAX_FACTOR.front} cameraX={cameraX}>
-            {renderDecor("front")}
-            {alive.filter((f) => f.band === "front").map((f) => renderAlive(f, size, mode))}
-          </ParallaxGroup>
-          <AquariumBubbles width={size.width} height={size.height} />
+          {plain ? (
+            alive.map((f) => renderAlive(f, size, mode, shrinkToTankScale))
+          ) : (
+            <>
+              <ParallaxGroup factor={PARALLAX_FACTOR.back} cameraX={cameraX}>
+                {renderDecor("back")}
+                {alive
+                  .filter((f) => f.band === "back")
+                  .map((f) => renderAlive(f, size, mode, shrinkToTankScale))}
+              </ParallaxGroup>
+              <ParallaxGroup factor={PARALLAX_FACTOR.mid} cameraX={cameraX}>
+                {renderDecor("mid")}
+                {alive
+                  .filter((f) => f.band === "mid")
+                  .map((f) => renderAlive(f, size, mode, shrinkToTankScale))}
+              </ParallaxGroup>
+              <ParallaxGroup factor={PARALLAX_FACTOR.front} cameraX={cameraX}>
+                {renderDecor("front")}
+                {alive
+                  .filter((f) => f.band === "front")
+                  .map((f) => renderAlive(f, size, mode, shrinkToTankScale))}
+              </ParallaxGroup>
+            </>
+          )}
+          {!plain && <AquariumBubbles width={size.width} height={size.height} />}
         </Canvas>
       ) : null}
     </View>

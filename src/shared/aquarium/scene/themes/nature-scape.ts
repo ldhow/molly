@@ -66,7 +66,7 @@ export const NATURE_SCAPE: SceneTheme = {
     // Mid layer: the driftwood centerpiece (left, dominant) with anubias
     // mounted on its branches, plus a smaller mirrored echo on the right so
     // the two sides read as related but asymmetric, not a mirrored pair.
-    { species: "driftwood", layer: "mid", xFraction: 0.17, scale: 1.35, seed: 3, id: "wood1" },
+    // { species: "driftwood", layer: "mid", xFraction: 0.17, scale: 1.35, seed: 3, id: "wood1" },
     {
       species: "anubias",
       layer: "mid",
@@ -98,15 +98,15 @@ export const NATURE_SCAPE: SceneTheme = {
     // wood; a smaller fukuishi companion stone lower and further back.
     { species: "seiryuStone", layer: "mid", xFraction: 0.24, scale: 1.25, seed: 13 },
     { species: "seiryuStone", layer: "mid", xFraction: 0.1, scale: 0.72, seed: 15 },
-    {
-      species: "driftwood",
-      layer: "mid",
-      xFraction: 0.9,
-      scale: 0.85,
-      seed: 33,
-      id: "wood2",
-      mirror: true,
-    },
+    // {
+    //   species: "driftwood",
+    //   layer: "mid",
+    //   xFraction: 0.9,
+    //   scale: 0.85,
+    //   seed: 33,
+    //   id: "wood2",
+    //   mirror: true,
+    // },
     {
       species: "anubias",
       layer: "mid",
@@ -129,9 +129,9 @@ export const NATURE_SCAPE: SceneTheme = {
     // `gen/bloom.ts`), enough to break up an otherwise all-teal palette
     // without adding mass to the composition. Both sit outside the swim
     // lane (0.32-0.72) so they never crowd the fish.
-    { species: "bloom", layer: "front", xFraction: 0.12, scale: 1.0, seed: 401 },
-    { species: "bloom", layer: "front", xFraction: 0.85, scale: 0.82, seed: 403 },
-    { species: "bloom", layer: "mid", xFraction: 0.24, scale: 0.7, seed: 405 },
+    // { species: "bloom", layer: "front", xFraction: 0.12, scale: 1.0, seed: 401 },
+    // { species: "bloom", layer: "front", xFraction: 0.85, scale: 0.82, seed: 403 },
+    // { species: "bloom", layer: "mid", xFraction: 0.24, scale: 0.7, seed: 405 },
 
     // Carpet: low ground-cover texture at the swim lane's edges, kept short
     // enough (`CarpetDesign.heightMax`) that it never competes with the
@@ -140,6 +140,6 @@ export const NATURE_SCAPE: SceneTheme = {
     { species: "carpet", layer: "front", xFraction: 0.74, scale: 0.8, seed: 603 },
     // Rotala: a warm red-stem accent on the right, breaking up the all-green
     // planting the way the reference photo's ludwigia clump does.
-    { species: "rotala", layer: "mid", xFraction: 0.78, scale: 0.75, seed: 611 },
+    // { species: "rotala", layer: "mid", xFraction: 0.78, scale: 0.75, seed: 611 },
   ],
 };

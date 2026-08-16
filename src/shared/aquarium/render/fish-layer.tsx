@@ -26,9 +26,15 @@ import {
   type Transforms3d,
   type Uniforms,
 } from "@shopify/react-native-skia";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PixelRatio } from "react-native";
-import { useDerivedValue, type SharedValue } from "react-native-reanimated";
+import {
+  runOnJS,
+  useDerivedValue,
+  useSharedValue,
+  withTiming,
+  type SharedValue,
+} from "react-native-reanimated";
 
 import { sandHeightFor } from "@/shared/constants/tank";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
@@ -79,15 +85,25 @@ export interface FishLayerProps {
   depth?: number;
   /** Depth band, tank mode only — see aquarium-canvas.tsx's `bandOf`. Narrows the wander box for "front". */
   band?: SceneLayer;
+  /**
+   * Apply the tank-mode `AQUARIUM_FISH_SCALE` shrink even in `mode="center"`
+   * — the session screen's growing fish wants the wander box/framing of
+   * "center" (stays clear of the clock/button UI) but the same on-screen
+   * proportions a tank-mode fish of the same `scale` would have, not the
+   * unshrunk "hero" size a result-sheet reveal wants. No effect in
+   * `mode="tank"`, which already always shrinks.
+   */
+  shrinkToTankScale?: boolean;
 }
 
 /**
  * Tank-mode-only shrink so the tank reads as roomier — real aquascape decor
  * and fish are nowhere near 30-45% of the tank's width, which is what the
  * unscaled bake was drawing at. Session/result-sheet `mode="center"` is
- * unaffected: that fish IS the focal element, not a inhabitant of a wider
- * scene. Never touch the shared `TANK_FISH_SCALE` constant — the legacy 2D
- * renderer still uses it.
+ * unaffected by default: that fish IS the focal element, not a inhabitant of
+ * a wider scene — see `shrinkToTankScale` above for the opt-in exception.
+ * Never touch the shared `TANK_FISH_SCALE` constant — the legacy 2D renderer
+ * still uses it.
  */
 const AQUARIUM_FISH_SCALE = 0.6;
 
@@ -255,21 +271,44 @@ export function FishLayer({
   mode = "tank",
   depth,
   band,
+  shrinkToTankScale = false,
 }: FishLayerProps) {
   const dead = status === "dead";
   const hasDepth = mode === "tank" && depth !== undefined;
   const phase = seed * Math.PI * 2;
 
-  // AQUARIUM_FISH_SCALE only applies in tank mode — the session screen's
-  // single centered fish IS the focal element, not an inhabitant of a wider
-  // scene, so it keeps its original scale.
-  const scale = mode === "tank" ? baseScale * AQUARIUM_FISH_SCALE : baseScale;
+  const shrink = mode === "tank" || shrinkToTankScale;
+  const scale = shrink ? baseScale * AQUARIUM_FISH_SCALE : baseScale;
 
   const dpr = densityAwareDpr(
     PixelRatio.get(),
-    mode === "tank" ? MAX_RENDER_SCALE_TANK : MAX_RENDER_SCALE_CENTER,
+    shrink ? MAX_RENDER_SCALE_TANK : MAX_RENDER_SCALE_CENTER,
   );
   const baked = getCachedFish(traits, stage, dpr);
+
+  // Crossfade the previous stage's bake into this one when `stage` advances
+  // (egg -> fry -> juvenile -> adult on the session screen) instead of the
+  // hard pop swapping `baked` above would otherwise produce. A no-op
+  // wherever `stage` never changes across renders — every tank-mode alive
+  // fish is always `"adult"` (see `use-owned-fish.ts`), so this only ever
+  // fires for the live session-screen fish.
+  const prevStageRef = useRef(stage);
+  const [transitionFrom, setTransitionFrom] = useState<BakedArt | null>(null);
+  const crossfade = useSharedValue(1);
+  useEffect(() => {
+    if (prevStageRef.current === stage) return;
+    const prevBaked = getCachedFish(traits, prevStageRef.current, dpr);
+    prevStageRef.current = stage;
+    if (!prevBaked) return;
+    setTransitionFrom(prevBaked);
+    crossfade.value = 0;
+    crossfade.value = withTiming(1, { duration: 600 }, (finished) => {
+      if (finished) runOnJS(setTransitionFrom)(null);
+    });
+  }, [stage, traits, dpr, crossfade]);
+  const fadeIn = useDerivedValue(() => crossfade.value);
+  const fadeOut = useDerivedValue(() => 1 - crossfade.value);
+
   // Fin secondary motion pivots — pure geometry (no rasterizing), cheap
   // enough to recompute whenever `traits` changes at all rather than fight
   // the linter over which of its fields actually affect fin shape.
@@ -422,15 +461,30 @@ export function FishLayer({
 
   return (
     <Group transform={liveTransform} opacity={depthOpacity}>
-      <WarpedBody
-        baked={baked}
-        phaseOffset={phase}
-        beatPhase={swim.beatPhase}
-        speedNorm={swim.speedNorm}
-        yaw={swim.yaw}
-        roll={swim.roll}
-        pivots={pivots}
-      />
+      {transitionFrom && (
+        <Group opacity={fadeOut}>
+          <WarpedBody
+            baked={transitionFrom}
+            phaseOffset={phase}
+            beatPhase={swim.beatPhase}
+            speedNorm={swim.speedNorm}
+            yaw={swim.yaw}
+            roll={swim.roll}
+            pivots={pivots}
+          />
+        </Group>
+      )}
+      <Group opacity={fadeIn}>
+        <WarpedBody
+          baked={baked}
+          phaseOffset={phase}
+          beatPhase={swim.beatPhase}
+          speedNorm={swim.speedNorm}
+          yaw={swim.yaw}
+          roll={swim.roll}
+          pivots={pivots}
+        />
+      </Group>
     </Group>
   );
 }

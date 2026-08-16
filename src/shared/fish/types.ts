@@ -6,7 +6,8 @@ import type { Rarity, UnlockRule } from "@/shared/lib/roll";
 // working unchanged.
 export type { RarityTier, Rarity, UnlockRule, RollableDef } from "@/shared/lib/roll";
 
-export type ColorId =
+/** The hand-authored varieties — the closed list `COLOR_DEFS` enumerates. */
+export type BuiltinColorId =
   | "goldDust"
   | "dalmatian"
   | "sunkiss"
@@ -23,6 +24,16 @@ export type ColorId =
   | "blackDiamond"
   | "sanke"
   | "shadowVeil";
+
+/**
+ * A hand-authored variety, or a procedurally generated breed.
+ *
+ * A generated id is `gen:<base36 seed>` and IS the recipe: `generated-breed.ts`
+ * regenerates the identical `ColorDef` from the embedded seed, so nothing about
+ * a generated breed needs a schema change to persist — `sessions.color_id` is
+ * free text and already holds it.
+ */
+export type ColorId = BuiltinColorId | `gen:${string}`;
 
 export type BodyId = "standard" | "balloon";
 export type TailId = "round" | "lyretail";
@@ -139,4 +150,9 @@ export interface ColorDef {
   pattern: FishPattern;
   shimmer?: ShimmerKind;
   unlock: UnlockRule;
+}
+
+/** A `ColorDef` known to be one of the 16 hand-authored entries in `COLOR_DEFS`. */
+export interface BuiltinColorDef extends ColorDef {
+  id: BuiltinColorId;
 }

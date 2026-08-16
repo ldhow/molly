@@ -15,7 +15,13 @@ import { boxContainsBox } from "@/shared/aquarium/core/ir";
 import type { Box, Node } from "@/shared/aquarium/core/ir";
 import { getWarpEffect, WARP_UNIFORM_KEYS } from "@/shared/aquarium/core/sksl/warp";
 import { bodyDepthAt, buildFishAnatomy } from "@/shared/aquarium/fish/anatomy";
-import { bakeFish, buildFishAquariumSpec, densityAwareDpr } from "@/shared/aquarium/fish/bake-fish";
+import {
+  bakeFish,
+  buildFishAquariumSpec,
+  densityAwareDpr,
+  fishBakeKey,
+} from "@/shared/aquarium/fish/bake-fish";
+import { aquariumColorDef, getAquariumColorDef } from "@/shared/aquarium/fish/pattern-defs";
 import { BODY_PROFILES } from "@/shared/aquarium/fish/body-profile";
 import { finPivotsFor } from "@/shared/aquarium/fish/fin-secondary";
 import type { FinShape } from "@/shared/aquarium/fish/fins";
@@ -50,6 +56,13 @@ import { bakeCreature } from "@/shared/aquarium/creatures/bake-creature";
 import { initV2SwimState, stepV2Swim, Z_MAX, type V2WanderBox } from "@/shared/aquarium/sim/swim";
 import { SPECIES_LIST } from "@/shared/creature/catalog";
 import { COLOR_DEFS, getColorDef } from "@/shared/fish/catalog";
+import {
+  clearBreedMemo,
+  generateBreedRecipe,
+  generatedColorId,
+  seedOfGeneratedId,
+} from "@/shared/fish/generated-breed";
+import { contrastRatio, hexToHsl } from "@/shared/lib/color";
 import { SWIM_SPEED } from "@/shared/constants/tank";
 import { flattenPath } from "@/shared/lib/path2d";
 import { wrapToPi } from "@/shared/lib/swim-model";
@@ -1093,6 +1106,285 @@ async function main() {
       );
     }
   }
+
+  // 10. Procedurally generated breeds (`shared/fish/generated-breed.ts`).
+  //
+  // The whole feature rests on one claim — "the id IS the recipe" — so the
+  // checks below are mostly about proving that claim rather than judging the
+  // art (the art loop is `yarn aquarium:preview`'s gallery). The determinism
+  // pair is load-bearing: if the same id can bake different pixels, a fish in
+  // someone's tank changes appearance between launches.
+  console.log("\n-- Generated breeds --");
+  const GEN_SAMPLE = 400;
+  // A fixed multiplicative stride rather than random seeds: the numbers below
+  // have to mean the same thing run to run for a regression to be visible.
+  const genSeed = (i: number) => ((i + 1) * 2654435761) >>> 0;
+  const genSeeds = Array.from({ length: GEN_SAMPLE }, (_, i) => genSeed(i));
+
+  // 10a. Id round-trip, and strictness on everything that isn't a valid id.
+  const idEdgeCases = [0, 1, 7, 35, 36, 2 ** 31, 2 ** 32 - 1];
+  check(
+    "generated id round-trips for edge-case seeds",
+    idEdgeCases.every((s) => seedOfGeneratedId(generatedColorId(s)) === s),
+    idEdgeCases.map((s) => generatedColorId(s)).join(", "),
+  );
+  check(
+    "generated id round-trips across the sample",
+    genSeeds.every((s) => seedOfGeneratedId(generatedColorId(s)) === s),
+  );
+  const badIds = ["goldDust", "gen:", "gen:zzzzzzzzzz", "gen:-1", "GEN:abc", "gen:0a", "gen:A1"];
+  check(
+    "seedOfGeneratedId rejects malformed ids (silent Gold Dust fallback guard)",
+    badIds.every((id) => seedOfGeneratedId(id) === null),
+    badIds.join(", "),
+  );
+
+  // 10b. Determinism of the recipe, with the memo cleared between calls so
+  // this measures the generator rather than a cache returning one object.
+  let recipeStable = true;
+  let defStable = true;
+  for (const s of genSeeds.slice(0, 32)) {
+    clearBreedMemo();
+    const a = JSON.stringify(generateBreedRecipe(s));
+    const aDef = JSON.stringify(aquariumColorDef(getColorDef(generatedColorId(s))));
+    clearBreedMemo();
+    const b = JSON.stringify(generateBreedRecipe(s));
+    const bDef = JSON.stringify(aquariumColorDef(getColorDef(generatedColorId(s))));
+    if (a !== b) recipeStable = false;
+    if (aDef !== bDef) defStable = false;
+  }
+  check("generateBreedRecipe is deterministic (memo cleared between calls)", recipeStable);
+  check("the upgraded aquarium def is deterministic", defStable);
+
+  // 10c. Pattern-type coverage — every branch of `patternPrimitives` has to be
+  // reachable, or a whole visual family silently never generates.
+  const typeCounts = new Map<string, number>();
+  const recipes = genSeeds.map((s) => generateBreedRecipe(s));
+  for (const r of recipes)
+    typeCounts.set(r.pattern.type, (typeCounts.get(r.pattern.type) ?? 0) + 1);
+  const ALL_PATTERN_TYPES = ["solid", "spots", "speckle", "stripes", "bands", "patches", "blossom"];
+  check(
+    "every pattern type is reachable",
+    ALL_PATTERN_TYPES.every((t) => (typeCounts.get(t) ?? 0) > 0),
+    ALL_PATTERN_TYPES.map((t) => `${t}:${typeCounts.get(t) ?? 0}`).join(" "),
+  );
+  const minShare = Math.min(...ALL_PATTERN_TYPES.map((t) => (typeCounts.get(t) ?? 0) / GEN_SAMPLE));
+  check(
+    "no pattern type is vanishingly rare (>= 3% share)",
+    minShare >= 0.03,
+    `min share ${(minShare * 100).toFixed(1)}%`,
+  );
+
+  // 10d. Hex validity. `parseHex` silently no-ops on a malformed string, so a
+  // bad colour would render as an invisible mistake rather than an error.
+  const HEX_RE = /^#[0-9a-f]{6}$/;
+  const colorsOf = (r: (typeof recipes)[number]): string[] => {
+    const p = r.pattern;
+    const out = [...Object.values(r.palette), r.accentColor];
+    if ("color" in p) out.push(p.color);
+    if ("colors" in p) out.push(...p.colors);
+    if ("frontColor" in p && p.frontColor) out.push(p.frontColor);
+    return out;
+  };
+  const badHex = recipes.flatMap(colorsOf).filter((c) => !HEX_RE.test(c));
+  check("every generated colour is a well-formed #rrggbb", badHex.length === 0, badHex.join(", "));
+
+  // 10e. Readability floors. Set 0.05 under the generator's own repair
+  // targets, so a rounding wobble doesn't turn the build red — these catch a
+  // repair loop that stopped working, not a breed that's marginally dim.
+  const WATER_MID = "#063049";
+  let worstWater = Infinity;
+  let worstSpan = Infinity;
+  let worstCounterShade = Infinity;
+  let worstPattern = Infinity;
+  let finRayOk = true;
+  for (const r of recipes) {
+    worstWater = Math.min(worstWater, contrastRatio(r.palette.mid, WATER_MID));
+    worstCounterShade = Math.min(worstCounterShade, contrastRatio(r.palette.belly, r.palette.back));
+    worstSpan = Math.min(worstSpan, hexToHsl(r.palette.belly).l - hexToHsl(r.palette.back).l);
+    if (hexToHsl(r.palette.finRay).l >= hexToHsl(r.palette.fin).l) finRayOk = false;
+    const p = r.pattern;
+    if ("color" in p) worstPattern = Math.min(worstPattern, contrastRatio(p.color, r.palette.mid));
+  }
+  check(
+    "flank separates from the water (contrast >= 1.50)",
+    worstWater >= 1.5,
+    `worst ${worstWater.toFixed(2)}`,
+  );
+  // Two floors on the same property, because neither alone is honest. The
+  // LIGHTNESS SPAN is the real invariant — counter-shading is a lightness
+  // gradient. The WCAG ratio is a secondary sanity check and is deliberately
+  // the looser of the two: it compresses between two already-light tones, so a
+  // pale gold breed can be plainly counter-shaded and still only score ~1.8.
+  // Demanding 2.0 there would force every warm breed to a near-white belly.
+  check(
+    "counter-shading lightness span >= 0.30 (the real counter-shading guard)",
+    worstSpan >= 0.3,
+    `worst ${worstSpan.toFixed(2)}`,
+  );
+  check(
+    "belly/back also clears a loose luminance floor (>= 1.70)",
+    worstCounterShade >= 1.7,
+    `worst ${worstCounterShade.toFixed(2)}`,
+  );
+  check("fin rays are darker than the fin membrane", finRayOk);
+  check(
+    "pattern separates from the flank (contrast >= 1.80)",
+    worstPattern >= 1.8,
+    `worst ${worstPattern.toFixed(2)}`,
+  );
+
+  // 10f. Downgrade legality — this is what keeps the legacy renderer and the
+  // 3D skin bake working. `render-spec.ts`'s pattern switch has no case for
+  // `bands`/`blossom`, and reads `patches.colors[1]` / `stripes.style`
+  // unguarded, so those fields must always be present.
+  const LEGAL_DOWNGRADE = ["solid", "spots", "speckle", "stripes", "patches"];
+  let downgradeOk = true;
+  let downgradeDetail = "";
+  for (const s of genSeeds) {
+    const p = getColorDef(generatedColorId(s)).pattern;
+    if (!LEGAL_DOWNGRADE.includes(p.type)) {
+      downgradeOk = false;
+      downgradeDetail = `illegal type ${p.type}`;
+      break;
+    }
+    if (p.type === "speckle" && "clustered" in p) {
+      downgradeOk = false;
+      downgradeDetail = "speckle still carries `clustered`";
+      break;
+    }
+    if (p.type === "patches" && p.colors.length !== 2) {
+      downgradeOk = false;
+      downgradeDetail = `patches has ${p.colors.length} colours`;
+      break;
+    }
+    if (p.type === "stripes" && !p.style) {
+      downgradeOk = false;
+      downgradeDetail = "stripes missing `style`";
+      break;
+    }
+  }
+  check(
+    "downgraded patterns are legal FishPatterns (3D/legacy safe)",
+    downgradeOk,
+    downgradeDetail,
+  );
+
+  // 10g. Builtin non-regression — the `gen:` branch must not have perturbed
+  // the closed-list lookup or the V2 override path.
+  check(
+    "builtin lookup still returns COLOR_DEFS entries by identity",
+    getColorDef("goldDust") === COLOR_DEFS[0],
+  );
+  check(
+    "V2 overrides still apply to builtins",
+    getAquariumColorDef("zebra").pattern.type === "stripes" &&
+      getColorDef("zebra").pattern.type === "custom",
+  );
+
+  // 10h. Bake-cache keys — one breed, one key, and never colliding with the 16.
+  const genKeys = new Set(
+    genSeeds.map((s) =>
+      fishBakeKey(
+        { color: generatedColorId(s), body: "standard", tail: "round", dorsal: "standard" },
+        "adult",
+      ),
+    ),
+  );
+  const builtinKeys = new Set(
+    COLOR_DEFS.map((d) =>
+      fishBakeKey({ color: d.id, body: "standard", tail: "round", dorsal: "standard" }, "adult"),
+    ),
+  );
+  check(
+    "every generated breed gets its own bake-cache key",
+    genKeys.size === GEN_SAMPLE,
+    `${genKeys.size}/${GEN_SAMPLE} distinct`,
+  );
+  check(
+    "generated bake keys never collide with the 16 builtins",
+    [...genKeys].every((k) => !builtinKeys.has(k)),
+  );
+
+  // 10i. Rarity distribution. Rarity drives `materialFor` (gloss/bloom/rim)
+  // and gates `sparklePrimitives`, so a skewed roll changes how shiny the
+  // whole tank looks, not just a label.
+  const RARITY_TARGET: Record<string, number> = {
+    common: 0.34,
+    uncommon: 0.26,
+    rare: 0.2,
+    epic: 0.13,
+    legendary: 0.07,
+  };
+  const bigSample = Array.from({ length: 1000 }, (_, i) => generateBreedRecipe(genSeed(i)));
+  const tierCounts = new Map<string, number>();
+  for (const r of bigSample)
+    tierCounts.set(r.rarity.tier, (tierCounts.get(r.rarity.tier) ?? 0) + 1);
+  let worstTierDrift = 0;
+  for (const [tier, target] of Object.entries(RARITY_TARGET)) {
+    worstTierDrift = Math.max(
+      worstTierDrift,
+      Math.abs((tierCounts.get(tier) ?? 0) / bigSample.length - target),
+    );
+  }
+  check(
+    "rarity distribution tracks its weights (within 6pp)",
+    worstTierDrift <= 0.06,
+    [...tierCounts].map(([t, n]) => `${t}:${(n / 10) | 0}%`).join(" "),
+  );
+
+  // 10j. Every pattern type actually bakes, on both body shapes — `bands` and
+  // `blossom` scale off `halfHeight`, and neither had a single hand-authored
+  // user before this feature, so their parameter space is genuinely untested.
+  for (const type of ALL_PATTERN_TYPES) {
+    const seed = genSeeds.find((s) => generateBreedRecipe(s).pattern.type === type);
+    if (seed === undefined) continue;
+    for (const body of BODIES) {
+      const baked = bakeFish(
+        Skia,
+        { color: generatedColorId(seed), body, tail: "round", dorsal: "standard" },
+        "adult",
+        dpr,
+      );
+      check(
+        `generated ${type} bakes on ${body}`,
+        !!baked && baked.image.width() > 0 && baked.image.height() > 0,
+      );
+    }
+  }
+
+  // 10k. The claim, proven in pixels: same id, same bytes. Everything else
+  // here is a proxy for this one.
+  let pixelStable = true;
+  for (const s of genSeeds.slice(0, 8)) {
+    const traits: FishTraits = {
+      color: generatedColorId(s),
+      body: "standard",
+      tail: "round",
+      dorsal: "standard",
+    };
+    clearBreedMemo();
+    const a = bakeFish(Skia, traits, "adult", dpr)?.image.encodeToBytes();
+    clearBreedMemo();
+    const b = bakeFish(Skia, traits, "adult", dpr)?.image.encodeToBytes();
+    if (!a || !b || Buffer.compare(Buffer.from(a), Buffer.from(b)) !== 0) pixelStable = false;
+  }
+  check("the same generated id bakes byte-identical pixels", pixelStable);
+
+  // 10l. Generation cost — this runs inside `bakeFish`, per fish, on the
+  // render path (twice: once via getColorDef, once via aquariumColorDef).
+  clearBreedMemo();
+  const genStart = Date.now();
+  for (let i = 0; i < 1000; i++) {
+    clearBreedMemo();
+    generateBreedRecipe(genSeed(i));
+  }
+  const perGenMs = (Date.now() - genStart) / 1000;
+  check(
+    "generateBreedRecipe is cheap (< 0.5ms uncached)",
+    perGenMs < 0.5,
+    `${perGenMs.toFixed(3)}ms mean`,
+  );
 
   console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) failed.`}`);
   process.exit(failures === 0 ? 0 : 1);

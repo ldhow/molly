@@ -8,9 +8,9 @@
 //
 // Dependency-free: no React/RN/Skia. Runs under plain Node.
 
-import type { Box, Node, Paint, XY } from "@/shared/aquarium/core/ir";
+import type { Node, Paint, XY } from "@/shared/aquarium/core/ir";
 import { blobPath, f, lerp, seededKey, toRad } from "@/shared/aquarium/core/pigment-toolkit";
-import type { ColorDef, RarityTier, ShimmerKind } from "@/shared/fish/types";
+import type { ColorDef, PatternTuning, RarityTier, ShimmerKind } from "@/shared/fish/types";
 import { lighten, rgba } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
@@ -290,7 +290,8 @@ export function patternPrimitives(
     }
 
     case "stripes": {
-      return drawStripe(id, pattern, geom, material, seed, out);
+      out.push(...drawStripe(id, pattern.color, pattern.style, pattern, geom, material, seed));
+      return out;
     }
 
     case "bands": {
@@ -381,14 +382,17 @@ export function patternPrimitives(
       const patchBlur = pattern.style === "soft" ? 2.2 : 1.1;
       const patch = (d: string, color: string, opacity: number) =>
         out.push({ kind: "path", d, paint: solid(color, opacity), blur: patchBlur, clip: bodyD });
+
       if (pattern.style === "koi") {
         const bodyLen = rear - nx;
         patch(blob(nx + bodyLen * 0.2, -3, bodyLen * 0.17, bodyLen * 0.2, 0.16), primary, 0.82);
-        drawStripe(id, pattern, geom, material, seed, out, {
-          minWidth: 1.5,
-          maxWidth: 3.0,
-          includedHead: false,
-        });
+        out.push(
+          ...drawStripe(id, secondary ?? "#1c1e24", "clean", pattern, geom, material, seed, {
+            minWidth: 1.5,
+            maxWidth: 3.0,
+            includedHead: false,
+          }),
+        );
 
         return out;
       }
@@ -587,31 +591,61 @@ export function sparklePrimitives(geom: PigmentGeom, tier: RarityTier, seed: num
   return out;
 }
 
-/** A grid of overlapping scallop arcs across the trunk — real fish-scale rows. */
+const SCALE_COLS = 18;
+const SCALE_ROWS = 8;
+
+/**
+ * Overlapping scale plates (vảy cá) across the trunk — the fish's skin
+ * texture.
+ *
+ * Placement is body-relative `(u, v)`, per this file's header contract: `u`
+ * runs nose->peduncle along `geom.length`, `v` runs top->bottom between
+ * `topAt(u)` and `bottomAt(u)`. An earlier version laid a uniform grid over
+ * the trunk's BOUNDING BOX instead, which gave dead-straight rows of
+ * identically-sized scales — a rectangular texture stretched over a
+ * non-rectangular animal. Reading the contour curves makes the rows bow with
+ * the belly and converge at the peduncle, and lets each scale shrink with
+ * the local body depth, the way a real fish's do toward the head and tail.
+ *
+ * Each plate is drawn TWICE: a dark arc for the free margin, and a lighter
+ * arc lifted just inside it for the lit upper surface of the plate below.
+ * One arc alone reads as a row of dashes; the pair is what reads as
+ * overlap, which is the whole point of drawing scales at all.
+ */
 export function scalePrimitives(
   def: ColorDef,
   geom: PigmentGeom,
-  trunkBbox: Box,
+  material: Material,
   bodyD: string,
   seed: number,
 ): Node[] {
   const rng = makeRng(seededKey(`scales-${def.id}`, seed));
-  const { x: bx, y: by, width: bw, height: bh } = trunkBbox;
-  const cols = 16;
-  const rows = 7;
-  const colW = bw / cols;
-  const rowH = bh / rows;
-  const depth = rowH * 0.16;
+  const colU = 1 / SCALE_COLS;
+  // Depth at the deepest point, as the reference every local depth tapers
+  // against — `halfHeight` is the body's own half-depth, so twice it is the
+  // full depth the mid-trunk scales are sized for.
+  const refDepth = geom.halfHeight * 2;
+  const children: Node[] = [];
 
-  const out: Node[] = [];
-  for (let r = 0; r < rows; r++) {
-    const cy0 = by + rowH * (r + 0.5);
-    const rowOffset = r % 2 === 0 ? 0 : colW / 2;
-    for (let c = -1; c <= cols; c++) {
-      const cx = bx + colW * (c + 0.5) + rowOffset;
-      const cy = cy0 + lerp(-1, 1, rng()) * rowH * 0.08;
-      const w = colW * lerp(0.85, 1.05, rng());
-      const d = depth * lerp(0.75, 1.25, rng());
+  for (let r = 0; r < SCALE_ROWS; r++) {
+    const rowOffset = r % 2 === 0 ? 0 : colU / 2;
+    for (let c = -1; c <= SCALE_COLS; c++) {
+      const u = (c + 0.5) * colU + rowOffset;
+      if (u < 0 || u > 1) continue;
+      const top = -geom.topAt(u);
+      const bot = geom.bottomAt(u);
+      const localDepth = bot - top;
+      if (localDepth <= 0) continue;
+
+      const cx = geom.x0 + u * geom.length;
+      const v = (r + 0.5) / SCALE_ROWS + lerp(-1, 1, rng()) * 0.02;
+      const cy = lerp(top, bot, v);
+
+      // Taper toward nose and peduncle, but not all the way to nothing —
+      // scales get smaller at the ends, they don't vanish.
+      const taper = lerp(0.5, 1, Math.min(1, localDepth / refDepth));
+      const w = geom.length * colU * lerp(0.9, 1.12, rng()) * taper;
+      const arc = (localDepth / SCALE_ROWS) * 0.55 * lerp(0.8, 1.2, rng());
 
       const angle = toRad(curvatureTangentDeg(geom, cx, cy));
       const cosA = Math.cos(angle);
@@ -620,42 +654,61 @@ export function scalePrimitives(
         x: cx + lx * cosA - ly * sinA,
         y: cy + lx * sinA + ly * cosA,
       });
-      const p0 = rot(-w / 2, 0);
-      const c1 = rot(-w / 4, -d);
-      const p1 = rot(0, 0);
-      const c2 = rot(w / 4, d);
-      const p2 = rot(w / 2, 0);
+      // Quadratic bow: the control point sits at 2x the apex offset, so the
+      // curve's midpoint lands at `arc`.
+      const bow = (lift: number) => {
+        const p0 = rot(-w / 2, -lift);
+        const ctl = rot(0, arc * 2 - lift);
+        const p2 = rot(w / 2, -lift);
+        return `M ${f(p0.x)} ${f(p0.y)} Q ${f(ctl.x)} ${f(ctl.y)} ${f(p2.x)} ${f(p2.y)}`;
+      };
 
-      out.push({
+      const contrast = material.patternContrast;
+      children.push({
         kind: "path",
-        d:
-          `M ${f(p0.x)} ${f(p0.y)} Q ${f(c1.x)} ${f(c1.y)} ${f(p1.x)} ${f(p1.y)} ` +
-          `Q ${f(c2.x)} ${f(c2.y)} ${f(p2.x)} ${f(p2.y)}`,
-        paint: { type: "solid", color: "#000000", opacity: lerp(0.045, 0.07, rng()) },
+        d: bow(0),
+        paint: {
+          type: "solid",
+          color: "#000000",
+          opacity: Math.min(1, lerp(0.09, 0.15, rng()) * contrast),
+        },
         stroke: { width: w * 0.11 },
-        clip: bodyD,
+      });
+      children.push({
+        kind: "path",
+        d: bow(arc * 0.75),
+        paint: {
+          type: "solid",
+          color: "#ffffff",
+          opacity: Math.min(1, lerp(0.05, 0.09, rng()) * contrast),
+        },
+        stroke: { width: w * 0.085 },
       });
     }
   }
-  return out;
+
+  // ONE clipped group, not one clip per arc: `emit.ts` emits a
+  // save/clipPath/restore for every node carrying `clip`, and there are
+  // ~300 arcs here. Clipping the group instead costs a single clip for all
+  // of them — fewer clip operations than the old single-arc version had.
+  return [{ kind: "group", clip: bodyD, children }];
 }
 
 const drawStripe = (
   id: string,
-  pattern: AquariumPattern,
+  stripeColor: string,
+  style: "clean" | "broken",
+  tuning: PatternTuning,
   geom: PigmentGeom,
   material: Material,
   seed: number,
-  out: Node[],
   options?: {
     minWidth?: number;
     maxWidth?: number;
     includedHead?: boolean;
   },
 ) => {
-  if (!(pattern.type === "stripes")) {
-    return out;
-  }
+  const out: Node[] = [];
   const { includedHead = true, minWidth = 3.5, maxWidth = 7.0 } = options ?? {};
   const rng = makeRng(seededKey(`pattern-${id}`, seed));
   const bodyD = geom.d;
@@ -668,10 +721,10 @@ const drawStripe = (
   const bot = geom.bellyLow.y;
   const rear = geom.peduncleTop.x;
 
-  const density = pattern.density ?? 1;
-  const scale = pattern.scale ?? 1;
-  const randomness = pattern.randomness ?? 1;
-  const clean = pattern.style === "clean";
+  const density = tuning.density ?? 1;
+  const scale = tuning.scale ?? 1;
+  const randomness = tuning.randomness ?? 1;
+  const clean = style === "clean";
   const barCount = Math.max(3, Math.round(7 * density));
 
   const skelStart = lerp(geom.nose.x, rear, includedHead ? 0 : 0.25);
@@ -712,7 +765,7 @@ const drawStripe = (
     out.push({
       kind: "path",
       d,
-      paint: solid(pattern.color, 0.5),
+      paint: solid(stripeColor, 0.5),
       blur: 1.6,
       clip: bodyD,
     });
@@ -720,7 +773,7 @@ const drawStripe = (
     out.push({
       kind: "path",
       d,
-      paint: solid(pattern.color, 0.92),
+      paint: solid(stripeColor, 0.92),
       blur: 0.35,
       clip: bodyD,
     });

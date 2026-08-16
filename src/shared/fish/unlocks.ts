@@ -6,7 +6,7 @@ import {
 } from "@/shared/lib/sessions";
 
 import { COLOR_DEFS } from "./catalog";
-import type { ColorDef, ColorId } from "./types";
+import type { BuiltinColorId, ColorDef } from "./types";
 
 // `unlockHint` is fully generic over `UnlockRule` (colors, species, any future
 // unlockable axis) — defined once in `@/shared/lib/roll.ts`, re-exported here
@@ -37,9 +37,15 @@ export function isColorUnlocked(
   }
 }
 
+/**
+ * Builtins only — a procedurally generated breed is never in `COLOR_DEFS` and
+ * carries `unlock: { type: "default" }`, so it has nothing to unlock. If
+ * generated breeds become user-facing, they belong in a SECOND "discovered"
+ * list derived from owned session rows, not folded into this ladder.
+ */
 export function unlockedColorIds(
   rows: SessionRow[],
   grantedColors: readonly string[] = [],
-): ColorId[] {
+): BuiltinColorId[] {
   return COLOR_DEFS.filter((def) => isColorUnlocked(def, rows, grantedColors)).map((def) => def.id);
 }
