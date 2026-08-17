@@ -52,6 +52,7 @@
     "eslint-config-expo": "~57.0.1",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
+    "sharp": "^0.35.3",
     "tsx": "^4.23.7",
     "typescript": "~6.0.3"
   },
@@ -69,6 +70,7 @@
     "verify:aquarium": "tsx scripts/verify-aquarium.ts",
     "aquarium:preview": "tsx scripts/aquarium-preview.ts",
     "aquarium:design": "tsx scripts/aquarium-design-editor.ts",
+    "generate:variant-icons": "tsx scripts/generate-variant-icons.ts",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
