@@ -639,6 +639,42 @@ export function buildFishAquariumSpec(
   return { nodes, bounds, anatomy };
 }
 
+/** Flat single-colour fill for locked Fishdex entries — mirrors the legacy renderer's `SILHOUETTE_COLOR`. */
+export const SILHOUETTE_COLOR = "#0a1b29";
+
+/**
+ * A flat, colour-blind silhouette of the fish's real shape (body + every
+ * fin — no pigment, pattern, or face) for Fishdex entries the player hasn't
+ * unlocked yet: recognisable as "a fish" without revealing which colour it
+ * actually is. Deliberately reuses `buildFishAnatomy` (real body/tail/dorsal
+ * shape) rather than a generic placeholder blob, and `fishSilhouetteBakeKey`
+ * deliberately excludes `color`/`patternSeed` — every locked colour that
+ * shares a body/tail/dorsal combo shares one cached bake.
+ */
+export function buildFishSilhouetteSpec(traits: FishTraits): { nodes: Node[]; bounds: Box } {
+  const { landmarks, outlineD, fins } = buildFishAnatomy(traits);
+  const flatFill: Paint = { type: "solid", color: SILHOUETTE_COLOR };
+  const nodes: Node[] = [
+    ...Object.values(fins).map((fin): Node => ({ kind: "path", d: fin.d, paint: flatFill })),
+    { kind: "path", d: outlineD, paint: flatFill },
+  ];
+  const bounds = inflateBox(unionBox(landmarks.bbox, finsBbox(fins)), BOUNDS_PAD);
+  return { nodes, bounds };
+}
+
+export function fishSilhouetteBakeKey(traits: FishTraits): string {
+  return `${traits.body}|${traits.tail}|${traits.dorsal}|silhouette`;
+}
+
+export function bakeFishSilhouette(
+  Skia: SkiaApi,
+  traits: FishTraits,
+  dpr: number,
+): BakedArt | null {
+  const { nodes, bounds } = buildFishSilhouetteSpec(traits);
+  return bakeNodes(Skia, nodes, bounds, dpr);
+}
+
 const EGG_RX = 17;
 const EGG_RY = 21;
 

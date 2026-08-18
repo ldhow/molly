@@ -9,7 +9,12 @@
 import { Skia } from "@shopify/react-native-skia";
 
 import { bakeBytes, createBakeLru, type BakedArt } from "@/shared/aquarium/core/bake";
-import { bakeFish, fishBakeKey } from "@/shared/aquarium/fish/bake-fish";
+import {
+  bakeFish,
+  bakeFishSilhouette,
+  fishBakeKey,
+  fishSilhouetteBakeKey,
+} from "@/shared/aquarium/fish/bake-fish";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
 
 const BUDGET_BYTES = 24 * 1024 * 1024;
@@ -20,6 +25,16 @@ export function getCachedFish(traits: FishTraits, stage: LifeStage, dpr: number)
   const hit = lru.get(key);
   if (hit) return hit;
   const baked = bakeFish(Skia, traits, stage, dpr);
+  if (baked) lru.set(key, baked, bakeBytes(baked.bounds, dpr));
+  return baked;
+}
+
+/** Colour-blind — keyed on shape only, so every locked colour sharing a body/tail/dorsal combo shares one bake. */
+export function getCachedFishSilhouette(traits: FishTraits, dpr: number): BakedArt | null {
+  const key = `${fishSilhouetteBakeKey(traits)}|${dpr.toFixed(2)}`;
+  const hit = lru.get(key);
+  if (hit) return hit;
+  const baked = bakeFishSilhouette(Skia, traits, dpr);
   if (baked) lru.set(key, baked, bakeBytes(baked.bounds, dpr));
   return baked;
 }

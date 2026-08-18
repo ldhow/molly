@@ -335,8 +335,19 @@ export function FishLayer({
   const box: V2WanderBox =
     mode === "center"
       ? {
-          minX: bounds.width * 0.3,
-          maxX: bounds.width * 0.7,
+          // Wide enough that the "clear" middle (outside `swim.ts`'s
+          // `WALL_MARGIN_X`-60px wall-avoidance zone on each side) comfortably
+          // exceeds both `ARRIVE_RADIUS` (26px) and the distance a fish covers
+          // completing a wall-avoidance turn (~50-90px depending on speed) —
+          // at 0.3-0.7 (40% of screen width) that clear zone was only
+          // ~30-40px, smaller than a single turn's arc, so the fish's "steer
+          // toward box centre" target flipped sign before any turn finished,
+          // reading as rapid left-right flipping in place instead of a swim.
+          // Height is untouched: `swim.ts` only steers away from the x/z
+          // walls — y is a hard position clamp with no yaw effect, so box
+          // height was never part of this.
+          minX: bounds.width * 0.12,
+          maxX: bounds.width * 0.88,
           minY: bounds.height * 0.3,
           maxY: bounds.height * 0.62,
         }

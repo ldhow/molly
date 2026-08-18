@@ -25,6 +25,7 @@ export function FishdexCard({ def, unlocked }: Props) {
           stage="adult"
           width={PREVIEW_W}
           height={PREVIEW_H}
+          locked={!unlocked}
         />
       </View>
       <Text style={styles.name}>{unlocked ? def.name : "???"}</Text>

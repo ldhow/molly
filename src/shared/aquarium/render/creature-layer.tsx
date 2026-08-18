@@ -207,8 +207,13 @@ export function CreatureLayer({
   const box: V2WanderBox =
     mode === "center"
       ? {
-          minX: bounds.width * 0.3,
-          maxX: bounds.width * 0.7,
+          // Mirrors `fish-layer.tsx`'s identical fix — see its comment for
+          // the full reasoning (a narrower box's "clear" zone between the
+          // two walls' `WALL_MARGIN_X` avoidance ranges was smaller than one
+          // wall-avoidance turn's arc, so the steer-toward-centre target
+          // flipped sign before a turn finished, reading as rapid flipping).
+          minX: bounds.width * 0.12,
+          maxX: bounds.width * 0.88,
           minY: bounds.height * 0.3,
           maxY: bounds.height * 0.62,
         }
