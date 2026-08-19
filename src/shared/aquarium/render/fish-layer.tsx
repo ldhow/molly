@@ -325,7 +325,13 @@ export function FishLayer({
   // canvas at the wall and gave a tiny fish an oversized, empty-looking
   // margin — neither scales with what's actually being drawn.
   const bakedHalfWidth = baked ? (baked.bounds.width * scale) / 2 : 0;
-  const insetX = Math.min(64, Math.max(28, bakedHalfWidth * 0.7)) * boldInset;
+  // Deliberately NOT scaled by `boldInset` (unlike the vertical insets below):
+  // a per-fish personality variance here read as the tank's side walls sitting
+  // in a different place for every fish ("why does this one turn around so
+  // much earlier?" — requested directly to fix). Every fish now turns at the
+  // same physical margin from the true screen edge, sized only by its own
+  // baked width so the nose doesn't clip off-canvas.
+  const insetX = Math.min(64, Math.max(28, bakedHalfWidth * 0.7));
   const insetTop = Math.min(40, bounds.height * 0.08) * boldInset;
   const insetBottom = Math.min(30, bounds.height * 0.06) * boldInset;
   // The front band sits nearest the glass, over foreground decor — narrowed

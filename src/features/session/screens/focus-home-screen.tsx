@@ -83,6 +83,7 @@ export function FocusHomeScreen() {
                 stage="adult"
                 width={PREVIEW_W}
                 height={PREVIEW_H}
+                locked={!selectedUnlocked}
               />
             </View>
           ) : selectedUnlocked ? (

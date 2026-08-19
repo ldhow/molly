@@ -70,7 +70,14 @@ export interface V2SwimState {
 
 const Z_MAX = 70; // px, symmetric depth range a fish steers within
 const TURN_RATE_MIN = 1.5; // rad/s — slower than the shared model's 1.6: a leisurely arc, not a snap turn
-const TURN_RATE_MAX_WALL = 2.6; // ramped up near a wall so the escape doesn't take 4s
+// Raised from 2.6 to 4.4 — requested directly ("lật lại 1 cách nhanh chống" /
+// flip back quickly): the old value took long enough to sweep through
+// edge-on that the arc read as a wide, slow "U" rather than a fish quickly
+// wheeling around. Still a continuous yaw sweep (see the module header on
+// why this isn't a discrete flip), just compressed into a much shorter arc —
+// `TURN_RATE_CEIL` in `scripts/verify-aquarium.ts`'s swim trace is
+// duplicated from this value and must be bumped alongside it.
+const TURN_RATE_MAX_WALL = 4.4;
 const TURN_RATE_BURST = 3.0;
 // Raised from 0.5: a faster accel tau read as a sudden jolt whenever a mode
 // change (esp. into "burst") kicked `target` up — requested directly ("no
@@ -358,13 +365,16 @@ export function stepV2Swim(
   s.turnRate = approach(s.turnRate, dYaw / dt, dt, TURN_RATE_TAU);
 
   const base = SWIM_SPEED * speedFactor;
-  const target = targetSpeed(s.mode, base, s.beatPhase, seedPhase);
-  const tau = target > s.speed ? ACCEL_TAU : DECEL_TAU;
-  s.speed = approach(s.speed, target, dt, tau);
-  // Applied AFTER the approach (not folded into `target` before it):
-  // `turnRate` is smoothed at `TURN_RATE_TAU` (0.25s), much faster than
-  // `DECEL_TAU` (1.4s) — folding the penalty into the pre-approach target
-  // would desync the speed dip from the visible turn by over a second.
+  // Folded into the TARGET, not multiplied onto `s.speed` after the
+  // `approach` below runs (the previous shape): that multiplied the current
+  // speed by `(1 - turnPenalty)` on EVERY frame of a sustained turn, which
+  // is an exponential decay, not a one-time cut — at 60fps a turn lasting
+  // even half a second compounded `(1 - turnPenalty)` dozens of times and
+  // crashed speed to near-zero, then took several more seconds to crawl back
+  // up via ACCEL_TAU. Capping the target instead means `approach` handles
+  // the whole dip-and-recover envelope at its own tau, same as any other
+  // speed change — a real slowdown into the turn, not a stall requiring
+  // "cá lật nhanh, và 1 lần hoàn thành luôn" to break out of.
   //
   // Ramped from TURN_RATE_MIN, not from 0: `omega` itself is already
   // TURN_RATE_MIN even during ordinary, no-wall retargeting (`lerp` at
@@ -378,7 +388,9 @@ export function stepV2Swim(
   const turnPenalty =
     clamp((Math.abs(s.turnRate) - TURN_RATE_MIN) / (TURN_RATE_MAX_WALL - TURN_RATE_MIN), 0, 1) *
     TURN_SPEED_PENALTY_MAX;
-  s.speed *= 1 - turnPenalty;
+  const target = targetSpeed(s.mode, base, s.beatPhase, seedPhase) * (1 - turnPenalty);
+  const tau = target > s.speed ? ACCEL_TAU : DECEL_TAU;
+  s.speed = approach(s.speed, target, dt, tau);
 
   const vx = Math.cos(s.yaw) * s.speed;
   const vz = Math.sin(s.yaw) * s.speed;

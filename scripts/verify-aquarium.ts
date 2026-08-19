@@ -869,7 +869,7 @@ async function main() {
     // duplicated here as a literal rather than imported so this check fails
     // loudly if the source ceiling ever changes without this trace being
     // re-examined, instead of silently tracking a moving target.
-    const TURN_RATE_CEIL = 3.0;
+    const TURN_RATE_CEIL = 4.4;
     const EDGE_ON_MIN_WIDTH = 0.3;
     // Duplicated from sim/swim.ts / render/fish-layer.tsx for the same
     // "fails loudly if the source changes without this trace being
