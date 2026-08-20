@@ -14,6 +14,8 @@ import { bakeFish, densityAwareDpr } from "@/shared/aquarium/fish/bake-fish";
 import { EYE_STYLE_IDS, type EyeStyleId } from "@/shared/aquarium/fish/eyes";
 import { bakeNodes } from "@/shared/aquarium/core/bake";
 import { bakeCreature } from "@/shared/aquarium/creatures/bake-creature";
+import { bakeSnail } from "@/shared/aquarium/creatures/snail/bake-creature";
+import { buildCrawlTrack, sampleTrack } from "@/shared/aquarium/sim/crawl";
 import type { Box, Node } from "@/shared/aquarium/core/ir";
 import { getSubstrateEffect, SUBSTRATE_UNIFORM_KEYS } from "@/shared/aquarium/core/sksl/substrate";
 import { composeSpriteScene } from "@/shared/aquarium/scene/compose-sprites";
@@ -401,6 +403,65 @@ async function main() {
     return { name: def.name, id: def.id, rarity: def.rarity.tier, cells };
   });
 
+  // The snail's crawl track, with the snail placed along it. This is the
+  // whole iteration surface for surface-bound locomotion: whether the sole
+  // actually lies on the substrate, on both panes of glass, around the
+  // corners and up BOTH faces of a plant stem is a thing you can only judge
+  // by looking, and it is exactly what silently breaks if the art's local
+  // frame (`creatures/snail/anatomy.ts`) and the placement transform
+  // (`render/creature-layer.tsx`) ever disagree about which way is down.
+  console.log("Baking the snail crawl strip...");
+  const crawlCells: Cell[] = [];
+  {
+    const w = 420;
+    const h = 560;
+    const sandH = 64;
+    const snailDpr = densityAwareDpr(2, 1.2);
+    const body = bakeSnail(Skia, "garden", snailDpr, "body");
+    const tentacles = bakeSnail(Skia, "garden", snailDpr, "tentacles");
+    const box = { minX: 6, maxX: w - 6, floorY: h - sandH + 3, ceilY: h * 0.24 };
+    const props = [{ x: 148, baseY: h - sandH + 3, topY: h - sandH + 3 - 230 }];
+    const track = buildCrawlTrack(box, 0.42, props);
+
+    const surf = Skia.Surface.Make(w * 2, h * 2);
+    if (surf && body && tentacles) {
+      const canvas = surf.getCanvas();
+      canvas.clear(Skia.Color("#0f2f3d"));
+      canvas.scale(2, 2);
+
+      const sandPaint = Skia.Paint();
+      sandPaint.setColor(Skia.Color("#3b3428"));
+      canvas.drawRect(Skia.XYWHRect(0, h - sandH, w, sandH), sandPaint);
+      const stemPaint = Skia.Paint();
+      stemPaint.setColor(Skia.Color("#2f5a34"));
+      canvas.drawRect(Skia.XYWHRect(145, h - sandH + 3 - 250, 6, 250), stemPaint);
+
+      const paint = Skia.Paint();
+      const steps = 13;
+      for (let i = 0; i <= steps; i++) {
+        const { x, y, angle } = sampleTrack(track, (i / steps) * track.total);
+        canvas.save();
+        canvas.translate(x, y);
+        canvas.rotate((angle * 180) / Math.PI, 0, 0);
+        canvas.scale(0.6, 0.6);
+        for (const part of [tentacles, body]) {
+          canvas.drawImageRect(
+            part.image,
+            Skia.XYWHRect(0, 0, part.image.width(), part.image.height()),
+            Skia.XYWHRect(part.bounds.x, part.bounds.y, part.bounds.width, part.bounds.height),
+            paint,
+          );
+        }
+        canvas.restore();
+      }
+      const bytes = surf.makeImageSnapshot().encodeToBytes();
+      crawlCells.push({
+        label: `${track.segs.length} surfaces — substrate, both panes, one stem`,
+        dataUri: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`,
+      });
+    }
+  }
+
   // Procedurally generated breeds (`shared/fish/generated-breed.ts`). This is
   // the art-judgement surface for the generator: 60 breeds at a glance is
   // where a bad hue band, a washed-out palette or a runaway pattern parameter
@@ -533,6 +594,9 @@ ${genTypeRows
 <p>Life stages, then the 8 per-individual <code>patternSeed</code> buckets — variation should be visible without the breed losing its identity.</p>
 <div class="grid">${genStageCells.map(cellHtml).join("")}</div>
 <div class="grid">${genVariantCells.map(cellHtml).join("")}</div>
+<h2>Snail — the crawl track it is bound to</h2>
+<p>The snail never swims (<code>locomotion: "crawl"</code>). It is placed by <code>sim/crawl.ts</code>'s track: sole on the surface, rotated to its tangent. Every pose below is the SAME texture — check that the foot meets the substrate, the glass and both faces of the stem cleanly.</p>
+<div class="grid">${crawlCells.map(cellHtml).join("")}</div>
 <h2>Creatures — every non-molly species x its own variant list</h2>
 <p>Real anatomy where it's shipped (see <code>creatures/&lt;species&gt;/</code>), the placeholder blob otherwise (see <code>creatures/bake-placeholder.ts</code>).</p>
 ${creatureRows

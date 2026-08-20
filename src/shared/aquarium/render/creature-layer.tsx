@@ -3,8 +3,8 @@
 //
 // The non-molly counterpart to `fish-layer.tsx`: shares its exact swim
 // engine (`sim/use-v2-swim.ts`, already species-agnostic) and perspective-
-// matrix transform math. Every `locomotion: "rigid"` species (snail, frog,
-// turtle, otter) renders a plain `<Image>` — no spine-warp shader, since a
+// matrix transform math. Every `locomotion: "rigid"` species (frog, turtle,
+// otter) renders a plain `<Image>` — no spine-warp shader, since a
 // shell/legs silhouette isn't meant to bend. The one `locomotion:
 // "undulating"` species (axolotl) DOES spine-warp, via the same
 // `core/sksl/warp.ts` shader and `fish/spine.ts` amplitude/wavenumber
@@ -12,6 +12,12 @@
 // bounds generically, nothing about it is fish-shaped, so reusing those
 // tuned constants here is a reasonable starting point (not re-measured for
 // axolotl's own proportions the way `verify-aquarium.ts` measures fish's).
+//
+// The one `locomotion: "crawl"` species (snail) does neither: it is bound to
+// a surface by `sim/crawl.ts` and rendered by `CrawlingCreature` below, which
+// shares none of the swim transform math — a crawler has one degree of
+// freedom (arc length along a track), so there is no yaw, no depth steering
+// and no edge-on width floor to reproduce.
 //
 // The transform math below is a deliberate, documented duplication of
 // `fish-layer.tsx`'s — not a shared import — so shipping this file can never
@@ -34,6 +40,7 @@ import {
   type Transforms3d,
   type Uniforms,
 } from "@shopify/react-native-skia";
+import { useMemo } from "react";
 import { PixelRatio } from "react-native";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
@@ -44,8 +51,16 @@ import type { BakedArt } from "../core/bake";
 import { densityAwareDpr } from "../core/bake";
 import { getWarpEffect } from "../core/sksl/warp";
 import type { CreatureSpeciesId } from "../creatures/bake-placeholder";
+import { TENTACLE_PIVOT } from "../creatures/snail/anatomy";
 import { SPINE_AMP_MAX, SPINE_AMP_MIN, SPINE_K, SPINE_PAD } from "../fish/spine";
 import type { SceneLayer } from "../scene/types";
+import {
+  buildCenterCrawlTrack,
+  buildCrawlTrack,
+  type ClimbProp,
+  type CrawlBox,
+} from "../sim/crawl";
+import { useCrawl } from "../sim/use-crawl";
 import { biasedDepthRange, personalityFor } from "../sim/personality";
 import { Z_MAX } from "../sim/swim";
 import { useV2Swim, type V2WanderBox } from "../sim/use-v2-swim";
@@ -163,6 +178,8 @@ export interface CreatureLayerProps {
   band?: SceneLayer;
   /** Apply the tank-mode shrink even in `mode="center"` — see `fish-layer.tsx`'s `FishLayerProps.shrinkToTankScale`. */
   shrinkToTankScale?: boolean;
+  /** Climbable decor in this individual's own depth band, tank mode only — only `locomotion: "crawl"` species read it. Must come from the SAME parallax group this layer renders in, or the snail would climb a stem that is drawn somewhere else. */
+  climbProps?: ClimbProp[];
 }
 
 /** Mirrors `fish-layer.tsx`'s `AQUARIUM_FISH_SCALE` — kept as a separate constant so a future per-renderer tuning divergence doesn't require touching the fish file. */
@@ -172,10 +189,10 @@ const MAX_RENDER_SCALE_CENTER = 1.2;
 const EDGE_ON_MIN_WIDTH = 0.3;
 const PERSPECTIVE_RATIO = 2.2;
 
-export function CreatureLayer({
+/** Every swimming species — `locomotion` `"rigid"` or `"undulating"`. Split out of `CreatureLayer` so the crawl engine can be a sibling rather than a branch inside a component that has already called the swim hook. */
+function SwimmingCreature({
   speciesId,
   variant,
-  status,
   bounds,
   scale: baseScale,
   seed,
@@ -184,7 +201,6 @@ export function CreatureLayer({
   band,
   shrinkToTankScale = false,
 }: CreatureLayerProps) {
-  const dead = status === "dead";
   const hasDepth = mode === "tank" && depth !== undefined;
   const phase = seed * Math.PI * 2;
 
@@ -232,7 +248,7 @@ export function CreatureLayer({
     box,
     seed,
     speedFactor: (mode === "center" ? 0.45 : 1.25) * personality.speedFactor,
-    enabled: !dead,
+    enabled: true,
   });
 
   const depthScale = hasDepth ? scale * lerp(0.82, 1.08, depth ?? 0) : scale;
@@ -269,37 +285,6 @@ export function CreatureLayer({
 
   if (!baked) return null;
 
-  if (dead) {
-    const rect = Skia.XYWHRect(
-      baked.bounds.x,
-      baked.bounds.y,
-      baked.bounds.width,
-      baked.bounds.height,
-    );
-    const restingHalfHeight = (baked.bounds.height / 2) * scale;
-    const deadX = insetX + ((seed * 9973) % 1) * Math.max(1, bounds.width - insetX * 2);
-    const deadY = bounds.height - sandHeightFor(bounds.height) * 0.4 - restingHalfHeight;
-    const deadTransform: Transforms3d = [
-      { translateX: deadX },
-      { translateY: deadY },
-      { rotate: (seed - 0.5) * 0.24 },
-      { scaleX: seed > 0.5 ? scale : -scale },
-      { scaleY: -scale },
-    ];
-    return (
-      <Group
-        transform={deadTransform}
-        layer={
-          <Paint opacity={DEAD_OPACITY}>
-            <ColorMatrix matrix={DEAD_GRAYSCALE_MATRIX} />
-          </Paint>
-        }
-      >
-        <SkiaImage image={baked.image} rect={rect} fit="fill" />
-      </Group>
-    );
-  }
-
   if (getSpeciesDef(speciesId).locomotion === "undulating") {
     return (
       <Group transform={liveTransform} opacity={depthOpacity}>
@@ -326,4 +311,203 @@ export function CreatureLayer({
       <SkiaImage image={baked.image} rect={imageRect} fit="fill" />
     </Group>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Crawling species
+// ---------------------------------------------------------------------------
+
+/** How far the sand line the snail's sole sits — a hair INTO the substrate, so it reads as gripping it rather than balanced on top (same "grounded" trick `compose-sprites.ts` uses for decor). */
+const SUBSTRATE_BITE = 3;
+/** Inset from the canvas edge for the two panes of glass. */
+const GLASS_INSET = 5;
+/** Tentacle sway: peak swing in radians, and how fast it wanders. */
+const SWAY_AMP = 0.13;
+const SWAY_FREQ = 0.62;
+/** Peak longitudinal stretch of the body over one pedal wave. A snail's foot visibly lengthens and gathers as each muscular wave runs down it. */
+const PEDAL_STRETCH = 0.035;
+
+/**
+ * A `locomotion: "crawl"` species: stuck to `sim/crawl.ts`'s track, never in
+ * open water. The whole transform is "put the sole on the surface and turn to
+ * match it" — `translate(contact)` then `rotate(surface tangent)` — which
+ * works unchanged on the substrate, on either pane of glass, and up and over
+ * a plant stem, because the art is authored with its sole at local y = 0 (see
+ * `creatures/snail/anatomy.ts`).
+ *
+ * Two textures, not one: the tentacles bake separately (`part: "tentacles"`)
+ * and rotate about `TENTACLE_PIVOT` under the body, so the eye stalks wave
+ * independently of the shell. See `creatures/snail/bake-creature.ts` for why
+ * that is worth a second draw call for this species specifically.
+ */
+function CrawlingCreature({
+  speciesId,
+  variant,
+  bounds,
+  scale: baseScale,
+  seed,
+  mode = "tank",
+  depth,
+  shrinkToTankScale = false,
+  climbProps,
+}: CreatureLayerProps) {
+  const hasDepth = mode === "tank" && depth !== undefined;
+  const phase = seed * Math.PI * 2;
+
+  const shrink = mode === "tank" || shrinkToTankScale;
+  const scale = shrink ? baseScale * AQUARIUM_CREATURE_SCALE : baseScale;
+  const dpr = densityAwareDpr(
+    PixelRatio.get(),
+    shrink ? MAX_RENDER_SCALE_TANK : MAX_RENDER_SCALE_CENTER,
+  );
+  const body = getCachedCreature(speciesId, variant, dpr, "body");
+  const tentacles = getCachedCreature(speciesId, variant, dpr, "tentacles");
+
+  const personality = personalityFor(seed);
+  const sand = sandHeightFor(bounds.height);
+  const box: CrawlBox = useMemo(
+    () =>
+      mode === "center"
+        ? {
+            minX: bounds.width * 0.16,
+            maxX: bounds.width * 0.84,
+            // No substrate on the plain background this mode draws over, so
+            // the ledge is simply the lower third of the view.
+            floorY: bounds.height * 0.72,
+            ceilY: bounds.height * 0.72,
+          }
+        : {
+            minX: GLASS_INSET,
+            maxX: Math.max(GLASS_INSET + 1, bounds.width - GLASS_INSET),
+            floorY: bounds.height - sand + SUBSTRATE_BITE,
+            // Bolder individuals are willing to climb higher up the glass.
+            ceilY: bounds.height * (0.34 - personality.boldness * 0.2),
+          },
+    [mode, bounds.width, bounds.height, sand, personality.boldness],
+  );
+  const track = useMemo(
+    () =>
+      mode === "center" ? buildCenterCrawlTrack(box) : buildCrawlTrack(box, seed, climbProps ?? []),
+    [mode, box, seed, climbProps],
+  );
+
+  const crawl = useCrawl({
+    track,
+    seed,
+    speedFactor: (mode === "center" ? 0.6 : 1) * personality.speedFactor,
+    enabled: true,
+  });
+
+  const depthScale = hasDepth ? scale * lerp(0.86, 1.06, depth ?? 0) : scale;
+  const depthOpacity = hasDepth ? lerp(0.8, 1, depth ?? 0) : 1;
+
+  const bodyTransform = useDerivedValue<Transforms3d>(() => {
+    const wave = Math.sin(crawl.wavePhase.value + phase);
+    // The pedal wave gathers and lengthens the foot; the shell rocks a little
+    // with it. Both are damped by how fast it is actually moving, so a
+    // grazing snail settles instead of pulsing on the spot.
+    const drive = 0.25 + 0.75 * crawl.speedNorm.value;
+    return [
+      { translateX: crawl.x.value },
+      { translateY: crawl.y.value },
+      { rotate: crawl.angle.value },
+      { scaleX: crawl.dir.value * depthScale * (1 + PEDAL_STRETCH * wave * drive) },
+      { scaleY: depthScale * (1 - PEDAL_STRETCH * 0.6 * wave * drive) },
+    ];
+  });
+
+  const tentacleTransform = useDerivedValue<Transforms3d>(() => {
+    // Two incommensurate frequencies so the stalks never settle into an
+    // obvious loop, plus a slow lean into the direction of travel.
+    const t = crawl.elapsed.value;
+    const sway =
+      SWAY_AMP * Math.sin(t * SWAY_FREQ * Math.PI * 2 + phase) +
+      SWAY_AMP * 0.55 * Math.sin(t * SWAY_FREQ * 1.61 * Math.PI * 2 + phase * 1.7) -
+      0.06 * crawl.speedNorm.value;
+    return [
+      { translateX: TENTACLE_PIVOT.x },
+      { translateY: TENTACLE_PIVOT.y },
+      { rotate: sway },
+      { translateX: -TENTACLE_PIVOT.x },
+      { translateY: -TENTACLE_PIVOT.y },
+    ];
+  });
+
+  if (!body) return null;
+
+  return (
+    <Group transform={bodyTransform} opacity={depthOpacity}>
+      {tentacles ? (
+        <Group transform={tentacleTransform}>
+          <SkiaImage image={tentacles.image} rect={rectOf(tentacles)} fit="fill" />
+        </Group>
+      ) : null}
+      <SkiaImage image={body.image} rect={rectOf(body)} fit="fill" />
+    </Group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Dead
+// ---------------------------------------------------------------------------
+
+/** A dead creature: grayscale, flipped, resting on the sand. No hooks — a dead individual is a still frame, which is also why it is its own component rather than a branch inside a live one. */
+function DeadCreature({ speciesId, variant, bounds, scale, seed }: CreatureLayerProps) {
+  const dpr = densityAwareDpr(PixelRatio.get(), MAX_RENDER_SCALE_TANK);
+  const scaled = scale * AQUARIUM_CREATURE_SCALE;
+  const baked = getCachedCreature(speciesId, variant, dpr);
+  if (!baked) return null;
+
+  const personality = personalityFor(seed);
+  const boldInset = 1 - personality.boldness * 0.35;
+  const insetX = Math.min(64, Math.max(28, ((baked.bounds.width * scaled) / 2) * 0.7)) * boldInset;
+  const deadX = insetX + ((seed * 9973) % 1) * Math.max(1, bounds.width - insetX * 2);
+  const sandTop = bounds.height - sandHeightFor(bounds.height) * 0.4;
+
+  // A crawler's art hangs entirely ABOVE its own origin (the sole is local
+  // y = 0), so the generic "centre it on the sand" offset would bury a
+  // capsized snail under the substrate. Flipped, its shell is what touches
+  // down — which is exactly how a dead snail is found — so the origin has to
+  // ride one full art-height above the sand line.
+  const crawler = getSpeciesDef(speciesId).locomotion === "crawl";
+  const deadY = crawler
+    ? sandTop + baked.bounds.y * scaled
+    : sandTop - (baked.bounds.height / 2) * scaled;
+
+  const deadTransform: Transforms3d = [
+    { translateX: deadX },
+    { translateY: deadY },
+    { rotate: (seed - 0.5) * 0.24 },
+    { scaleX: seed > 0.5 ? scaled : -scaled },
+    { scaleY: -scaled },
+  ];
+  return (
+    <Group
+      transform={deadTransform}
+      layer={
+        <Paint opacity={DEAD_OPACITY}>
+          <ColorMatrix matrix={DEAD_GRAYSCALE_MATRIX} />
+        </Paint>
+      }
+    >
+      <SkiaImage image={baked.image} rect={rectOf(baked)} fit="fill" />
+    </Group>
+  );
+}
+
+function rectOf(baked: BakedArt) {
+  return Skia.XYWHRect(baked.bounds.x, baked.bounds.y, baked.bounds.width, baked.bounds.height);
+}
+
+/**
+ * Picks the renderer for this individual. The three branches are separate
+ * COMPONENTS, not branches inside one, because each owns a different set of
+ * hooks (swim engine / crawl engine / none) — and because `speciesId` and
+ * `status` are fixed for the life of a given `key`, so no mount ever flips
+ * between them mid-animation.
+ */
+export function CreatureLayer(props: CreatureLayerProps) {
+  if (props.status === "dead") return <DeadCreature {...props} />;
+  if (getSpeciesDef(props.speciesId).locomotion === "crawl") return <CrawlingCreature {...props} />;
+  return <SwimmingCreature {...props} />;
 }

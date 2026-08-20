@@ -249,8 +249,10 @@ species:
   math can get subtly wrong at certain radius/length ratios (this also cost
   a debugging pass, on frog's original leg geometry).
 
-**Locomotion.** Every species is `rigid` (swim-transformed but not
-body-bent) except axolotl, the one `undulating` species — it's the only
+**Locomotion.** Three kinds, and they are not three settings on one engine —
+`crawl` is a different engine (see the next section). The swimming two:
+every species is `rigid` (swim-transformed but not body-bent) except
+axolotl, the one `undulating` species — it's the only
 non-molly body that spine-warps, sharing `fish/spine.ts`'s tuned amplitude/
 wavenumber constants and `core/sksl/warp.ts`'s shader (both operate on a
 baked texture's bounds generically; nothing about the warp itself is
@@ -259,7 +261,92 @@ counterpart: same swim engine and perspective-matrix transform (a
 DELIBERATE, documented duplication rather than a shared import, so this file
 can never regress the fish renderer's own verified tuning), but branches on
 `getSpeciesDef(speciesId).locomotion` to pick the plain `<Image>` path or the
-same `WarpedBody`-style shader path `fish-layer.tsx` uses.
+same `WarpedBody`-style shader path `fish-layer.tsx` uses. It is a
+dispatcher over three sibling COMPONENTS (`SwimmingCreature`,
+`CrawlingCreature`, `DeadCreature`) rather than three branches in one, since
+each owns a different set of hooks; `speciesId` and `status` are fixed for
+the life of a `key`, so no mount ever flips between them mid-animation.
+
+### The snail doesn't swim — `sim/crawl.ts`
+
+A snail is not a slow fish. It has no swim bladder and no fins; it glides on
+its foot, and the only places it can be are the substrate, the glass, and
+whatever is rooted in the tank. Steering it with `sim/swim.ts`'s free
+(x, z, y) particle produced a snail hovering in open water — the one thing a
+snail never does — and no amount of "steer it back down" tuning fixes a model
+that can represent the wrong state in the first place.
+
+So `locomotion: "crawl"` runs a different model: a **track** (an open
+polyline of surfaces) plus a 1-D position along it. The snail cannot leave
+the track — not "is pulled back from open water", but has no degree of
+freedom pointing there — which is why `verify-aquarium.ts`'s crawl trace can
+assert its contact point is on the track to within 0 px over 12 seeds x 90 s.
+
+Three pieces, mirroring the swim engine's split:
+
+- `sim/crawl.ts` — pure, worklet-safe. `buildCrawlTrack()` lays out the
+  route (down the left glass -> chamfered corner -> substrate -> up and over
+  ONE seeded decor stem -> substrate -> corner -> up the right glass);
+  `stepCrawl()` advances arc length with a pedal-wave surge, alternates
+  `glide`/`graze` spells, and bounces at the track's ends.
+- `sim/use-crawl.ts` — the `use-v2-swim.ts` twin: one `useFrameCallback`,
+  results out as SharedValues.
+- `render/creature-layer.tsx`'s `CrawlingCreature` — places the art.
+
+**The track's normal convention is load-bearing.** Walking the polyline in
+increasing `s`, the tank's interior is always to the LEFT of the direction of
+travel. That single rule is why placement is `translate(contact)` +
+`rotate(tangent)` with no per-surface special case: the substrate, both panes
+of glass, and both faces of a stem all fall out of it, and a snail crossing
+over a stem's top correctly ends up on the far face. Reversing direction
+flips the SPRITE (`dir`), never the normal — the snail is still stuck to the
+same side of the same surface.
+
+The art has to hold up its end of that contract, so `creatures/snail/
+anatomy.ts` is authored in a frame where **the sole's contact line is y = 0,
++x is forward, and -y is away from the surface**. `verify-aquarium.ts`
+asserts both halves (nothing below the sole line; the head forward of the
+shell), because an art change that quietly moved the body off y = 0 would
+show up as a snail sunk into the sand or floating off the glass, in the app
+only.
+
+**Climbable decor** is passed in, not discovered: `aquarium-canvas.tsx`
+derives `ClimbProp[]` from the composed scene and hands each snail only the
+pieces in **its own depth band**, because a snail is drawn inside that band's
+`ParallaxGroup` — stems from another band would be offset by the parallax
+delta and the snail would climb empty water beside the plant. Pieces shorter
+than `CLIMBABLE_MIN_HEIGHT` (pebbles, carpet plants) are filtered out, and
+the climb stops at 78% of a piece's height, since the top of a plant is
+foliage rather than a perch.
+
+**Two textures, not one.** The snail is the only species that bakes in
+pieces (`part: "body" | "tentacles" | "full"`, threaded through
+`creatureBakeKey`/`bakeCreature`/`getCachedCreature` as an optional argument
+every other species ignores). A rigid texture sliding along a wall reads as a
+sticker, and a crawler has no body-bend to carry motion of its own — so the
+eye stalks bake separately and rotate about `TENTACLE_PIVOT`, which sits
+inside the head dome so the roots stay buried under the body fill at every
+sway angle (the same "buried root" rule fin roots use). `part: "full"` is the
+whole snail in one texture, tentacles at rest — what every static surface
+(Creaturedex, Holding Tank, the dead snail) draws, since those have no
+animation to justify a second draw call.
+
+**A dead crawler rests differently.** The generic dead treatment centres a
+capsized creature's bounds on the sand; a crawler's art hangs entirely above
+its own origin, so `DeadCreature` offsets by a full art height instead —
+which lands the shell on the substrate with the foot up, exactly how a dead
+snail is found.
+
+**Shell geometry, one trap worth knowing.** A ribbon traced along 2+ turns of
+a log spiral OVERLAPS ITSELF, and Skia fills by winding number: the overlaps
+cancel and the shell renders as a translucent target you can see the body
+through. The union of the tube is just its outermost whorl anyway, so
+`buildShellD()` traces only the last turn's outer edge, closes it with a
+rounded aperture lip, and lets `pigment.ts` draw the inner whorls as MARKS on
+that fill (a seam line, and per-turn bands emitted innermost-first so each
+whorl paints over the one it grew from). Bands run ALONG the coil, not
+across it — a band drawn across the tube lands at the same polar angle on
+every turn and the coil reads as a pie chart.
 
 **Preview.** `render/creature-preview.tsx` bakes a `{speciesId, variant}`
 through this same pipeline and renders it as a static, non-swimming
@@ -271,7 +358,12 @@ preview does.
 **Verification.** `verify-aquarium.ts`'s "Creature bakes" section and
 `aquarium-preview.ts`'s "Creatures" gallery section both iterate
 `SPECIES_LIST` through the same `bakeCreature` dispatcher every render path
-uses — a species graduating from placeholder to real anatomy is covered by
+uses. The snail adds two of its own: verify's "Snail crawl" section (art
+frame contract + a 12-seed x 90 s crawl trace) and the preview's "Snail — the
+crawl track it is bound to" strip, which draws the same texture at 14 points
+along a real track. Whether the foot actually meets the substrate, the glass
+and both faces of a stem is only judgeable by looking, and that strip is
+where you look — a species graduating from placeholder to real anatomy is covered by
 both automatically, no script change needed.
 
 ## How the tank is composed
@@ -471,6 +563,10 @@ draw" rather than failing; see `sprite-manifest.ts`'s header for the process
 to add or replace a sprite.
 
 ## Behaviour
+
+Two engines, not one. Everything that swims runs `sim/swim.ts` (below);
+`locomotion: "crawl"` species run `sim/crawl.ts` instead — see "The snail
+doesn't swim" above, and note the two share nothing but `wrapToPi`.
 
 This renderer owns its own steering (`sim/swim.ts` + `sim/use-v2-swim.ts`) —
 it does NOT bias the shared `@/shared/hooks/use-fish-swim.ts` /

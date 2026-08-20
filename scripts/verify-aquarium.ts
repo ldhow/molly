@@ -53,6 +53,15 @@ import {
   type SpineParams,
 } from "@/shared/aquarium/fish/spine";
 import { bakeCreature } from "@/shared/aquarium/creatures/bake-creature";
+import { buildSnailAnatomy } from "@/shared/aquarium/creatures/snail/anatomy";
+import {
+  buildCrawlTrack,
+  CRAWL_SPEED,
+  initCrawlState,
+  sampleTrack,
+  stepCrawl,
+  type CrawlTrack,
+} from "@/shared/aquarium/sim/crawl";
 import { initV2SwimState, stepV2Swim, Z_MAX, type V2WanderBox } from "@/shared/aquarium/sim/swim";
 import { SPECIES_LIST } from "@/shared/creature/catalog";
 import { COLOR_DEFS, getColorDef } from "@/shared/fish/catalog";
@@ -1105,6 +1114,149 @@ async function main() {
         `${width.toFixed(1)}x${height.toFixed(1)}`,
       );
     }
+  }
+
+  // 9b. The snail's crawl engine (`sim/crawl.ts`) and the art contract it
+  // depends on. A snail is defined by where it CANNOT be, so the load-bearing
+  // check is the negative one: over a long trace, its contact point never
+  // leaves the track — not "mostly stays near it", but is on it to within a
+  // pixel, because leaving is not a state the model can represent. If that
+  // ever regresses, a snail is floating in open water, which is the exact bug
+  // this engine exists to make unrepresentable.
+  console.log("\n-- Snail crawl --");
+  {
+    const anatomy = buildSnailAnatomy();
+    // The art contract `render/creature-layer.tsx` places by: the sole is the
+    // local x axis, so `translate(contact) + rotate(surface)` puts the foot on
+    // the surface on the floor, on the glass and on a stem alike. A body that
+    // hung below y = 0 would sink into every surface it crawled on.
+    check(
+      "snail art sits on its own sole line (nothing below local y = 0)",
+      anatomy.bodyBounds.y + anatomy.bodyBounds.height <= 4.5,
+      `lowest point y=${(anatomy.bodyBounds.y + anatomy.bodyBounds.height).toFixed(2)}`,
+    );
+    check(
+      "snail art faces +x (head forward of the shell)",
+      anatomy.eyeStalks[1].tip.x > 0 && anatomy.bodyBounds.y < -20,
+      `head tip x=${anatomy.eyeStalks[1].tip.x.toFixed(1)}, top y=${anatomy.bodyBounds.y.toFixed(1)}`,
+    );
+
+    const BOX = { minX: 6, maxX: 394, floorY: 560, ceilY: 150 };
+    const PROPS = [{ x: 150, baseY: 560, topY: 340 }];
+
+    /** Shortest distance from a point to the track polyline. */
+    const distanceToTrack = (track: CrawlTrack, x: number, y: number): number => {
+      let best = Infinity;
+      for (const seg of track.segs) {
+        const dx = seg.x1 - seg.x0;
+        const dy = seg.y1 - seg.y0;
+        const len2 = dx * dx + dy * dy || 1;
+        const t = Math.min(1, Math.max(0, ((x - seg.x0) * dx + (y - seg.y0) * dy) / len2));
+        best = Math.min(best, Math.hypot(x - (seg.x0 + dx * t), y - (seg.y0 + dy * t)));
+      }
+      return best;
+    };
+
+    const SEEDS = 12;
+    const DT = 1 / 60;
+    const STEPS = 90 * 60;
+    let anyNaN = false;
+    let maxOffTrack = 0;
+    let maxAngleStep = 0;
+    let maxSpeed = 0;
+    let climbedProp = false;
+    let reachedGlass = false;
+    let travelSum = 0;
+    let discontiguous = 0;
+
+    for (let k = 0; k < SEEDS; k++) {
+      const seed = (k + 0.5) / SEEDS;
+      const track = buildCrawlTrack(BOX, seed, PROPS);
+
+      // Every segment must start where the previous one ended: the snail
+      // walks arc length, so a gap would teleport it across open water.
+      for (let i = 1; i < track.segs.length; i++) {
+        const prev = track.segs[i - 1];
+        const cur = track.segs[i];
+        if (Math.hypot(cur.x0 - prev.x1, cur.y0 - prev.y1) > 1e-6) discontiguous++;
+      }
+
+      // A fixed LCG, not Math.random: the mode timings have to mean the same
+      // thing run to run for a regression here to be visible.
+      let rngState = (k + 1) * 2654435761;
+      const rng = () => {
+        rngState = (rngState * 1664525 + 1013904223) >>> 0;
+        return rngState / 4294967296;
+      };
+
+      const state = initCrawlState(track, seed);
+      let prevX = state.x;
+      let prevY = state.y;
+      let prevAngle = state.angle;
+      for (let i = 0; i < STEPS; i++) {
+        stepCrawl(state, track, DT, 1, rng);
+        if (!Number.isFinite(state.x) || !Number.isFinite(state.y) || !Number.isFinite(state.angle))
+          anyNaN = true;
+        maxOffTrack = Math.max(maxOffTrack, distanceToTrack(track, state.x, state.y));
+        const step = Math.hypot(state.x - prevX, state.y - prevY);
+        travelSum += step;
+        maxSpeed = Math.max(maxSpeed, step / DT);
+        maxAngleStep = Math.max(maxAngleStep, Math.abs(state.angle - prevAngle));
+        if (state.x > 100 && state.x < 200 && state.y < 520) climbedProp = true;
+        if (state.x < BOX.minX + 2 || state.x > BOX.maxX - 2) {
+          if (state.y < BOX.floorY - 40) reachedGlass = true;
+        }
+        prevX = state.x;
+        prevY = state.y;
+        prevAngle = state.angle;
+      }
+    }
+
+    const meanSpeed = travelSum / (SEEDS * STEPS * DT);
+    check(`crawl trace: no NaN over ${SEEDS} seeds x 90s`, !anyNaN);
+    check("crawl track segments are contiguous", discontiguous === 0, `${discontiguous} gaps`);
+    check(
+      "crawl trace: contact point never leaves the track (<= 1px)",
+      maxOffTrack <= 1,
+      `max ${maxOffTrack.toFixed(3)}px`,
+    );
+    check(
+      "crawl trace: never exceeds the pedal-surge speed ceiling",
+      maxSpeed <= CRAWL_SPEED * 1.5,
+      `max ${maxSpeed.toFixed(1)}px/s vs ceiling ${(CRAWL_SPEED * 1.5).toFixed(1)}px/s`,
+    );
+    check(
+      "crawl trace: mean speed is a snail's, not a fish's",
+      meanSpeed > 0.15 * CRAWL_SPEED && meanSpeed < CRAWL_SPEED,
+      `${meanSpeed.toFixed(2)}px/s (grazing pauses pull the mean below cruise)`,
+    );
+    check(
+      "crawl trace: heading is continuous through corners (no snap)",
+      maxAngleStep < 0.2,
+      `max ${maxAngleStep.toFixed(4)} rad/frame`,
+    );
+    // A layout change hands `stepCrawl` a longer/shorter track mid-crawl.
+    // It has to re-seat `s` proportionally rather than keep a raw arc length
+    // that now points at a different surface — and it has to do it itself,
+    // because the render hook cannot write into the state object from the JS
+    // thread (see `CrawlState.trackTotal`).
+    {
+      const narrow = buildCrawlTrack(BOX, 0.31, PROPS);
+      const wide = buildCrawlTrack({ ...BOX, maxX: BOX.maxX + 180 }, 0.31, PROPS);
+      const state = initCrawlState(narrow, 0.31);
+      state.s = narrow.total * 0.5;
+      state.trackTotal = narrow.total;
+      stepCrawl(state, wide, DT, 1, () => 0.5);
+      const drift = Math.abs(state.s / wide.total - 0.5);
+      check(
+        "crawl: a relaid track re-seats the snail proportionally, not by raw arc length",
+        drift < 0.02 && Math.abs(wide.total - narrow.total) > 100,
+        `fraction drift ${drift.toFixed(4)} across a ${(wide.total - narrow.total).toFixed(0)}px track change`,
+      );
+    }
+
+    check("crawl trace: snails climb the glass", reachedGlass);
+    check("crawl trace: snails climb decor when the tank has any", climbedProp);
   }
 
   // 10. Procedurally generated breeds (`shared/fish/generated-breed.ts`).

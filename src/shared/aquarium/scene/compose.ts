@@ -44,6 +44,8 @@ export interface PlacedPiece {
   seed: number;
   scale: number;
   swayHeight: number;
+  /** The generated art's own local-space bbox (origin at `worldX/worldY`). Purely informational for renderers — `sim/crawl.ts` uses it to know how tall a piece a snail can climb. */
+  bbox: { x: number; y: number; width: number; height: number };
   bakeKey: string;
   /** Resolved attachment angle (if this placement had `attachToId`) — needed to regenerate identical art at bake time. */
   attachAngleDeg?: number;
@@ -139,6 +141,7 @@ export function composeScene(
       seed: placement.seed,
       scale,
       swayHeight: generated.swayHeight,
+      bbox: generated.bbox,
       bakeKey: `${placement.species}|${placement.layer}|${placement.seed}|${scale.toFixed(3)}|${attachTo ? attachTo.angleDeg.toFixed(1) : "planted"}|${placement.mirror ? "mirror" : "plain"}`,
       attachAngleDeg: attachTo?.angleDeg,
       mirror: placement.mirror,

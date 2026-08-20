@@ -14,8 +14,16 @@ import type { Rarity, RollableDef, UnlockRule } from "@/shared/lib/roll";
 
 export type SpeciesId = "molly" | "otter" | "turtle" | "frog" | "axolotl" | "snail";
 
-/** Whether this species' swim-bend animation runs the spine-warp shader (an elongated body that undulates) or renders rigid (legs/shell — swim-transformed, not body-bent). See `fish/spine.ts`'s header for what the warp actually does. */
-export type Locomotion = "undulating" | "rigid";
+/**
+ * How this species moves, which decides BOTH its animation and its sim:
+ *
+ * - `undulating` — swims, body bent by the spine-warp shader (`fish/spine.ts`)
+ * - `rigid` — swims, body drawn unbent (legs/shell aren't meant to bend)
+ * - `crawl` — does not swim AT ALL. Bound to a surface (substrate, glass,
+ *   decor) by `aquarium/sim/crawl.ts` instead of `sim/swim.ts`; see that
+ *   module's header for why it is a separate engine rather than a swim mode.
+ */
+export type Locomotion = "undulating" | "rigid" | "crawl";
 
 export interface SpeciesCopy {
   /** "made it" / "found its feet" — completes "Your {noun} {grownVerb}!" */

@@ -45,13 +45,13 @@ export const SPECIES_DEFS: Record<SpeciesId, SpeciesDef> = {
     order: 1,
     name: "Snail",
     description:
-      "A slow-gliding companion with a coiled shell — the cheapest new tankmate to raise.",
+      "Never swims — glides along the substrate, up the glass and over the plants on one muscular foot.",
     rarity: { tier: "common" },
     accentColor: "#8a7355",
     emoji: "🐌",
     unlock: { type: "sessionMinutes", minutes: 25 },
-    locomotion: "rigid",
-    sizeRatio: 0.4,
+    locomotion: "crawl",
+    sizeRatio: 0.55,
     copy: {
       grownVerb: "made it",
       diedVerb: "didn't survive",

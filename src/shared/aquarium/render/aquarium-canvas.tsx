@@ -25,6 +25,7 @@ import { DEFAULT_SCENE_DESIGN } from "../scene/scene-design";
 import { SPRITE_SCAPE } from "../scene/themes/nature-scape-sprites";
 import { NATURE_SCAPE } from "../scene/themes/nature-scape";
 import type { SceneLayer } from "../scene/types";
+import type { ClimbProp } from "../sim/crawl";
 import { AquariumBubbles } from "./bubbles";
 import { CreatureLayer } from "./creature-layer";
 import { FishLayer } from "./fish-layer";
@@ -96,6 +97,7 @@ function renderAlive(
   bounds: Bounds,
   mode: "tank" | "center",
   shrinkToTankScale: boolean,
+  climbProps?: ClimbProp[],
 ) {
   return isMollyTankFish(f) ? (
     <FishLayer
@@ -124,8 +126,20 @@ function renderAlive(
       depth={f.depth}
       band={f.band}
       shrinkToTankScale={shrinkToTankScale}
+      climbProps={climbProps}
     />
   );
+}
+
+/** Minimum height (px) a decor piece needs before a snail will treat it as climbable — anything shorter is a pebble or a carpet plant, not a stem. */
+const CLIMBABLE_MIN_HEIGHT = 34;
+/** How far up a piece the usable stem runs. The top of a plant is foliage that would swallow the snail, so the climb stops below it. */
+const CLIMBABLE_TOP_FRACTION = 0.78;
+
+function climbPropFrom(worldX: number, worldY: number, top: number): ClimbProp | null {
+  const height = worldY - top;
+  if (height < CLIMBABLE_MIN_HEIGHT) return null;
+  return { x: worldX, baseY: worldY, topY: worldY - height * CLIMBABLE_TOP_FRACTION };
 }
 
 export function AquariumCanvas({
@@ -170,6 +184,26 @@ export function AquariumCanvas({
     for (const piece of spriteScene?.pieces ?? []) grouped[piece.layer].push(piece);
     return grouped;
   }, [spriteScene]);
+
+  // Climbable decor, per band. Grouped by band on purpose: a snail is drawn
+  // INSIDE its band's `ParallaxGroup`, so it can only be given stems from the
+  // same group — anything else would be offset by the parallax delta and the
+  // snail would climb thin water beside the plant.
+  const climbByLayer = useMemo(() => {
+    const grouped: Record<SceneLayer, ClimbProp[]> = { far: [], back: [], mid: [], front: [] };
+    if (sceneArtMode === "sprites") {
+      for (const piece of spriteScene?.pieces ?? []) {
+        const prop = climbPropFrom(piece.worldX, piece.worldY, piece.worldY + piece.rect.y);
+        if (prop) grouped[piece.layer].push(prop);
+      }
+    } else {
+      for (const piece of scene?.pieces ?? []) {
+        const prop = climbPropFrom(piece.worldX, piece.worldY, piece.worldY + piece.bbox.y);
+        if (prop) grouped[piece.layer].push(prop);
+      }
+    }
+    return grouped;
+  }, [sceneArtMode, scene, spriteScene]);
 
   const cameraX = useCameraX();
 
@@ -218,19 +252,19 @@ export function AquariumCanvas({
                 {renderDecor("back")}
                 {alive
                   .filter((f) => f.band === "back")
-                  .map((f) => renderAlive(f, size, mode, shrinkToTankScale))}
+                  .map((f) => renderAlive(f, size, mode, shrinkToTankScale, climbByLayer.back))}
               </ParallaxGroup>
               <ParallaxGroup factor={PARALLAX_FACTOR.mid} cameraX={cameraX}>
                 {renderDecor("mid")}
                 {alive
                   .filter((f) => f.band === "mid")
-                  .map((f) => renderAlive(f, size, mode, shrinkToTankScale))}
+                  .map((f) => renderAlive(f, size, mode, shrinkToTankScale, climbByLayer.mid))}
               </ParallaxGroup>
               <ParallaxGroup factor={PARALLAX_FACTOR.front} cameraX={cameraX}>
                 {renderDecor("front")}
                 {alive
                   .filter((f) => f.band === "front")
-                  .map((f) => renderAlive(f, size, mode, shrinkToTankScale))}
+                  .map((f) => renderAlive(f, size, mode, shrinkToTankScale, climbByLayer.front))}
               </ParallaxGroup>
             </>
           )}

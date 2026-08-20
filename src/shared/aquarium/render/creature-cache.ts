@@ -10,7 +10,11 @@
 import { Skia } from "@shopify/react-native-skia";
 
 import { bakeBytes, createBakeLru, type BakedArt } from "@/shared/aquarium/core/bake";
-import { bakeCreature, creatureBakeKey } from "@/shared/aquarium/creatures/bake-creature";
+import {
+  bakeCreature,
+  creatureBakeKey,
+  type CreaturePart,
+} from "@/shared/aquarium/creatures/bake-creature";
 import type { CreatureSpeciesId } from "@/shared/aquarium/creatures/bake-placeholder";
 
 const BUDGET_BYTES = 12 * 1024 * 1024;
@@ -20,11 +24,12 @@ export function getCachedCreature(
   speciesId: CreatureSpeciesId,
   variant: string,
   dpr: number,
+  part: CreaturePart = "full",
 ): BakedArt | null {
-  const key = `${creatureBakeKey(speciesId, variant)}|${dpr.toFixed(2)}`;
+  const key = `${creatureBakeKey(speciesId, variant, part)}|${dpr.toFixed(2)}`;
   const hit = lru.get(key);
   if (hit) return hit;
-  const baked = bakeCreature(Skia, speciesId, variant, dpr);
+  const baked = bakeCreature(Skia, speciesId, variant, dpr, part);
   if (baked) lru.set(key, baked, bakeBytes(baked.bounds, dpr));
   return baked;
 }

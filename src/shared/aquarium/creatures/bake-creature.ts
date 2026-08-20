@@ -21,10 +21,22 @@ import { bakeOtter, otterBakeKey } from "./otter/bake-creature";
 import { bakeSnail, snailBakeKey } from "./snail/bake-creature";
 import { bakeTurtle, turtleBakeKey } from "./turtle/bake-creature";
 
-export function creatureBakeKey(speciesId: CreatureSpeciesId, variant: string): string {
+/**
+ * Which piece of a species to bake. Only the snail has more than one (see
+ * `snail/bake-creature.ts`: its eye stalks sway independently of its body);
+ * every other species ignores it and returns its single texture, so callers
+ * that do not care never pass it.
+ */
+export type CreaturePart = "full" | "body" | "tentacles";
+
+export function creatureBakeKey(
+  speciesId: CreatureSpeciesId,
+  variant: string,
+  part: CreaturePart = "full",
+): string {
   switch (speciesId) {
     case "snail":
-      return snailBakeKey(variant);
+      return snailBakeKey(variant, part);
     case "frog":
       return frogBakeKey(variant);
     case "turtle":
@@ -43,10 +55,11 @@ export function bakeCreature(
   speciesId: CreatureSpeciesId,
   variant: string,
   dpr: number,
+  part: CreaturePart = "full",
 ): BakedArt | null {
   switch (speciesId) {
     case "snail":
-      return bakeSnail(Skia, variant, dpr);
+      return bakeSnail(Skia, variant, dpr, part);
     case "frog":
       return bakeFrog(Skia, variant, dpr);
     case "turtle":
