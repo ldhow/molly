@@ -13,23 +13,32 @@ import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { unionBox } from "@/shared/aquarium/core/ir";
 import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
-import { lighten } from "@/shared/lib/color";
+import { darken, lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
-import { ribbonPath } from "./ribbon";
+import { lightInLocalSpace, ribbonCrossAxis, ribbonPath } from "./ribbon";
 
 const VALLISNERIA_DESIGN = DEFAULT_SCENE_DESIGN.species.vallisneria;
 const STEM_BUSH_DESIGN = DEFAULT_SCENE_DESIGN.species.stemBush;
 const ROTALA_DESIGN = DEFAULT_SCENE_DESIGN.species.rotala;
+const LIGHT = DEFAULT_SCENE_DESIGN.lighting;
+const LIGHT_DIR: XY = { x: LIGHT.dirX, y: LIGHT.dirY };
 
-/** Base-to-tip gradient instead of a flat fill — a blade/leaf catches more light toward its tip, the "richer leaf-tone gradients" pass. */
-const bladeGradient = (color: string, from: XY, to: XY) => ({
+/**
+ * Form shading across a blade's width — see `ribbonCrossAxis`. This used to
+ * run base-to-tip along the spine, which is the axis a viewer already reads
+ * from the taper; across the width is the axis that says "curved surface".
+ * The base colour sits past centre (0.62) because light falls off faster than
+ * it builds, so the shaded side should own more of the blade.
+ */
+const bladeGradient = (color: string, cross: { from: XY; to: XY }) => ({
   type: "linear" as const,
-  from,
-  to,
+  from: cross.from,
+  to: cross.to,
   stops: [
-    { offset: 0, color },
-    { offset: 1, color: lighten(color, 0.22) },
+    { offset: 0, color: darken(color, LIGHT.formDarken) },
+    { offset: 0.62, color },
+    { offset: 1, color: lighten(color, LIGHT.formLighten) },
   ],
 });
 
@@ -58,13 +67,17 @@ export const generateVallisneria: Generator = ({ seed, scale }) => {
       { x: baseX + lean + curve * 1.4, y: -height },
     ];
     const width = (D.widthMin + rng() * D.widthRange) * scale;
-    const d = ribbonPath(spine, (t) => width * (1 - t * 0.85));
+    const widthAt = (t: number) => width * (1 - t * 0.85);
+    const d = ribbonPath(spine, widthAt);
     const color = BLADE_COLORS[i % BLADE_COLORS.length];
-    const tip = spine[spine.length - 1];
+    // Vallisneria is authored upright in world space — light applies directly.
     nodes.push({
       kind: "path",
       d,
-      paint: { ...bladeGradient(color, spine[0], tip), opacity: 0.92 },
+      paint: {
+        ...bladeGradient(color, ribbonCrossAxis(spine, widthAt, LIGHT_DIR)),
+        opacity: 0.92,
+      },
     });
     bbox = unionBox(bbox, {
       x: baseX + Math.min(0, lean + curve * 1.4) - width,
@@ -137,9 +150,14 @@ function generateStemPlant(
       { x: leafWidth * 0.2, y: -leafLen * 0.6 },
       { x: 0, y: -leafLen },
     ];
-    const leafD = ribbonPath(
+    const leafWidthAt = (t: number) => leafWidth * Math.sin(Math.min(1, t * 1.1) * Math.PI);
+    const leafD = ribbonPath(leafSpine, leafWidthAt);
+    // The leaf is authored pointing up and rotated into place below, so the
+    // light has to come back the other way — see `lightInLocalSpace`.
+    const leafCross = ribbonCrossAxis(
       leafSpine,
-      (t) => leafWidth * Math.sin(Math.min(1, t * 1.1) * Math.PI),
+      leafWidthAt,
+      lightInLocalSpace(LIGHT_DIR, angleDeg + 90),
     );
     nodes.push({
       kind: "group",
@@ -148,7 +166,7 @@ function generateStemPlant(
           kind: "path",
           d: leafD,
           paint: {
-            ...bladeGradient(LEAF_COLORS[i % LEAF_COLORS.length], leafSpine[0], leafSpine[2]),
+            ...bladeGradient(LEAF_COLORS[i % LEAF_COLORS.length], leafCross),
             opacity: 0.95,
           },
         },

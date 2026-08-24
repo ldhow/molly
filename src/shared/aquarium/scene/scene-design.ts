@@ -316,6 +316,22 @@ export interface SceneDesign {
     carpet: CarpetDesign;
     rotala: RotalaDesign;
   };
+  /**
+   * Scene-wide key light, as a direction in each piece's LOCAL space (+y
+   * down, so a light from above is negative y). Every generator that shades
+   * across a form must read this rather than choosing its own: decor lit from
+   * inconsistent directions reads worse than decor that is uniformly flat.
+   * Matches the god-ray shafts in `core/sksl/water.ts`, which lean down-right
+   * from the surface — so the light arrives from up and slightly left.
+   */
+  lighting: {
+    dirX: number;
+    dirY: number;
+    /** How far the shaded edge drops below the base colour, 0-1. */
+    formDarken: number;
+    /** How far the lit edge rises above it, 0-1. Deliberately smaller than `formDarken` — a blown highlight reads as plastic. */
+    formLighten: number;
+  };
   water: { top: string; mid: string; bottom: string };
   substrate: {
     top: string;
@@ -348,10 +364,10 @@ export interface SceneDesign {
 export const DEFAULT_SCENE_DESIGN: SceneDesign = {
   species: {
     driftwood: {
-      darkColor: "#2c1d14",
-      midColor: "#4a3220",
-      highlightColor: "#8a6a45",
-      knotColor: "#1f140d",
+      darkColor: "#3a281b",
+      midColor: "#5c4029",
+      highlightColor: "#9c7c55",
+      knotColor: "#2a1c12",
       knotCountMin: 1,
       knotCountRange: 2,
       knotRadiusMin: 2.2,
@@ -381,10 +397,10 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       lowAnchorAngleRange: 40,
     },
     anubias: {
-      leafDarkColor: "#175c3d",
-      leafMidColor: "#2f8f5b",
+      leafDarkColor: "#206130",
+      leafMidColor: "#3d984b",
       leafTipLighten: 0.2,
-      veinColor: "#0d3322",
+      veinColor: "#12361b",
       unattachedBaseAngle: -90,
       leafCountMin: 3,
       leafCountRange: 3,
@@ -404,9 +420,9 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 14,
     },
     vallisneria: {
-      color1: "#2e7d57",
-      color2: "#256b4a",
-      color3: "#35906a",
+      color1: "#3a854b",
+      color2: "#2f723f",
+      color3: "#439a5b",
       bladeCountMin: 4,
       bladeCountRange: 3,
       heightMin: 180,
@@ -420,10 +436,10 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 90,
     },
     stemBush: {
-      leafColor1: "#1f6b46",
-      leafColor2: "#2f8f5b",
-      leafColor3: "#175c3d",
-      stemColor: "#0d3322",
+      leafColor1: "#297139",
+      leafColor2: "#3d984b",
+      leafColor3: "#206130",
+      stemColor: "#12361b",
       stemCountMin: 5,
       stemCountRange: 4,
       angleSpreadBase: 14,
@@ -436,9 +452,9 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 24,
     },
     seiryuStone: {
-      darkColor: "#2b3038",
-      midColor: "#454c57",
-      lightColor: "#6b7480",
+      darkColor: "#393632",
+      midColor: "#5a554f",
+      lightColor: "#857f79",
       widthMin: 92,
       widthRange: 58,
       heightMin: 60,
@@ -449,11 +465,11 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       jitterRange: 0.44,
       facetCountMin: 1,
       facetCountRange: 2,
-      seamColor: "#c4ccd6",
+      seamColor: "#e1deda",
     },
     substrateMound: {
-      topColor: "#5a4632",
-      bottomColor: "#3c2e20",
+      topColor: "#6b5540",
+      bottomColor: "#4a3a29",
       widthMin: 260,
       widthRange: 140,
       heightMin: 34,
@@ -476,9 +492,9 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       radiusRange: 4,
     },
     kelp: {
-      color1: "#123a30",
-      color2: "#0d2f28",
-      color3: "#17453a",
+      color1: "#183e29",
+      color2: "#113221",
+      color3: "#1e4932",
       frondCountMin: 3,
       frondCountRange: 2,
       heightMin: 560,
@@ -495,7 +511,7 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       petalColor1: "#d98ac4",
       petalColor2: "#c377d8",
       petalColor3: "#e79ec6",
-      stemColor: "#2f6b4a",
+      stemColor: "#3a7342",
       stemCountMin: 3,
       stemCountRange: 3,
       angleSpreadBase: 15,
@@ -508,10 +524,10 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 14,
     },
     cabomba: {
-      stalkColor: "#1f4d33",
-      leafletColor1: "#2f7d4a",
-      leafletColor2: "#3f9d63",
-      leafletColor3: "#256b45",
+      stalkColor: "#27522c",
+      leafletColor1: "#3b853f",
+      leafletColor2: "#4ea856",
+      leafletColor3: "#2f723a",
       stalkCountMin: 3,
       stalkCountRange: 3,
       heightMin: 170,
@@ -527,10 +543,10 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 110,
     },
     sword: {
-      leafDarkColor: "#0f4a2e",
-      leafMidColor: "#3aa06a",
+      leafDarkColor: "#164e22",
+      leafMidColor: "#4aab5a",
       leafTipLighten: 0.22,
-      veinColor: "#0a3320",
+      veinColor: "#0f3618",
       leafCountMin: 5,
       leafCountRange: 4,
       spreadMin: 7,
@@ -545,9 +561,9 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 20,
     },
     carpet: {
-      leafColor1: "#3f9d63",
-      leafColor2: "#2f8f5b",
-      leafColor3: "#4fae72",
+      leafColor1: "#4ea856",
+      leafColor2: "#3d984b",
+      leafColor3: "#6ab26e",
       clumpCountMin: 6,
       clumpCountRange: 6,
       leafRadiusMin: 2,
@@ -573,17 +589,28 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 22,
     },
   },
-  // Brightened toward the reference's luminous sunlit blue — the old top
-  // (#1c4f66) was dark enough that god-ray shafts and kelp silhouettes had
-  // nothing to read against. The bottom stays deliberately dark so the
-  // top-to-bottom depth gradient still reads.
-  water: { top: "#2f86ab", mid: "#175a78", bottom: "#08202e" },
+  lighting: { dirX: -0.45, dirY: -0.89, formDarken: 0.3, formLighten: 0.16 },
+  // Freshwater-pond palette, not a tropical marine one — the whole scene is
+  // aimed at the soft, hand-illustrated "cozy pond" look (Pondlife and that
+  // genre) rather than the saturated cartoon reef `scene.png` still shows.
+  //
+  // Three things carry that read, and they're easy to undo by accident:
+  //   - GREEN, not cyan. A pond is algal water over silt; the old top stop
+  //     (#2f86ab) was a reef blue.
+  //   - LOW top-to-bottom contrast. A pond is shallow, so the bottom stop is
+  //     a readable deep teal, NOT the old near-black (#08202e). That darkness
+  //     bought depth in a deep-tank look and fights a shallow one.
+  //   - Nothing fully saturated. Every plant green below is pulled ~15% out
+  //     of saturation and rotated toward yellow-green; hardscape is warmed
+  //     off blue-grey. Storybook art reads soft because its palette is soft,
+  //     not because its edges are.
+  water: { top: "#7ac8b6", mid: "#3d8f8a", bottom: "#1a4950" },
   substrate: {
-    top: "#d9c092",
-    bottom: "#96805a",
-    grainStrength: 0.05,
-    speckleDensity: 0.14,
-    speckleColor: "#5f4c34",
+    top: "#c8b48c",
+    bottom: "#8b7a58",
+    grainStrength: 0.04,
+    speckleDensity: 0.1,
+    speckleColor: "#5a4d38",
   },
   bubbles: { count: 14, spriteSize: 28 },
   layers: {
