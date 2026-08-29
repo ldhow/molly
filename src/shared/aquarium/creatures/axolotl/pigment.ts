@@ -7,7 +7,7 @@
 
 import type { Node } from "@/shared/aquarium/core/ir";
 import { scatterBlobPrimitives } from "@/shared/aquarium/core/pigment-toolkit";
-import { darken, lighten } from "@/shared/lib/color";
+import { coolShadow, warmLight } from "@/shared/aquarium/core/shading";
 import { makeRng } from "@/shared/lib/rng";
 
 export interface AxolotlPalette {
@@ -48,12 +48,13 @@ export function axolotlPaletteFor(variant: string): AxolotlPalette {
   return PALETTE_BY_VARIANT[variant] ?? PALETTE_BY_VARIANT.leucistic;
 }
 
+/** Hue-aware tones — see `core/shading.ts` and the note on `otterSkinPaint`. Top-lit, not counter-shaded. */
 export function axolotlSkinPaint(palette: AxolotlPalette) {
   return {
-    top: lighten(palette.base, 0.12),
+    top: warmLight(palette.base, 0.12),
     mid: palette.base,
-    bottom: darken(palette.base, 0.2),
-    outline: darken(palette.base, 0.5),
+    bottom: coolShadow(palette.base, 0.2),
+    outline: coolShadow(palette.base, 0.5),
   };
 }
 

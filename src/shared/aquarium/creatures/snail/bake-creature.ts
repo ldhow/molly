@@ -18,6 +18,7 @@
 
 import { bakeNodes, type BakedArt } from "@/shared/aquarium/core/bake";
 import { inflateBox, type Box, type Node } from "@/shared/aquarium/core/ir";
+import { SPECULAR_TINT, tinted } from "@/shared/aquarium/core/shading";
 import type { SkiaApi } from "@/shared/aquarium/core/skia-types";
 import { darken, rgba } from "@/shared/lib/color";
 
@@ -203,9 +204,9 @@ function bodyNodes(anatomy: SnailAnatomy, palette: SnailPalette, seed: number): 
       center: { x: -3, y: -24 },
       radius: 15,
       stops: [
-        { offset: 0, color: "rgba(255,255,255,0.34)" },
-        { offset: 0.6, color: "rgba(255,255,255,0.1)" },
-        { offset: 1, color: "rgba(255,255,255,0)" },
+        { offset: 0, color: tinted(SPECULAR_TINT, 0.34) },
+        { offset: 0.6, color: tinted(SPECULAR_TINT, 0.1) },
+        { offset: 1, color: tinted(SPECULAR_TINT, 0) },
       ],
     },
   });

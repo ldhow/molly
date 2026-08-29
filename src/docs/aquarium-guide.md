@@ -84,7 +84,7 @@ Four stages, each a separate module:
    pectoral → face. `fin/hub` placement is verified strictly inside the body
    by each fin's `sink` value and every fin's median tip strictly outside it
    — see `scripts/verify-aquarium.ts`'s anatomy invariants. Face features
-   (eye, mouth, gill cover, blush) anchor to `u`-fractions of the head
+   (eye, mouth, gill cover) anchor to `u`-fractions of the head
    (`xAt(u)`, `topAt(u)`/`botAt(u)`) rather than absolute pixel offsets from
    the nose plane, so a future snout re-sculpt moves them automatically
    instead of needing another by-eye re-tune; the gill patch additionally
@@ -96,40 +96,146 @@ Four stages, each a separate module:
 The body is a genuinely original design, not the legacy renderer's "chunky
 realistic molly" resized — a plump, storybook-cozy companion fish.
 
-**Surface treatment is a bold illustrated mascot, NOT soft painterly.** This
-deliberately reverses an earlier "soft, storybook" pass, and the reversal is
-the whole visual identity, so don't quietly undo it while tuning something
-else:
+**Surface treatment is a lit animal, NOT a drawn mascot.** This reverses the
+earlier "bold illustrated mascot" pass. That pass had made every surface cue
+an authored graphic — a hard ink outline, an opaque body-coloured tail, a
+white plastic highlight — and the result read as a sticker. The diagnosis
+that drove the reversal was a single root cause: **every colour move in the
+renderer ran along the value axis only.** `shared/lib/color.ts`'s
+`darken`/`lighten` are `mix(hex, black)` / `mix(hex, white)`, the body ramp
+was one hue at three lightnesses (gold: `#bf7c10`/`#eda426`/`#f8cd63`, hue
+≈ 40 throughout), and all five creatures built their tones the same way. A
+real surface shifts **hue and saturation** as it turns away from the light;
+a pure value ramp is what "plastic" looks like.
 
-- The contour is a near-opaque **2.1px solid keyline** (`opacity: 0.88`,
-  almost no blur). It used to be `0.34` alpha / `1.1` width / `0.9` blur /
-  `multiply` — that reads as a soft drop-shadow, not a drawn line, and it was
-  by far the biggest thing separating this renderer from a clean illustrated
-  look. `multiply` is gone too: it made the line's darkness depend on
-  whatever it happened to sit over. Fin keylines follow at a deliberately
-  lighter weight (`0.62`/`1.5`) — a fin is a translucent membrane, and an
-  equally heavy outline makes it look like a solid paddle.
-- Shading is **few, high-contrast layers**, not many soft ones. A short
-  4-stop counter-shading sweep, one tight rear/belly AO, and exactly **one
-  compact specular highlight** (a `scale.x = 2.2` ellipse at low blur).
-  The previous stack — 7-stop counter-shading + softLight bloom + multiply
-  shadow + a full-width blur-6 gloss stripe — averaged out to flat mid-tone
-  at real viewing size.
-- The eye keeps its sclera/ring/pupil/catchlight structure but is scaled up
-  (`r` 4.8 → 6.3) with a thicker ring (1 → 1.7). Those numbers are still the
-  baseline, but they are no longer the whole story — the eye now lives in
-  `fish/eyes.ts` as a set of styles (`classic`/`ringed`/`almond`/`deep`/
-  `hooded`), one picked per individual from its own `patternSeed`. Every
-  style adds an **iris** between sclera and pupil, which the single old eye
-  lacked and which is the main reason it read as a painted dot. The bold ring
-  and the catchlight are deliberately kept: realism here comes from adding
-  missing structure, NOT from softening the mascot treatment. Iris tint comes
-  from the variety's own `palette.fin`, lifted by `irisTone()` only as far as
-  it takes to stay distinct from the near-black pupil (goldDust, black and
-  chocolate have nearly black fins). Eye **radius is an authored constant**,
-  never derived from `halfHeight` — the same call `anatomy.ts` makes for fins
-  via `FIN_REF_HALF_HEIGHT`; only the eye's position tracks the body.
-- Scales (vảy cá) are real surface texture, not a whisper. `pigment.ts`'s
+[core/shading.ts](../shared/aquarium/core/shading.ts) is the one place light
+and tone now live, so the fish and the five creatures cannot drift apart. Its
+header carries the per-decision rationale; the short version:
+
+- The contour is a **form edge, not an ink line** — `BODY_KEYLINE`, 1.35px at
+  `0.34` alpha with real blur, in `keylineColor()`'s hue-rotated tone rather
+  than `darken(back, 0.45)`. The mascot pass had this at 2.1px / `0.88` /
+  blur 0.15, which made the molly the only animal in the tank wearing an ink
+  outline (the five creatures were already at 0.6–1.4px). Fin keylines drop
+  further, to `0.2`/`1.2px`: a heavy line around a see-through fin re-creates
+  exactly the solid-paddle read the translucency exists to remove.
+- **Counter-shading is a hue and saturation move, not only a value one.**
+  `countershadeStops()` lays 6 stops weighted to where a real fish's
+  transitions are — dorsal darkening in the top ~16%, ventral whitening in
+  the bottom ~18%, saturated flank owning the middle. `MAX_DORSAL_DROP` is
+  the identity guard: shading may deepen a variety's authored `back`, never
+  replace it. An earlier version scaled dorsal lightness by a flat factor and
+  turned goldDust — a _gold_ fish — into a uniformly dark one.
+  `SHADOW_HUE` is **violet, not blue**, and that is not cosmetic: rotating a
+  warm hue toward blue-220 takes the short arc through green, and every warm
+  variety's dorsal came out olive.
+- **The body does not stop at the peduncle.** Four separate mechanisms
+  keep body and tail reading as one animal, and all three are needed:
+  `silhouetteStrokeD` walks the contour around the caudal's own rim instead
+  of across the peduncle; `buildCaudalFillD` closes the fin's fill on the
+  exact plane the body's fill ends; and `caudalRootBlend` carries the body's
+  **vertical** counter-shading ramp a short way into the tail. That last one
+  is what the first two could not fix: the body is graded top-to-bottom at
+  the peduncle while the caudal's pivot→tip gradient is flat there, so the
+  two surfaces mismatched at _every_ height and read as glued-together pieces
+  no matter how well their average tones agreed. It became obvious once fin
+  translucency landed. **Reach is the whole balance** — `0.12` of the tail
+  with a matching mask blur. A first attempt at `0.4` removed the seam by
+  painting goldDust's near-black caudal gold and zebra's white, i.e. by
+  deleting the fin's own colour. This models a fleshy peduncle stub; past it
+  the membrane is the membrane.
+
+  The fourth is the **rim light**, which also strokes and clips
+  `silhouetteStrokeD` now. It was still on `outlineD` long after the ink
+  keyline had been corrected — so it stroked the straight peduncle end-cap,
+  and since `rimTo` sits toward the rear/shadow side the gradient peaks
+  exactly there. That painted a bright vertical bar rising from the belly
+  line straight across the tail joint: the "white line from belly to tail"
+  that kept the tail reading as a bolted-on piece. **If a node strokes the
+  body, it must stroke `silhouetteStrokeD`** — `outlineD` exists to close
+  the FILL polygon and its cap edge is not a real edge of the animal.
+
+- **Fins are membranes** (`FIN_MEMBRANE`). The root stays nearly opaque —
+  a real fin base _is_ thick where it sockets into the flank — and the
+  fall-off does the work. Hue is deliberately untouched: an attempt to mix
+  fin stops toward one water tint greyed out goldDust's black fins, sanke's
+  pink caudal and electricBlue's blue ones at a stroke. `TIP_FLOOR` and
+  `RAY_BOOST` are legibility, not taste — tank mode draws at
+  `AQUARIUM_FISH_SCALE = 0.6` against decor, and at that size the rays are
+  what keep a translucent fin readable.
+- **Fin membranes are anchored where the fin EMERGES**, not at the hub.
+  `FinShape.sink` exists for this: every sunk fin (dorsal 7, anal 8/6,
+  pelvic 4) had its gradient anchored at `pivot`, which is inside the body,
+  so the dark opaque root stop landed under the skin fill and the visible fin
+  got only the flat tail of the ramp. The dorsal on the pale varieties looked
+  like a lobe floating above the back. `emergence()` walks `sink` units
+  along the hub→tip axis so the visible part gets the whole dark-root →
+  translucent-tip fall-off the membrane design always intended.
+- **The operculum is a MARGIN, not a patch.** It used to fill the whole
+  hand-authored leaf with flat `#ffffff` at 0.16 — a large relative lift on
+  a dark variety, so black and goldDust wore a hard-edged pale slab across
+  the cheek. On a real fish the plate is the same skin as the cheek; what you
+  see is its rear margin. Now there is no flat fill, and the fold is drawn as
+  **two** passes: a crease in the keyline tone, and a light catch just
+  forward of it. Both are needed — the crease is black-on-black on `black`
+  and vanishes, while on pale varieties the light catch is the one that
+  disappears. A real fold has a shadow on one side and a lit edge on the
+  other anyway.
+- **Scales stop before the head** (`scaleVisibility`'s `u` term). A fish has
+  no body scales on its snout or operculum; rows used to run straight over
+  the face.
+- **The mouth is terminal and fades out.** Two parallel hard strokes read as
+  a dash with a second dash floating above it; it is now one shorter line
+  in the keyline tone taken to zero at its rear end, plus a lip catch
+  confined to the front half.
+- **Highlights are cool, not white.** `SPECULAR_TINT` / `RIM_TINT` replace
+  literal `rgba(255,255,255,·)` everywhere, fish and creatures alike. The key
+  light has already been filtered by the water column before it reaches
+  anything; a pure-white specular over warm skin is the clearest plastic cue
+  there is. The rim is cooler than the specular — it has wrapped through more
+  water.
+- The shading stack itself is still **few, high-contrast layers**, not many
+  soft ones: the counter-shading ramp, one tight rear/belly AO, and one
+  compact specular (a `scale.x = 2.2` ellipse at low blur) plus its hotspot.
+  The pre-mascot stack — 7-stop ramp + softLight bloom + multiply shadow +
+  a full-width blur-6 gloss stripe — averaged out to flat mid-tone at real
+  viewing size, and that part of the mascot pass was right.
+- There is **no blush**. The pink cheek decal had already been dialled down
+  once; it was the one element on the fish with no physical referent, so the
+  naturalism pass removed it rather than dialling it a third time.
+- **The eye has no white.** `fish/eyes.ts` was drawing a mammal's eye — a big
+  white sclera ring around a small dark pupil — which is a cartoon
+  convention, not an animal one, and it was the single loudest fake cue left
+  on the fish. A fish's eye is an **iris filling nearly the whole opening**
+  (metallic, brightest toward its rim, with a dark limbal ring) around a
+  **wide, deep pupil**, all under a wet cornea. `eyeBase()` builds exactly
+  that and all five styles (`classic`/`ringed`/`almond`/`deep`/`hooded`, one
+  per individual from its own `patternSeed`) are proportions on top of it.
+  Contrast did not drop: the read is now bright metallic iris against
+  near-black pupil instead of white against black, which is _more_ legible at
+  `AQUARIUM_FISH_SCALE`. Three things to not undo:
+  - `irisTone()` pulls a too-dark palette colour toward **`IRIS_METAL`
+    (gold), not toward white.** Mixing toward white is what the first attempt
+    did, and it turned goldDust's near-black `#20222b` fin into a pale grey
+    band — a white sclera by another name.
+  - The cornea sheen is **weak and confined to the light-facing quadrant**
+    (0.2 over 0.95r). A first pass at 0.32 over 1.45r greyed the pupil out
+    entirely; the eye stopped having a dark centre, which costs far more than
+    the wetness gained.
+  - The `hooded` lid bottoms out at **0.5r above centre**, not at the centre
+    line. Reaching the centre leaves a crescent of iris under a huge lid and
+    reads as a _wink_ — very obvious on light-irised varieties like sanke.
+
+  Eye **radius is an authored constant**, never derived from `halfHeight` —
+  the same call `anatomy.ts` makes for fins via `FIN_REF_HALF_HEIGHT`; only
+  the eye's position tracks the body.
+
+- Scales (vảy cá) are real surface texture, but a **light response**, not a
+  decal. `scaleVisibility(v)` fades each plate by its height on the body:
+  strongest on the upper flank under the specular, near-invisible on the
+  belly, where a real fish is smooth silver. Placement was always correct;
+  painting all ~300 arcs at one flat opacity is what turned good geometry
+  into patterned wallpaper. `pigment.ts`'s
   `scalePrimitives` lays plates out in body-relative `(u, v)` — reading
   `topAt`/`bottomAt` so rows bow with the belly, converge at the peduncle,
   and shrink with local body depth toward head and tail. It used to grid the
@@ -140,10 +246,15 @@ else:
   whole set returns as **one clipped group** — `emit.ts` does a
   save/clipPath/restore per node carrying `clip`, and there are ~300 arcs.
 
-Per-variety palettes are untouched by that pass and stay authentic: Gold
-Dust really does have a black head and dark fins, Sanke its red/black koi
-blocks. Don't recolour the catalog toward one reference image — the style is
-shared, the colours are each variety's identity.
+Per-variety palettes are untouched by every one of these passes and stay
+authentic: Gold Dust really does have a black head and dark fins, Sanke its
+red/black koi blocks. Don't recolour the catalog toward one reference image —
+the style is shared, the colours are each variety's identity. The naturalism
+pass reshapes how `back`/`mid`/`belly`/`fin` are LAID DOWN and never what they
+are, and `verify-aquarium.ts`'s §10e-2 block enforces that: it runs the real
+`countershadeStops` over every breed and fails if the rendered dorsal drifts
+more than 0.17 below the authored `back`, or if the ramp stops desaturating
+toward the belly.
 
 Measurement convention:
 `aspect = length(nose→peduncle) / max(top(u)+bottom(u))` — legacy standard
@@ -223,6 +334,21 @@ through to `creatures/bake-placeholder.ts` — a simple proportioned blob at
 the right palette/size, not a crash — which is how all 5 species shipped
 end-to-end (economy, picker, Fishdex, stats, cross-renderer fallback) before
 any of them had real anatomy.
+
+**Lighting IS shared, even though anatomy isn't.** Every species'
+`*SkinPaint()` builds the same `{top, mid, bottom, outline}` shape, and all
+five now build it from `core/shading.ts`'s `warmLight`/`coolShadow` rather
+than `lighten`/`darken` — same `t` values, hue-aware output. Their single
+`blend: "screen"` gloss lobe uses `SPECULAR_TINT` for the same reason the
+fish's does. Two things to NOT "fix":
+
+- These ramps are **top-lit, not counter-shaded**, and that is correct: fur
+  and a shell are lit from above, and only a fish has a genuinely
+  counter-shaded belly. The otter's pale belly is a separate radial patch in
+  its `bake-creature.ts`, which is the right way to express it.
+- The **snail's foot ramp is inverted** (`top: coolShadow`,
+  `bottom: warmLight`) relative to every other one in the tree. A sole is lit
+  by bounce off the substrate below it. Leave it inverted.
 
 **Anatomy is NOT the fish model reused.** `fish/pigment.ts`'s `PigmentGeom`
 contract (`topAt`/`bottomAt`, a single-valued top/bottom half-height curve)
@@ -568,6 +694,22 @@ Two engines, not one. Everything that swims runs `sim/swim.ts` (below);
 `locomotion: "crawl"` species run `sim/crawl.ts` instead — see "The snail
 doesn't swim" above, and note the two share nothing but `wrapToPi`.
 
+**`hover` is short on purpose, and the reason is a trap worth knowing.**
+Its duration (1.2-2.6s) and speed (0.28x) look timid next to the other modes
+because they were retuned after hover started actually running. Hover's
+target is a jitter within `HOVER_JITTER` (20px) of the fish, and arrival
+used to be `hypot(dx, dz) < ARRIVE_RADIUS` (26) — so hover retargeted out of
+itself within a frame or two and measured **0.3% of elapsed time** in the
+shipped build. Excluding hover from arrival fixed that bug and let its
+original, never-exercised 3-6s duration at 0.12x speed run for the first
+time: **18% of all time**, with stalls up to 9.4s, i.e. "the fish keeps
+stopping for no reason". None of the existing swim checks caught it — they
+measure mean speed and turn behaviour, and a fish that is motionless an
+eighth of the time still has a fine mean. `verify-aquarium.ts`'s swim trace
+now asserts stalled-time and longest-stall directly (`STALL_VX`). Re-run it
+rather than eyeballing if you touch a mode's duration, speed or transition
+weights.
+
 This renderer owns its own steering (`sim/swim.ts` + `sim/use-v2-swim.ts`) —
 it does NOT bias the shared `@/shared/hooks/use-fish-swim.ts` /
 `@/shared/lib/swim-model.ts` engine 3D uses (an earlier version of this doc
@@ -606,6 +748,36 @@ screen-left" is nearer whenever the fish isn't actively steering toward a
 target or avoiding a wall — the art is the point, so a fish mostly presents
 its flank; `z` travel happens in gentle diagonal drifts instead of the fish
 spending long stretches face-on to the viewer.
+
+**A leg is a full-width crossing.** `crossTargetX` in `sim/swim.ts` aims
+every non-hover target at one END of the wander box — the end the fish is
+already pointed at while it still has room, the other one once it is inside
+`REVERSE_ZONE` — so the fish traverses the tank and changes facing only when
+it gets there. This replaced a uniformly random `lerp(minX, maxX, rand())`
+target, and three separate things had to change together before the fish
+stopped reversing on the spot; all three are easy to reintroduce:
+
+- A random target lands **behind** the fish half the time and only ~W/3 away
+  on average, so a reversal happened wherever the fish happened to be.
+- Arrival measured `hypot(dx, dz)`, so an unfinished **depth** component
+  kept a leg open after the horizontal trip was done: the remaining vector
+  was pure `z`, `yaw` sat at ±π/2 and the sprite's facing flip-flopped while
+  the fish made no horizontal progress. Arrival is on X alone now, and
+  `DEPTH_WANDER` bounds `targetZ` to a wander around the current `z` (same
+  reasoning as `VERTICAL_WANDER` for `y`) so depth can never outvote the
+  crossing.
+- **Hover** steers not at all now (`holdYaw`), not merely inside the
+  `nearTarget` freeze radius: its target is a jitter around the fish's own
+  position that lands behind it half the time, and the z part of that jitter
+  alone could push it past the freeze radius and spin the fish for a 20px
+  move.
+
+Mode changes mid-leg keep the crossing (`keepCrossing`) — only arriving
+picks a new end — and `verify-aquarium.ts`'s swim trace asserts the mean leg
+spans ≥45% of box width, which is the check that would have caught any of
+the above. Turn RATE is separate: `TURN_RATE_REVERSE` scales the yaw ceiling
+with heading error, so the about-face itself takes ~0.6s rather than the
+~2.1s a wall-keyed ceiling gave a mid-tank turn.
 
 **The shared current.** `sim/swim.ts` carries a slow horizontal flow on a
 ~42s cycle (`CURRENT_FREQ`) that advects every molly together, so the tank

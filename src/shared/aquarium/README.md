@@ -51,10 +51,14 @@ Holding Tank tile, Fishdex cards, and the home-screen picker), and
 ## Structure
 
 - `core/` — the IR (`ir.ts`), the one imperative emitter (`emit.ts`), the
-  bake/LRU cache (`bake.ts`), and two low-level toolkits shared by every
+  bake/LRU cache (`bake.ts`), and three low-level toolkits shared by every
   creature module: `pigment-toolkit.ts` (rng seeding, `blobPath` for small
-  decorative blobs, `ribbonAlongPath`) and `limb-chain.ts` (`circleChain`, a
-  tapered chain of overlapping circles for jointed/stalk-like limbs).
+  decorative blobs, `ribbonAlongPath`), `limb-chain.ts` (`circleChain`, a
+  tapered chain of overlapping circles for jointed/stalk-like limbs), and
+  `shading.ts` — the one place light and tone live (`LIGHT_DIR`, the
+  hue-aware `warmLight`/`coolShadow` that replace `lighten`/`darken`,
+  `SPECULAR_TINT`/`RIM_TINT`, the counter-shading ramp), so the fish and the
+  five creatures cannot drift into disagreeing about where the light is.
   `skia-types.ts` is a type-only bridge so the same emitter runs on-device
   and under Node (`scripts/lib/skia-node.ts`, CanvasKit-backed) with no
   second backend to keep in sync.

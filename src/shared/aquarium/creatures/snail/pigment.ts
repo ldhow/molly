@@ -14,7 +14,8 @@
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { ribbonAlongPath, scatterBlobPrimitives } from "@/shared/aquarium/core/pigment-toolkit";
-import { darken, lighten, rgba } from "@/shared/lib/color";
+import { coolShadow, warmLight } from "@/shared/aquarium/core/shading";
+import { rgba } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
 import { OUTER_TURN_U, shellAt, shellHalfWidthAt, soleAt } from "./anatomy";
@@ -169,7 +170,7 @@ export function snailShellPatternPrimitives(
 
   // Growth striations: hairline ribs crossing the tube, denser toward the
   // rim (a shell records its growth, so the newest whorl carries the most).
-  const striation = darken(palette.bandColor, 0.25);
+  const striation = coolShadow(palette.bandColor, 0.25);
   for (let i = 1; i <= STRIATION_COUNT; i++) {
     // Outer turn only: that is the whole visible surface, and a rib drawn on
     // an inner turn would float on top of the whorl that covers it.
@@ -187,7 +188,7 @@ export function snailShellPatternPrimitives(
   out.push({
     kind: "path",
     d: seamD,
-    paint: { type: "solid", color: darken(palette.bandColor, 0.5), opacity: 0.45 },
+    paint: { type: "solid", color: coolShadow(palette.bandColor, 0.5), opacity: 0.45 },
     stroke: { width: 1.6 },
     blur: 0.9,
     clip: shellD,
@@ -195,7 +196,7 @@ export function snailShellPatternPrimitives(
   out.push({
     kind: "path",
     d: seamD,
-    paint: { type: "solid", color: darken(palette.bandColor, 0.6), opacity: 0.5 },
+    paint: { type: "solid", color: coolShadow(palette.bandColor, 0.6), opacity: 0.5 },
     stroke: { width: 0.6 },
     clip: shellD,
   });
@@ -271,22 +272,31 @@ export function snailFootPatternPrimitives(
   return out;
 }
 
-/** Body-skin gradient + a faint contour, the same shape every creature's shell/body fill follows. */
+/**
+ * Body-skin gradient + a faint contour, the same shape every creature's
+ * shell/body fill follows. Hue-aware tones — see `core/shading.ts` and the
+ * note on `otterSkinPaint`.
+ */
 export function snailSkinPaint(palette: SnailPalette) {
   return {
-    top: lighten(palette.base, 0.18),
+    top: warmLight(palette.base, 0.18),
     mid: palette.base,
-    bottom: darken(palette.base, 0.3),
-    outline: rgba(darken(palette.base, 0.58), 0.45),
+    bottom: coolShadow(palette.base, 0.3),
+    outline: rgba(coolShadow(palette.base, 0.58), 0.45),
   };
 }
 
-/** The soft body's own gradient — pale at the sole, deeper up the flank, which is how a real foot catches light. */
+/**
+ * The soft body's own gradient — pale at the sole, deeper up the flank, which
+ * is how a real foot catches light. Note this ramp is INVERTED relative to
+ * every other one in the tree, and correctly so: a sole is lit from the
+ * substrate below, not from above. Keep it that way.
+ */
 export function snailFootPaint(palette: SnailPalette) {
   return {
-    top: darken(palette.footColor, 0.22),
+    top: coolShadow(palette.footColor, 0.22),
     mid: palette.footColor,
-    bottom: lighten(palette.footColor, 0.16),
-    outline: rgba(darken(palette.footColor, 0.55), 0.5),
+    bottom: warmLight(palette.footColor, 0.16),
+    outline: rgba(coolShadow(palette.footColor, 0.55), 0.5),
   };
 }
