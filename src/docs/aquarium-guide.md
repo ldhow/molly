@@ -601,6 +601,141 @@ returns back/mid/front), and exempt from the composition invariants exactly
 like `"back"` (`verify-aquarium.ts`'s `midFront` filter is now an allowlist
 of `"mid"`/`"front"`, not a `!== "back"` exclusion).
 
+### Procedural backdrop fill — `scene/backdrop.ts`
+
+The authored theme covers composition; it never covered _coverage_. All its
+mass sat at the extreme left and right edges, so the whole middle of the frame
+was bare water — `verify-aquarium.ts` measured mid+front decor at **3.1% of
+the canvas** against its 45% ceiling, with 100% of columns classed as open
+corridor. Against that emptiness the fish read as oversized.
+
+`scene/backdrop.ts` fills it procedurally: jittered-stratified columns across
+the full canvas width (bleeding slightly past both edges so the parallax drift
+never exposes a seam), in passes — a `far` receding bank, a `back` GROUND pass
+of pebbles/carpet/mounds/stones/low wood, and a `back` CANOPY pass of tall
+weed. `scene/backdrop-sprites.ts` is the sprite-mode twin, sharing the scatter
+in `scene/scatter.ts`. The theme keeps everything a human curated; these files
+own only the background texture behind it.
+
+**Each band carries its own `envelopeFloor`, and that is the whole design.**
+The first version of this ran every band at 0.75 — near-even coverage at every
+height across the full width. It closed the frame into a hedge, buried the
+driftwood the composition is built around, and read as clutter rather than as
+a tank. `assets/images/scene/scene.png`, the reference art, does the opposite
+and is worth opening before touching any of this: two dense clusters on the
+flanks, a genuinely **open centre**, and nothing crossing the middle but pale
+low silhouettes and a scatter of pebbles on the sand. So bands take opposite
+density profiles by job:
+
+| band    | floor     | why                                                                                                        |
+| ------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| pebbles | 0.90      | even across the sand — the only thing crossing the open middle, and what stops it reading as a blank sheet |
+| far     | 0.55      | fairly even, but every variant capped low (~20% of frame) so the centre reads as depth, not as a hole      |
+| ground  | 0.30–0.45 | flank-weighted, thinning through the centre                                                                |
+| canopy  | 0.10      | **flanks only** — this is the band that closes a tank                                                      |
+
+Ground and canopy are separate bands rather than one pool because they compete
+otherwise: `pickVariant` weights by `1 - |variant.height - u|`, so a single
+pool holding both pebbles and tall weed resolves almost entirely to one of
+them and the other disappears.
+
+Three rules, all of which the file's header states and one of which is a
+compile error:
+
+- **`far`/`back` only.** `BackdropLayer` is `Extract<SceneLayer, "far" | "back">`.
+  Since the composition invariants rasterize mid+front as an allowlist, a fill
+  confined to the back provably cannot move occupancy, corridor, spaciousness,
+  the focal apex, or the asymmetry ratio — which is the entire reason it can
+  add real mass without renegotiating the authored composition.
+- **Scales are literals from a fixed variant pool, never computed.**
+  `compose.ts`'s `bakeKey` excludes `worldX`, so N placements sharing a
+  (species, layer, seed, scale, mirror) tuple cost ONE texture. 108 placements
+  currently collapse onto 31 bakes. A continuous scale (`base * envelope`)
+  would give one bake per placement and thrash the LRU — which presents as a
+  permanently low frame rate with no visible artifact. So the U envelope picks
+  WHICH variant; it never scales one. **Density is free; variety is what
+  costs.**
+- **`mirror` belongs only on driftwood.** It's part of `bakeKey` and every
+  other species ignores it, so setting it elsewhere forks a pixel-identical
+  second texture for nothing.
+
+Sprite mode adds two constraints the procedural side doesn't have. The PNGs
+are **fixed-resolution**, so `scale` has a real ceiling — `compose-sprites.ts`
+multiplies by `sizeFactorFor` = 0.6, meaning scale ~1.7 draws a piece at its
+native pixel size and anything past that is upscaling (the tallest asset is
+414px, which is what caps the canopy at roughly half a portrait column). The
+authored driftwood deliberately breaks that ceiling, because bark has almost
+no detail to lose — the same treatment on a fern reads as a blurry fern.
+And `SpritePlacement.maxHeightFraction` exists because `sizeFactorFor` clamps
+to its 0.6 floor at **both** 390x844 and 844x390, so a piece sized as a
+portrait centrepiece is drawn at the identical pixel height in a 330px
+landscape column, where it becomes a wall. `verify-aquarium.ts`'s corridor
+check at 844x390 is what catches a missing cap.
+
+A **mossy rock** is two sprites, not one: there is no mossy-rock PNG, so a
+variant can carry a `companion` placed at the host's foot (that is where
+`scene.png` puts moss, and perched on the crown it read as a green hat).
+Companions stay under `CLIMBABLE_MIN_HEIGHT` so they don't become redundant
+snail props beside the rock they're attached to.
+
+The fill is **not draggable in the Scene tab**, by construction: it's spread
+into the theme as an identifier (`...BACKDROP_FILL`), and `placement-patch.ts`
+only sees `{...}` literals keyed by a unique seed — while the fill
+deliberately REUSES seeds, which is exactly what bounds its bake count. The
+editor's live preview does render it. Tune it by editing the pools, then
+`yarn aquarium:preview`.
+
+Two things this needed from the generators, both of which were real bugs:
+
+- **`lean`/`curve` now scale** in `generateVallisneria` and `generateCabomba`.
+  They didn't, so `scale` changed a plant's _silhouette_ rather than its size
+  — a small clump splayed and a large one went rigid, turning a tall canopy
+  clump into a picket fence of parallel needles. The blade taper also went to
+  0.7 from 0.85, since the top third of a tall blade was thinning below a
+  pixel and dropping out of the silhouette.
+- **Driftwood's bbox is computed, not guessed.** See `gen/driftwood.ts`'s
+  header: the old `{x: -baseWidth, ...}` only held for a vertical trunk, so
+  every limb leaning further than `baseWidth` from the origin baked CLIPPED.
+  That piece was commented out of the theme entirely, which orphaned four
+  `anubias` still carrying `attachToId` — `composeScene` no-ops silently on a
+  missing target, so they were rendering as ground plants at the wood's
+  `xFraction`.
+
+**Kelp is gone from the theme** (the generator remains; nothing places it). At
+~20:1 aspect with three non-overlapping fronds and a blunt flat top it read as
+flat dark planks rather than foliage, and at ~1MB per bake it was the single
+most expensive species in the tree — a third of the decor budget spent on the
+worst art in the scene. The canopy pass supplies the tall edge framing it was
+there for. Bring it back only if its silhouette is rebuilt first.
+
+### Bake budget — the invisible failure mode
+
+`render/decor-cache.ts` bakes **synchronously inside render** and evicts by
+LRU, so a theme whose distinct `bakeKey`s don't all fit in
+`DECOR_BUDGET_BYTES` re-bakes evicted pieces every frame. That reads as a
+permanently low frame rate with nothing visibly wrong to bisect from, which is
+why `verify-aquarium.ts` §8 now checks it: the working set summed per bakeKey
+against a 25% margin (margin, not a bare fit — the LRU is a module singleton,
+so a rotation transiently holds both canvas sizes' key sets), no single bake
+over 1.5MB, and that the fill still collapses onto its pool.
+
+Bake resolution is per depth band (`core/decor-budget.ts`'s
+`DECOR_DPR_BY_LAYER`): 1.4 for `far`, 1.5 for `back`, 2 for `mid`/`front`.
+Bytes go as DPR squared, and the two back bands hold nearly all of a theme's
+pixels while being the bands nobody can inspect — 0.45 and 0.7 opacity, behind
+every fish, drifting under parallax. Baking them at foreground fidelity spent
+~2x the bytes on the half of the scene that is deliberately out of focus, and
+that waste was exactly the budget a densely-planted background needs. Safe to
+key off the layer because `bakeKey` includes it, so a piece can never be
+looked up at a DPR it wasn't baked at.
+
+`render/scene-layers.tsx` also splits `StaticDecorPiece` from
+`SwayingDecorPiece`: hardscape and ground cover have `swayHeight === 0` and a
+constant transform, so they don't need the per-frame `useDerivedValue` worklet
+that reads the clock. The branch is stable per key (`swayHeight` is a property
+of the generated art, not of render state), so it can't swap a hook-using
+component for a hookless one under the same key.
+
 ### Parallax
 
 `render/parallax.tsx`'s `useCameraX()` is a slow autonomous horizontal drift
@@ -898,3 +1033,37 @@ the transform math or the composition by eye any other way.
   individually-gated colors) — mitigated instead via one deliberately
   low-weight "chase" variant per species plus Fishdex "seen" tracking, not a
   second unlock system.
+
+### Sprite mode's ground is not a sprite
+
+`SpriteSubstrate` used to stretch `sand-patch.png` across the whole canvas
+width. **Open that asset before ever considering going back**: it is a small
+rounded _oval patch_ of sand carrying eight big painted pebble blobs — a
+decorative piece you scatter, not a floor. Pulled edge to edge it blew those
+eight blobs into huge evenly-spaced dark ellipses, smeared the grain
+horizontally (421px of art across an 844px canvas), and stretched its oval
+silhouette into a lens. One small sprite pretending to be a whole seabed, and
+it was the single most artificial-looking thing in the scene.
+
+The ground is procedural again — the same `core/sksl/substrate.ts` shader the
+2D theme uses (gradient + per-pixel grain + sparse grit specks), which is
+resolution-independent, never stretches, and costs one draw call. Sprite mode
+only overrides the palette (warmer and lighter, sampled from `scene.png`) and
+runs grain/speckle higher, because the painted art it sits under has visible
+texture everywhere and a smooth floor under it read as the odd one out.
+
+Two details carry most of the realism, and both are cheap:
+
+- **The top edge undulates** (`useSandPath` — two sine terms at
+  incommensurate frequencies, so the wobble never visibly repeats and needs no
+  rng). A substrate meeting the water on a perfectly straight horizontal rule
+  reads as two stacked rectangles. Amplitude is capped under the smallest
+  `LAYER_SINK_PX` so a trough can never expose the foot of a piece resting on
+  the line.
+- **A seam shadow** fades down from that edge into the sand, clipped to the
+  same path so it follows the surface rather than cutting across it. It is
+  what makes the water look like it is sitting _on_ the floor.
+
+`sandPatch` stays in the manifest as a placeable decor piece, which is what it
+was always meant to be. `scripts/aquarium-preview.ts` duplicates all of these
+constants (a Node script cannot import the `.tsx`) — keep the two in sync.

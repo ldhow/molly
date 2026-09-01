@@ -11,7 +11,7 @@
 // you've switched to 3D."
 import type { ViewStyle } from "react-native";
 
-import { AquariumCanvas } from "@/shared/aquarium";
+import { AquariumCanvas, type SpriteSceneTheme } from "@/shared/aquarium";
 import { isMollyTankFish, type AnyTankFish } from "@/shared/lib/tank-fish";
 import { useRenderModeStore } from "@/shared/store/render-mode-store";
 
@@ -25,9 +25,30 @@ interface Props {
   background?: "full" | "plain";
   /** 2D-only — forwarded to `AquariumCanvas`. */
   shrinkToTankScale?: boolean;
+  /** 2D-only — forwarded to `AquariumCanvas`. The Decor Store's items are
+   *  sprite-mode-only and have no 3D counterpart, same as non-molly creatures. */
+  userScape?: SpriteSceneTheme | null;
+  /** 2D-only — forwarded to `AquariumCanvas`. See its doc: composes this
+   *  device's own landscape-shaped scene with a drag-to-pan camera instead
+   *  of squeezing to fit a portrait viewport. The 3D renderer draws its own
+   *  full scene regardless of viewport shape, so this is a no-op there. */
+  pannable?: boolean;
+  /** 2D-only — forwarded to `AquariumCanvas`. Draws a selection outline
+   *  around the matching placed item (the Decorate screen's "which item is
+   *  selected" frame). No 3D counterpart, same as `userScape`. */
+  highlightId?: string | null;
 }
 
-export function TankView({ fish, mode, style, background, shrinkToTankScale }: Props) {
+export function TankView({
+  fish,
+  mode,
+  style,
+  background,
+  shrinkToTankScale,
+  userScape,
+  pannable,
+  highlightId,
+}: Props) {
   const renderMode = useRenderModeStore((s) => s.renderMode);
   if (renderMode === "3d") {
     return <TankCanvas3D fish={fish.filter(isMollyTankFish)} mode={mode} style={style} />;
@@ -39,6 +60,9 @@ export function TankView({ fish, mode, style, background, shrinkToTankScale }: P
       style={style}
       background={background}
       shrinkToTankScale={shrinkToTankScale}
+      userScape={userScape}
+      pannable={pannable}
+      highlightId={highlightId}
     />
   );
 }

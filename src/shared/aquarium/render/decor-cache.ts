@@ -6,14 +6,19 @@
 import { Skia } from "@shopify/react-native-skia";
 
 import { bakeBytes, bakeNodes, createBakeLru, type BakedArt } from "@/shared/aquarium/core/bake";
+import {
+  DECOR_BUDGET_BYTES,
+  DECOR_DPR_BY_LAYER,
+  DECOR_PAD,
+} from "@/shared/aquarium/core/decor-budget";
 import { inflateBox } from "@/shared/aquarium/core/ir";
 
 import { GENERATORS, type PlacedPiece } from "../scene/compose";
 
-const BUDGET_BYTES = 12 * 1024 * 1024;
-const lru = createBakeLru(BUDGET_BYTES);
-const DECOR_DPR = 2;
-const DECOR_PAD = 6;
+// Budget/DPR/pad live in `core/decor-budget.ts` so `verify-aquarium.ts` can
+// check a theme's working set against the SAME numbers the app enforces —
+// this module can't be imported under Node (the Skia root import above).
+const lru = createBakeLru(DECOR_BUDGET_BYTES);
 
 export function getCachedDecor(piece: PlacedPiece): BakedArt | null {
   const hit = lru.get(piece.bakeKey);
@@ -29,7 +34,8 @@ export function getCachedDecor(piece: PlacedPiece): BakedArt | null {
     mirror: piece.mirror,
   });
   const bounds = inflateBox(generated.bbox, DECOR_PAD);
-  const baked = bakeNodes(Skia, generated.nodes, bounds, DECOR_DPR);
-  if (baked) lru.set(piece.bakeKey, baked, bakeBytes(bounds, DECOR_DPR));
+  const dpr = DECOR_DPR_BY_LAYER[piece.layer];
+  const baked = bakeNodes(Skia, generated.nodes, bounds, dpr);
+  if (baked) lru.set(piece.bakeKey, baked, bakeBytes(bounds, dpr));
   return baked;
 }

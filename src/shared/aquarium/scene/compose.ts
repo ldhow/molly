@@ -109,7 +109,10 @@ export function composeScene(
     const generator = GENERATORS[placement.species];
     const scale = placement.scale * sizeFactor;
     let worldX = placement.xFraction * canvasWidth;
-    let worldY = substrateY;
+    // `yLift` scales with the decor, not the canvas — a lifted far-layer
+    // piece has to keep its offset proportional to its own size or the bank
+    // it forms detaches from the sand line on a short canvas.
+    let worldY = substrateY - (placement.yLift ?? 0) * sizeFactor;
     let attachTo: Anchor | undefined;
 
     if (placement.attachToId) {

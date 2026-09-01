@@ -10,8 +10,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { loadSkiaNode } from "./lib/skia-node";
-import { bakeNodes } from "@/shared/aquarium/core/bake";
-import { boxContainsBox } from "@/shared/aquarium/core/ir";
+import { bakeBytes, bakeNodes } from "@/shared/aquarium/core/bake";
+import {
+  DECOR_BUDGET_BYTES,
+  DECOR_DPR_BY_LAYER,
+  DECOR_PAD,
+} from "@/shared/aquarium/core/decor-budget";
+import { boxContainsBox, inflateBox } from "@/shared/aquarium/core/ir";
 import type { Box, Node } from "@/shared/aquarium/core/ir";
 import { getWarpEffect, WARP_UNIFORM_KEYS } from "@/shared/aquarium/core/sksl/warp";
 import { bodyDepthAt, buildFishAnatomy } from "@/shared/aquarium/fish/anatomy";
@@ -36,8 +41,9 @@ import { countershadeStops, finTipAlpha } from "@/shared/aquarium/core/shading";
 import { composeSpriteScene, type PlacedSprite } from "@/shared/aquarium/scene/compose-sprites";
 import { composeScene, GENERATORS, type PlacedPiece } from "@/shared/aquarium/scene/compose";
 import { SCENE_SPRITES } from "@/shared/aquarium/scene/sprites/sprite-manifest";
-import { SPRITE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
+import { SPRITE_SCAPE_FILLED } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
 import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
+import { BACKDROP_SEED_MIN, BACKDROP_VARIANTS } from "@/shared/aquarium/scene/backdrop";
 import {
   CAUDAL_FIN_AMP_MAX,
   finSecondaryInjectivityBudget,
@@ -697,6 +703,74 @@ async function main() {
         `${scene.pieces.length} pieces`,
       );
 
+      // 8b. Decor bake working set — ALL FOUR layers, so this has to run
+      // before the mid/front filters below. `render/decor-cache.ts` bakes
+      // SYNCHRONOUSLY inside render and evicts by LRU, so a theme whose
+      // distinct `bakeKey`s don't all fit in the budget re-bakes evicted
+      // pieces EVERY FRAME — a permanent frame-rate cliff with no visible
+      // artifact, exactly the class of regression only a headless check
+      // catches. Summed per bakeKey, not per piece: `bakeKey` excludes
+      // `worldX`, so many placements share one texture, and that sharing is
+      // what `scene/backdrop.ts`'s literal-scale variant pool exists to buy.
+      const bytesByKey = new Map<string, number>();
+      for (const piece of scene.pieces) {
+        if (bytesByKey.has(piece.bakeKey)) continue;
+        const attachTo =
+          piece.attachAngleDeg !== undefined
+            ? { x: 0, y: 0, angleDeg: piece.attachAngleDeg }
+            : undefined;
+        const generated = GENERATORS[piece.species]({
+          seed: piece.seed,
+          scale: piece.scale,
+          attachTo,
+          mirror: piece.mirror,
+        });
+        bytesByKey.set(
+          piece.bakeKey,
+          bakeBytes(inflateBox(generated.bbox, DECOR_PAD), DECOR_DPR_BY_LAYER[piece.layer]),
+        );
+      }
+      const workingSet = [...bytesByKey.values()].reduce((a, b) => a + b, 0);
+      const MB = (n: number) => `${(n / 1048576).toFixed(2)}MB`;
+      // Margin, not a bare fit: the LRU is a module singleton shared across
+      // canvas sizes, so a rotation transiently holds both sizes' key sets
+      // and only settles once the old ones age out.
+      check(
+        `${w}x${h}: decor working set fits the bake budget with 25% margin`,
+        workingSet <= DECOR_BUDGET_BYTES * 0.75,
+        `${MB(workingSet)} of ${MB(DECOR_BUDGET_BYTES)} across ${bytesByKey.size} bakes / ${scene.pieces.length} pieces`,
+      );
+
+      // One runaway piece can eat the budget on its own (kelp is ~1MB at the
+      // scales this theme places it at), and it shows up here long before the
+      // total does — so name the worst offender, don't only sum.
+      let worstKey = "";
+      let worstBytes = 0;
+      for (const [key, bytes] of bytesByKey) {
+        if (bytes > worstBytes) {
+          worstBytes = bytes;
+          worstKey = key;
+        }
+      }
+      check(
+        `${w}x${h}: no single decor bake exceeds 1.5MB`,
+        worstBytes <= 1.5 * 1024 * 1024,
+        `${worstKey} = ${MB(worstBytes)}`,
+      );
+
+      // The sharing itself, checked directly. If a refactor ever puts
+      // `worldX` back into `bakeKey`, or `backdrop.ts` starts COMPUTING
+      // scales instead of copying pool literals, the fill's bake count
+      // tracks its placement count and the total above blows — this says
+      // WHY in one line instead of leaving the next reader to bisect it.
+      const fill = scene.pieces.filter((p) => p.seed >= BACKDROP_SEED_MIN);
+      const fillKeys = new Set(fill.map((p) => p.bakeKey));
+      check(
+        `${w}x${h}: backdrop fill collapses its placements onto a bounded pool`,
+        fill.length > 0 && fillKeys.size <= BACKDROP_VARIANTS && fill.length >= fillKeys.size * 1.5,
+        `${fill.length} placements -> ${fillKeys.size} bakes (pool ${BACKDROP_VARIANTS})`,
+      );
+
       // Back- and far-layer decor doesn't count toward any of these — both
       // read as background, not an obstacle (same exemption the old
       // back-only check made, extended to `far` when that layer was added).
@@ -838,7 +912,7 @@ async function main() {
         [844, 390],
       ] as const) {
         const substrateY = h - 60;
-        const spriteScene = composeSpriteScene(SPRITE_SCAPE, w, h, substrateY);
+        const spriteScene = composeSpriteScene(SPRITE_SCAPE_FILLED, w, h, substrateY);
         const midFront = spriteScene.pieces.filter((p) => p.layer === "mid" || p.layer === "front");
         const occAll = spriteOccupancyRaster(Skia, midFront, w, substrateY);
         const meanOcc = occAll.length ? occAll.reduce((a, b) => a + b, 0) / occAll.length : 0;

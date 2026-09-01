@@ -57,8 +57,14 @@ export const generateVallisneria: Generator = ({ seed, scale }) => {
 
   for (let i = 0; i < bladeCount; i++) {
     const height = (D.heightMin + rng() * D.heightRange) * scale;
-    const lean = (i - (bladeCount - 1) / 2) * D.leanBase + (rng() - 0.5) * D.leanJitter;
-    const curve = (rng() - 0.5) * D.curveRange;
+    // `lean`/`curve` scale WITH the plant. They used not to, which made
+    // `scale` change the silhouette rather than the size: a small clump
+    // splayed while a large one went rigid, because its sideways excursion
+    // stayed at a few px while its height doubled. That's what turned a tall
+    // `scene/backdrop.ts` canopy clump into a picket fence of parallel
+    // needles instead of a spray of ribbons.
+    const lean = ((i - (bladeCount - 1) / 2) * D.leanBase + (rng() - 0.5) * D.leanJitter) * scale;
+    const curve = (rng() - 0.5) * D.curveRange * scale;
     const baseX = (i - (bladeCount - 1) / 2) * D.bladeSpacing * scale;
     const spine: XY[] = [
       { x: baseX, y: 0 },
@@ -67,7 +73,11 @@ export const generateVallisneria: Generator = ({ seed, scale }) => {
       { x: baseX + lean + curve * 1.4, y: -height },
     ];
     const width = (D.widthMin + rng() * D.widthRange) * scale;
-    const widthAt = (t: number) => width * (1 - t * 0.85);
+    // Tapers to 30% of base width, not to a vanishing point. A vallisneria
+    // blade is a RIBBON with a rounded tip — at 0.85 the top third of a tall
+    // blade thinned below a pixel and dropped out of the silhouette, which
+    // is the other half of why a scaled-up clump read as bare stalks.
+    const widthAt = (t: number) => width * (1 - t * 0.7);
     const d = ribbonPath(spine, widthAt);
     const color = BLADE_COLORS[i % BLADE_COLORS.length];
     // Vallisneria is authored upright in world space — light applies directly.

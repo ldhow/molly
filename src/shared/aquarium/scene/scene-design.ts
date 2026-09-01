@@ -43,12 +43,24 @@ export interface DriftwoodDesign {
   heightRange: number;
   baseWidthMin: number;
   baseWidthRange: number;
-  /** Degrees, mostly upward (0 = +x/right, -90 = straight up). `mirror` flips which way a piece leans, not this. */
+  /** Degrees (0 = +x/right, -90 = straight up). Deliberately well short of vertical — aquarium wood sprawls low across the substrate; near -90 it reads as a bonsai. `mirror` flips which way a piece sweeps, not this. */
   headingBase: number;
   headingRange: number;
   /** Organic per-segment wander, degrees. */
   wanderDeg: number;
   trunkSegments: number;
+  /** Near-horizontal roots flaring from the base, alternating sides, so the piece meets the sand at several points instead of balancing on one. */
+  rootCountMin: number;
+  rootCountRange: number;
+  /** Degrees off horizontal — small, so roots hug the substrate. */
+  rootHeadingBase: number;
+  rootHeadingRange: number;
+  /** Root length as a fraction of trunk height. */
+  rootLenMin: number;
+  rootLenRange: number;
+  /** Root base width as a fraction of the trunk's. */
+  rootWidthFactor: number;
+  rootSegments: number;
   branchCountMin: number;
   branchCountRange: number;
   /** Fraction along the trunk spine where a branch forks off. */
@@ -346,8 +358,14 @@ export interface SceneDesign {
   layers: {
     opacityFar: number;
     opacityBack: number;
+    /** Interpolated between back/mid — only the Decor Store's extra depth tiers ever use this (see `scene/types.ts`'s `SceneLayer` doc). */
+    opacityBackMid: number;
     opacityMid: number;
+    /** Interpolated between mid/front — decor-tier only, see `opacityBackMid`. */
+    opacityFrontMid: number;
     opacityFront: number;
+    /** Same as front — decor-tier only, see `opacityBackMid`. */
+    opacityFrontMost: number;
     /** How far a swaying piece leans with the shared tank current, on top of its own faster individual flutter. */
     currentLean: number;
     /** Autonomous horizontal drift camera — px at `parallaxFront` (factor 1). */
@@ -356,8 +374,14 @@ export interface SceneDesign {
     /** Per-layer fraction of `parallaxAmplitude` actually applied — smaller for farther layers. */
     parallaxFar: number;
     parallaxBack: number;
+    /** Interpolated between back/mid — decor-tier only, see `opacityBackMid`. */
+    parallaxBackMid: number;
     parallaxMid: number;
+    /** Interpolated between mid/front — decor-tier only, see `opacityBackMid`. */
+    parallaxFrontMid: number;
     parallaxFront: number;
+    /** Same as front — decor-tier only, see `opacityBackMid`. */
+    parallaxFrontMost: number;
   };
 }
 
@@ -372,25 +396,33 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       knotCountRange: 2,
       knotRadiusMin: 2.2,
       knotRadiusRange: 1.6,
-      contactShadowRadius: 1.1,
+      contactShadowRadius: 1.3,
       contactShadowStrength: 0.32,
-      heightMin: 150,
-      heightRange: 90,
+      heightMin: 118,
+      heightRange: 72,
       baseWidthMin: 15,
       baseWidthRange: 7,
-      headingBase: -70,
-      headingRange: 30,
-      wanderDeg: 22,
+      headingBase: -42,
+      headingRange: 38,
+      wanderDeg: 26,
       trunkSegments: 6,
-      branchCountMin: 2,
+      rootCountMin: 2,
+      rootCountRange: 2,
+      rootHeadingBase: 6,
+      rootHeadingRange: 20,
+      rootLenMin: 0.26,
+      rootLenRange: 0.26,
+      rootWidthFactor: 0.55,
+      rootSegments: 3,
+      branchCountMin: 3,
       branchCountRange: 2,
-      forkTMin: 0.35,
-      forkTRange: 0.45,
-      forkAngleMin: 35,
-      forkAngleRange: 35,
-      branchLenMin: 0.35,
+      forkTMin: 0.3,
+      forkTRange: 0.5,
+      forkAngleMin: 30,
+      forkAngleRange: 40,
+      branchLenMin: 0.32,
       branchLenRange: 0.3,
-      branchWidthFactor: 0.4,
+      branchWidthFactor: 0.36,
       branchSegments: 4,
       lowAnchorT: 0.15,
       lowAnchorAngleBase: -100,
@@ -423,16 +455,19 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       color1: "#3a854b",
       color2: "#2f723f",
       color3: "#439a5b",
-      bladeCountMin: 4,
-      bladeCountRange: 3,
+      bladeCountMin: 5,
+      bladeCountRange: 4,
       heightMin: 180,
       heightRange: 140,
-      leanBase: 4,
-      leanJitter: 6,
-      curveRange: 26,
+      leanBase: 5,
+      leanJitter: 7,
+      curveRange: 32,
       bladeSpacing: 5,
-      widthMin: 2.2,
-      widthRange: 1.2,
+      // Blades are RIBBONS, not wires. At 2.2 a clump scaled up for the
+      // background canopy came out ~100:1 — thinner than any real vallisneria
+      // and thin enough to alias away against the water.
+      widthMin: 3.2,
+      widthRange: 1.8,
       swayHeightFactor: 90,
     },
     stemBush: {
@@ -495,16 +530,21 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       color1: "#183e29",
       color2: "#113221",
       color3: "#1e4932",
-      frondCountMin: 3,
-      frondCountRange: 2,
-      heightMin: 560,
-      heightRange: 260,
-      leanMin: 14,
-      leanRange: 30,
-      curveMin: 10,
-      curveRange: 26,
-      widthMin: 26,
-      widthRange: 14,
+      // Six-ish fronds, not three. At three, a clump this tall reads as a
+      // few flat dark PLANKS rather than planting — the fronds are ~20:1
+      // aspect and never overlap, so nothing tells you it's a mass. More
+      // fronds at a slightly greater lean/curve spread is what turns it back
+      // into a silhouette you read as foliage.
+      frondCountMin: 5,
+      frondCountRange: 3,
+      heightMin: 430,
+      heightRange: 180,
+      leanMin: 16,
+      leanRange: 36,
+      curveMin: 12,
+      curveRange: 30,
+      widthMin: 20,
+      widthRange: 12,
       swayHeightFactor: 150,
     },
     bloom: {
@@ -616,14 +656,20 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
   layers: {
     opacityFar: 0.45,
     opacityBack: 0.7,
+    opacityBackMid: 0.85,
     opacityMid: 1,
+    opacityFrontMid: 1,
     opacityFront: 1,
+    opacityFrontMost: 1,
     currentLean: 0.05,
     parallaxAmplitude: 14,
     parallaxPeriodSec: 48,
     parallaxFar: 0.15,
     parallaxBack: 0.35,
+    parallaxBackMid: 0.5,
     parallaxMid: 0.65,
+    parallaxFrontMid: 0.825,
     parallaxFront: 1,
+    parallaxFrontMost: 1,
   },
 };

@@ -40,7 +40,7 @@ import {
   type Transforms3d,
   type Uniforms,
 } from "@shopify/react-native-skia";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { PixelRatio } from "react-native";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
@@ -183,8 +183,9 @@ export interface CreatureLayerProps {
 }
 
 /** Mirrors `fish-layer.tsx`'s `AQUARIUM_FISH_SCALE` — kept as a separate constant so a future per-renderer tuning divergence doesn't require touching the fish file. */
-const AQUARIUM_CREATURE_SCALE = 0.6;
-const MAX_RENDER_SCALE_TANK = 1.2 * AQUARIUM_CREATURE_SCALE;
+const AQUARIUM_CREATURE_SCALE = 0.4;
+/** Pinned at the 0.48 equivalent rather than derived from the shrink above — see `fish-layer.tsx`'s `MAX_RENDER_SCALE_TANK` for why the two are deliberately decoupled. */
+const MAX_RENDER_SCALE_TANK = 1.2 * 0.48;
 const MAX_RENDER_SCALE_CENTER = 1.2;
 const EDGE_ON_MIN_WIDTH = 0.3;
 const PERSPECTIVE_RATIO = 2.2;
@@ -505,9 +506,12 @@ function rectOf(baked: BakedArt) {
  * hooks (swim engine / crawl engine / none) — and because `speciesId` and
  * `status` are fixed for the life of a given `key`, so no mount ever flips
  * between them mid-animation.
+ *
+ * `memo`'d for the same reason (and under the same stable-props guarantee) as
+ * `fish-layer.tsx`'s `FishLayer` — see its doc comment.
  */
-export function CreatureLayer(props: CreatureLayerProps) {
+export const CreatureLayer = memo(function CreatureLayer(props: CreatureLayerProps) {
   if (props.status === "dead") return <DeadCreature {...props} />;
   if (getSpeciesDef(props.speciesId).locomotion === "crawl") return <CrawlingCreature {...props} />;
   return <SwimmingCreature {...props} />;
-}
+});

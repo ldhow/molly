@@ -2,14 +2,16 @@
 // (`src/shared/aquarium/scene/themes/nature-scape-sprites.ts`) for the
 // Sprites tab's Placements section — same idea as `placement-patch.ts` for
 // the procedural theme's `nature-scape.ts`, but keyed by ARRAY INDEX rather
-// than a `seed` field: `SpritePlacement` (`scene/compose-sprites.ts`) has no
-// unique id of its own (a sprite piece isn't generated from a seed, it's a
-// fixed PNG), so position in the array is the only stable handle available
-// without changing that type. This is fine for in-session editing (the
-// array's read once at boot and never reordered underneath the tool) but
-// means a hand-edit to `nature-scape-sprites.ts` that reorders/adds/removes
-// placements between "open the tool" and "save" would misapply — same
-// caveat any index-keyed diff has.
+// than a `seed` field: `SpritePlacement` (`scene/compose-sprites.ts`) has an
+// `id` field, but it's optional and the authored theme never sets it, so
+// position in the array is still this tool's only stable handle. (`id` exists
+// for the Decor Store's user-placed items, which DO set it — see that field's
+// doc comment — but this tool only ever edits the authored theme.) This is
+// fine for in-session editing (the array's read once at boot and never
+// reordered underneath the tool) but means a hand-edit to
+// `nature-scape-sprites.ts` that reorders/adds/removes placements between
+// "open the tool" and "save" would misapply — same caveat any index-keyed
+// diff has.
 //
 // Adding a new placement IS supported (`insertSpritePlacements`, appends
 // literal entries just before the array's closing `]`) — sprite placements

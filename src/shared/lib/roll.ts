@@ -48,3 +48,31 @@ export function unlockHint(rule: UnlockRule): string {
       return `Reach a ${rule.days}-day focus streak — or a special event`;
   }
 }
+
+/**
+ * Minimum session length a rarity tier requires to be STARTED — layered on
+ * top of `UnlockRule` (which gates whether the axis is unlocked at all).
+ * Once unlocked, a colour/species still can't be picked for a session shorter
+ * than this — it's what makes a long focus session worth more than a short
+ * one on the sell side (`shared/economy/pricing.ts`), separately from
+ * whatever the roll produces. Every value is one of
+ * `session/constants/index.ts`'s `DURATION_PRESETS_MINUTES`, so the hint
+ * always names a duration the picker can actually select.
+ */
+export const MIN_MINUTES_BY_TIER: Record<RarityTier, number> = {
+  common: 0,
+  uncommon: 15,
+  rare: 30,
+  epic: 60,
+  legendary: 120,
+};
+
+export function minMinutesFor(rarity: Rarity): number {
+  return MIN_MINUTES_BY_TIER[rarity.tier];
+}
+
+/** Human-readable duration requirement — "" for common (no requirement to state). */
+export function durationHint(rarity: Rarity): string {
+  const minutes = minMinutesFor(rarity);
+  return minutes > 0 ? `Needs a ${minutes}-minute session` : "";
+}

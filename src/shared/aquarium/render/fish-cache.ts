@@ -17,6 +17,8 @@ import {
 } from "@/shared/aquarium/fish/bake-fish";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
 
+import { bakedImageSource, type BakedImageSource } from "./baked-uri";
+
 const BUDGET_BYTES = 24 * 1024 * 1024;
 const lru = createBakeLru(BUDGET_BYTES);
 
@@ -37,4 +39,35 @@ export function getCachedFishSilhouette(traits: FishTraits, dpr: number): BakedA
   const baked = bakeFishSilhouette(Skia, traits, dpr);
   if (baked) lru.set(key, baked, bakeBytes(baked.bounds, dpr));
   return baked;
+}
+
+/** Identity of an encoded fish preview. Exported so a caller can check the cache (`peekBakedSource`) before committing to the bake+encode behind it. */
+export function fishSourceKey(traits: FishTraits, stage: LifeStage, dpr: number): string {
+  return `fish|${fishBakeKey(traits, stage)}|${dpr.toFixed(2)}`;
+}
+
+/** Namespaced apart from `fishSourceKey` — the two bake-key vocabularies are different but share one URI cache. */
+export function fishSilhouetteSourceKey(traits: FishTraits, dpr: number): string {
+  return `fishsil|${fishSilhouetteBakeKey(traits)}|${dpr.toFixed(2)}`;
+}
+
+/** The same bake as `getCachedFish`, encoded for a plain `<Image>` — see `baked-uri.ts` for why a static tile shouldn't own a Skia `<Canvas>`. */
+export function getCachedFishSource(
+  traits: FishTraits,
+  stage: LifeStage,
+  dpr: number,
+): BakedImageSource | null {
+  const baked = getCachedFish(traits, stage, dpr);
+  if (!baked) return null;
+  return bakedImageSource(fishSourceKey(traits, stage, dpr), baked);
+}
+
+/** `getCachedFishSilhouette`'s encoded twin. */
+export function getCachedFishSilhouetteSource(
+  traits: FishTraits,
+  dpr: number,
+): BakedImageSource | null {
+  const baked = getCachedFishSilhouette(traits, dpr);
+  if (!baked) return null;
+  return bakedImageSource(fishSilhouetteSourceKey(traits, dpr), baked);
 }

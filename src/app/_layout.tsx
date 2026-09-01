@@ -38,6 +38,9 @@ export default function RootLayout() {
         <Stack.Screen name="session" options={{ gestureEnabled: false, animation: "fade" }} />
         <Stack.Screen name="holding-tank" options={{ animation: "slide_from_right" }} />
         <Stack.Screen name="tank-preview" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="decor-store" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="sell-fish" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="decorate" options={{ animation: "slide_from_right" }} />
       </Stack>
       <StatusBar style="light" />
     </AppProviders>

@@ -22,6 +22,14 @@
 //      tooling without pulling in a native asset resolver).
 //   4. Reference the id from a placement in `themes/nature-scape-sprites.ts`.
 //
+// This record is also the id space `@/shared/decor/catalog.ts` (the Decor
+// Store's priced item list) is keyed against, and `db/schema.ts`'s
+// `decorItems.itemId` stores these ids directly. REMOVING an entry orphans
+// any `decor_items` row that references it — the row survives (nothing here
+// deletes it), the piece just stops rendering, same "skip rather than throw"
+// contract `compose-sprites.ts` already has for an unknown `spriteId`. Add a
+// data migration if you ever need to refund an orphaned purchase.
+//
 // Dependency-free — no React/RN/Skia imports — so Node tooling
 // (aquarium-preview.ts, verify-aquarium.ts) can read it directly.
 
@@ -171,14 +179,6 @@ export const SCENE_SPRITES: Record<string, SceneSprite> = {
     anchorY: 1.0,
     swayHeight: 0,
   },
-  pebble: {
-    file: "assets/images/scene/pebble.png",
-    width: 76,
-    height: 52,
-    anchorX: 0.5,
-    anchorY: 1.0,
-    swayHeight: 0,
-  },
   rockHuge: {
     file: "assets/images/scene/rock-huge.png",
     width: 288,
@@ -210,14 +210,6 @@ export const SCENE_SPRITES: Record<string, SceneSprite> = {
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 60,
-  },
-  pebbleBrown: {
-    file: "assets/images/scene/pebble-brown.png",
-    width: 62,
-    height: 43,
-    anchorX: 0.5,
-    anchorY: 1.0,
-    swayHeight: 0,
   },
 };
 

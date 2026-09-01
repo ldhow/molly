@@ -6,11 +6,33 @@ import { getSpeciesDef } from "@/shared/creature/catalog";
 import { resolveCreature } from "@/shared/creature/resolve";
 import { stageForProgress } from "@/shared/fish/life-stage";
 import type { LifeStage } from "@/shared/fish/types";
-import { useNow } from "@/shared/hooks/use-now";
-import { useSessionsQuery } from "@/shared/hooks/use-sessions-query";
-import { classifyFish } from "@/shared/lib/tank-membership";
+import { classifyFish, isSold } from "@/shared/lib/tank-membership";
 import { seedFromString } from "@/shared/lib/seed";
 import type { AnyTankFish } from "@/shared/lib/tank-fish";
+
+import { useNow } from "./use-now";
+import { useSessionsQuery } from "./use-sessions-query";
+
+/**
+ * Caches one `AnyTankFish` per row OBJECT (not per id) — `toTankFish` is a
+ * pure function of the row's own fields, so as long as the row reference is
+ * unchanged (true for every fish except the one a mutation actually touched;
+ * see `use-sellable-fish.ts`'s `entryFor`, the same pattern for the Sell Fish
+ * list), reusing the cached object here keeps it referentially stable across
+ * a mutation. `resolveCreature`/`traitsOfRow` build a fresh object on every
+ * call, so without this, selling (or ending) ONE session would hand every
+ * OTHER tank fish a brand-new `traits` object each time — recomputing fin
+ * anatomy and defeating downstream memoization in `FishLayer`/`Fish3D` for
+ * fish that didn't actually change, on every unrelated sessions mutation.
+ */
+const tankFishCache = new WeakMap<SessionRow, AnyTankFish>();
+function tankFishFor(row: SessionRow): AnyTankFish {
+  const cached = tankFishCache.get(row);
+  if (cached) return cached;
+  const fish = toTankFish(row);
+  tankFishCache.set(row, fish);
+  return fish;
+}
 
 /**
  * Every finished session is a fish: completed → alive, failed/abandoned →
@@ -25,10 +47,13 @@ export function useOwnedFish() {
   return useMemo(() => {
     const all = rows ?? [];
     const { inTank, holding } = classifyFish(all, now);
+    // Sold fish are gone — excluded from both counts, same as they're
+    // excluded from `inTank`/`holding` (`classifyFish`).
+    const owned = all.filter((r) => !isSold(r));
     return {
-      fish: inTank.map(toTankFish),
-      totalCount: all.length,
-      aliveCount: all.filter((r) => r.outcome === "completed").length,
+      fish: inTank.map(tankFishFor),
+      totalCount: owned.length,
+      aliveCount: owned.filter((r) => r.outcome === "completed").length,
       holdingCount: holding.length,
       isLoading,
     };

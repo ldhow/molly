@@ -8,6 +8,7 @@
 import { focusManager, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, type PropsWithChildren } from "react";
 import { AppState, type AppStateStatus } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { setNotifier, type NotifierFn } from "@/shared/lib/notifier";
 
@@ -44,5 +45,9 @@ function useAppStateFocus() {
 export function AppProviders({ children }: PropsWithChildren) {
   useAppStateFocus();
 
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </GestureHandlerRootView>
+  );
 }

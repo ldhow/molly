@@ -28,8 +28,12 @@ export const generateCabomba: Generator = ({ seed, scale }) => {
 
   for (let i = 0; i < stalkCount; i++) {
     const height = (DESIGN.heightMin + rng() * DESIGN.heightRange) * scale;
-    const lean = (i - (stalkCount - 1) / 2) * DESIGN.leanBase + (rng() - 0.5) * DESIGN.leanJitter;
-    const curve = (rng() - 0.5) * DESIGN.curveRange;
+    // Scaled, so the silhouette is scale-invariant — see the identical note
+    // in `plants.ts`'s `generateVallisneria` for why an unscaled lean turns a
+    // large clump into a rigid picket fence.
+    const lean =
+      ((i - (stalkCount - 1) / 2) * DESIGN.leanBase + (rng() - 0.5) * DESIGN.leanJitter) * scale;
+    const curve = (rng() - 0.5) * DESIGN.curveRange * scale;
     const baseX = (i - (stalkCount - 1) / 2) * DESIGN.stalkSpacing * scale;
     const spine: XY[] = [
       { x: baseX, y: 0 },

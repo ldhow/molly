@@ -20,6 +20,7 @@
 // "clear centre" and asymmetry rules above so they can't drift back to a
 // centred, symmetric layout without a failing check.
 
+import { BACKDROP_FILL } from "../backdrop";
 import type { SceneTheme } from "../types";
 
 export const NATURE_SCAPE: SceneTheme = {
@@ -31,8 +32,6 @@ export const NATURE_SCAPE: SceneTheme = {
     // kelp/stone echoes of the back-layer edge decor, just enough mass for
     // the parallax drift to actually read as depth. Exempt from the
     // composition invariants exactly like `back` — see verify-aquarium.ts.
-    { species: "kelp", layer: "far", xFraction: 0.04, scale: 0.7, seed: 501 },
-    { species: "kelp", layer: "far", xFraction: 0.94, scale: 0.65, seed: 503, mirror: true },
     { species: "seiryuStone", layer: "far", xFraction: 0.06, scale: 0.6, seed: 505 },
     { species: "seiryuStone", layer: "far", xFraction: 0.92, scale: 0.55, seed: 507 },
 
@@ -40,18 +39,35 @@ export const NATURE_SCAPE: SceneTheme = {
     // slope up toward the back/edges), framed by tall grass descending in
     // height toward the open centre.
     //
-    // Kelp goes FIRST (before the grass) so it sits furthest back — it's a
-    // dark silhouette wall framing both edges and reaching much higher into
-    // frame than the vallisneria in front of it, which is what gives the
-    // scene a top-to-bottom sense of depth rather than a band of planting
-    // along the floor. The right-hand clump is `mirror: true` so it leans
-    // inward toward the centre instead of off-canvas (the same directional
-    // fix `driftwood` needed — see this theme's header).
-    { species: "kelp", layer: "back", xFraction: 0.015, scale: 1.25, seed: 301 },
-    { species: "kelp", layer: "back", xFraction: 0.075, scale: 1.0, seed: 303 },
-    { species: "kelp", layer: "back", xFraction: 0.965, scale: 1.15, seed: 305, mirror: true },
+    // KELP IS GONE FROM THIS THEME (the generator still exists; nothing
+    // places it). It was three back clumps plus two far ones, framing both
+    // edges as a dark silhouette wall. Two problems, and they compounded:
+    // at ~20:1 aspect with three non-overlapping fronds and a blunt flat
+    // top, a clump read as flat dark PLANKS rather than foliage; and at
+    // ~1MB per bake it was the single most expensive species in the tree,
+    // eating a third of `render/decor-cache.ts`'s 12MB budget for the worst
+    // art in the scene. `scene/backdrop.ts`'s canopy pass now supplies the
+    // tall edge mass — as real planting, at a fraction of the bytes. Bring
+    // kelp back only if its silhouette gets rebuilt first.
     { species: "substrateMound", layer: "back", xFraction: 0.14, scale: 1.5, seed: 101 },
     { species: "substrateMound", layer: "back", xFraction: 0.88, scale: 1.1, seed: 103 },
+
+    // Procedural backdrop fill (`scene/backdrop.ts`): the far and back layers
+    // across the FULL canvas width, so the tank reads as a planted scape
+    // rather than two clumps of edge decor around empty water. Confined to
+    // far/back, which `verify-aquarium.ts` exempts from the composition
+    // invariants — so it cannot disturb any of the curation below.
+    //
+    // Spread as an IDENTIFIER on purpose. `scripts/lib/placement-patch.ts`
+    // brace-scans this array for `{...}` literals keyed by a UNIQUE `seed`,
+    // and the fill deliberately REUSES seeds across many placements (that
+    // reuse is what bounds its bake count — see backdrop.ts's rule 2). A
+    // spread of an identifier has no braces, so the scanner never sees it.
+    // Inlining the pieces, or generating them with an inline
+    // `Array.from(...).map(() => ({...}))`, would both confuse the scanner
+    // AND fill the Scene tab with undraggable ghosts. Tune the fill by
+    // editing backdrop.ts's pools, not by dragging.
+    ...BACKDROP_FILL,
     { species: "vallisneria", layer: "back", xFraction: 0.03, scale: 1.3, seed: 11 },
     { species: "vallisneria", layer: "back", xFraction: 0.09, scale: 1.15, seed: 23 },
     { species: "vallisneria", layer: "back", xFraction: 0.16, scale: 0.95, seed: 25 },
@@ -63,58 +79,24 @@ export const NATURE_SCAPE: SceneTheme = {
     { species: "sword", layer: "front", xFraction: 0.65, scale: 0.95, seed: 83 },
     { species: "stemBush", layer: "back", xFraction: 0.83, scale: 0.85, seed: 73 },
 
-    // Mid layer: the driftwood centerpiece (left, dominant) with anubias
-    // mounted on its branches, plus a smaller mirrored echo on the right so
-    // the two sides read as related but asymmetric, not a mirrored pair.
-    // { species: "driftwood", layer: "mid", xFraction: 0.17, scale: 1.35, seed: 3, id: "wood1" },
-    {
-      species: "anubias",
-      layer: "mid",
-      xFraction: 0.17,
-      scale: 1.05,
-      seed: 5,
-      attachToId: "wood1",
-      anchorIndex: 0,
-    },
-    {
-      species: "anubias",
-      layer: "mid",
-      xFraction: 0.17,
-      scale: 0.8,
-      seed: 7,
-      attachToId: "wood1",
-      anchorIndex: 1,
-    },
-    {
-      species: "anubias",
-      layer: "mid",
-      xFraction: 0.17,
-      scale: 0.92,
-      seed: 9,
-      attachToId: "wood1",
-      anchorIndex: 2,
-    },
+    // Mid layer: the driftwood centerpiece (left, dominant), plus a smaller
+    // mirrored echo on the right so the two sides read as related but
+    // asymmetric, not a mirrored pair. This used to carry anubias mounted on
+    // the branches via `attachToId` — removed directly on request ("bỏ lá ra
+    // khỏi đá, lũa"); the wood stands bare now, same as the stone below.
+    { species: "driftwood", layer: "mid", xFraction: 0.19, scale: 1.35, seed: 3, id: "wood1" },
     // Oyaishi (the dominant stone in a Japanese-style layout) beside the
     // wood; a smaller fukuishi companion stone lower and further back.
     { species: "seiryuStone", layer: "mid", xFraction: 0.24, scale: 1.25, seed: 13 },
     { species: "seiryuStone", layer: "mid", xFraction: 0.1, scale: 0.72, seed: 15 },
-    // {
-    //   species: "driftwood",
-    //   layer: "mid",
-    //   xFraction: 0.9,
-    //   scale: 0.85,
-    //   seed: 33,
-    //   id: "wood2",
-    //   mirror: true,
-    // },
     {
-      species: "anubias",
+      species: "driftwood",
       layer: "mid",
       xFraction: 0.9,
-      scale: 0.9,
-      seed: 35,
-      attachToId: "wood2",
-      anchorIndex: 0,
+      scale: 0.85,
+      seed: 33,
+      id: "wood2",
+      mirror: true,
     },
     { species: "seiryuStone", layer: "mid", xFraction: 0.79, scale: 0.9, seed: 19 },
 
@@ -129,9 +111,9 @@ export const NATURE_SCAPE: SceneTheme = {
     // `gen/bloom.ts`), enough to break up an otherwise all-teal palette
     // without adding mass to the composition. Both sit outside the swim
     // lane (0.32-0.72) so they never crowd the fish.
-    // { species: "bloom", layer: "front", xFraction: 0.12, scale: 1.0, seed: 401 },
-    // { species: "bloom", layer: "front", xFraction: 0.85, scale: 0.82, seed: 403 },
-    // { species: "bloom", layer: "mid", xFraction: 0.24, scale: 0.7, seed: 405 },
+    { species: "bloom", layer: "front", xFraction: 0.12, scale: 1.0, seed: 401 },
+    { species: "bloom", layer: "front", xFraction: 0.85, scale: 0.82, seed: 403 },
+    { species: "bloom", layer: "mid", xFraction: 0.24, scale: 0.7, seed: 405 },
 
     // Carpet: low ground-cover texture at the swim lane's edges, kept short
     // enough (`CarpetDesign.heightMax`) that it never competes with the
@@ -140,6 +122,6 @@ export const NATURE_SCAPE: SceneTheme = {
     { species: "carpet", layer: "front", xFraction: 0.74, scale: 0.8, seed: 603 },
     // Rotala: a warm red-stem accent on the right, breaking up the all-green
     // planting the way the reference photo's ludwigia clump does.
-    // { species: "rotala", layer: "mid", xFraction: 0.78, scale: 0.75, seed: 611 },
+    { species: "rotala", layer: "mid", xFraction: 0.78, scale: 0.75, seed: 611 },
   ],
 };

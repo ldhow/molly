@@ -28,10 +28,8 @@ export const SPRITE_SOURCES: Record<SpriteId, number> = {
   leafyClump: require("@/assets/images/scene/leafy-clump.png"),
   grassTuft: require("@/assets/images/scene/grass-tuft.png"),
   sandPatch: require("@/assets/images/scene/sand-patch.png"),
-  pebble: require("@/assets/images/scene/pebble.png"),
   rockHuge: require("@/assets/images/scene/rock-huge.png"),
   rockSmall: require("@/assets/images/scene/rock-small.png"),
   leafyBush: require("@/assets/images/scene/leafy-bush.png"),
   grassSpiky: require("@/assets/images/scene/grass-spiky.png"),
-  pebbleBrown: require("@/assets/images/scene/pebble-brown.png"),
 };

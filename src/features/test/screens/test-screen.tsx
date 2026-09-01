@@ -1,14 +1,20 @@
+import { useRouter } from "expo-router";
 import { useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Canvas } from "@shopify/react-native-skia";
 
 import { FishLayer } from "@/shared/aquarium/render/fish-layer";
 import { AquariumWater } from "@/shared/aquarium/render/water";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 import { ScreenContainer } from "@/shared/components/screen-container";
+import { useOwnedFish } from "@/shared/hooks/use-owned-fish";
+import { useSceneArtStore } from "@/shared/store/scene-art-store";
 
+import { useAddDevFishMutation } from "../api/use-add-dev-fish-mutation";
+import { useRemoveDevFishMutation } from "../api/use-remove-dev-fish-mutation";
 import { BreedCard } from "../components/breed-card";
 import { BreedLabPanel } from "../components/breed-lab-panel";
+import { Chip } from "../components/chip";
 import { TraitToggles } from "../components/trait-toggles";
 import { useBreedLab } from "../hooks/use-breed-lab";
 
@@ -31,11 +37,63 @@ const HERO_HEIGHT = 170;
  * paying for animation nobody is looking at.
  */
 export function TestScreen() {
+  const router = useRouter();
   const [heroSize, setHeroSize] = useState({ width: 0, height: 0 });
   const lab = useBreedLab();
+  const { fish } = useOwnedFish();
+  const addDevFish = useAddDevFishMutation();
+  const removeDevFish = useRemoveDevFishMutation();
+  const sceneArtMode = useSceneArtStore((s) => s.sceneArtMode);
+  const setSceneArtMode = useSceneArtStore((s) => s.setSceneArtMode);
 
   return (
     <ScreenContainer>
+      {/*
+        Everything that mutates the real `sessions` table for convenience
+        (fabricate/delete a tank fish) or flips a scene-art A/B toggle used
+        to live inline on the Tank screen, gated behind `__DEV__` there. That
+        put dev-only chrome in the same header a normal user sees the tank
+        through. This screen is itself already `__DEV__`-only (see the tab's
+        `href: __DEV__ ? undefined : null` in `(tabs)/_layout.tsx`), so it's
+        the natural home: the Tank screen now shows only real features, and
+        every fabricate/delete/toggle a developer needs lives in one place.
+      */}
+      <View style={styles.devToolsCard}>
+        <Text style={styles.sectionTitle}>Tank dev tools</Text>
+        <View style={styles.devRow}>
+          <Pressable
+            style={styles.devButton}
+            onPress={() => addDevFish.mutate()}
+            disabled={addDevFish.isPending}
+          >
+            <Text style={styles.devButtonText}>Add a fish</Text>
+          </Pressable>
+          <Pressable
+            style={styles.devButton}
+            onPress={() => removeDevFish.mutate()}
+            disabled={removeDevFish.isPending || fish.length === 0}
+          >
+            <Text style={styles.devButtonText}>Remove a fish</Text>
+          </Pressable>
+          <Pressable style={styles.devButton} onPress={() => router.push("/tank-preview")}>
+            <Text style={styles.devButtonText}>Preview animation</Text>
+          </Pressable>
+        </View>
+        <View style={styles.devRow}>
+          <Text style={styles.hint}>Scene art (2D V2 only):</Text>
+          <Chip
+            label="Procedural"
+            active={sceneArtMode === "procedural"}
+            onPress={() => setSceneArtMode("procedural")}
+          />
+          <Chip
+            label="Sprites"
+            active={sceneArtMode === "sprites"}
+            onPress={() => setSceneArtMode("sprites")}
+          />
+        </View>
+      </View>
+
       <View
         style={styles.hero}
         onLayout={(e) => {
@@ -131,6 +189,30 @@ export function TestScreen() {
 }
 
 const styles = StyleSheet.create({
+  devToolsCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.border,
+    padding: spacing.md,
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  devRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  devButton: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  devButtonText: { color: palette.textFaint, fontSize: 11, fontWeight: "600" },
   hero: {
     height: HERO_HEIGHT,
     borderRadius: radius.md,
