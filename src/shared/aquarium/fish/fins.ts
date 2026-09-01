@@ -69,6 +69,14 @@ export interface FinShape {
   alpha: number;
   rayAlpha: number;
   layer: "behind" | "front";
+  /**
+   * How far the hub sits INSIDE the body, in local units — the same
+   * `FinSpec.sink` the hub was placed with. Exposed because `pivot` alone
+   * is not enough to shade a fin: the membrane gradient has to start where
+   * the fin EMERGES from the flank, not at a hub nobody can see. See
+   * `bake-fish.ts`'s `emergence()`.
+   */
+  sink: number;
 }
 
 export interface FinBuildContext {
@@ -172,6 +180,7 @@ export function buildFin(spec: FinSpec, ctx: FinBuildContext): FinShape {
     alpha: spec.alpha,
     rayAlpha: spec.rayAlpha,
     layer: spec.layer,
+    sink: spec.sink,
   };
 }
 

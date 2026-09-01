@@ -17,6 +17,8 @@ import {
 } from "@/shared/aquarium/creatures/bake-creature";
 import type { CreatureSpeciesId } from "@/shared/aquarium/creatures/bake-placeholder";
 
+import { bakedImageSource, type BakedImageSource } from "./baked-uri";
+
 const BUDGET_BYTES = 12 * 1024 * 1024;
 const lru = createBakeLru(BUDGET_BYTES);
 
@@ -32,4 +34,26 @@ export function getCachedCreature(
   const baked = bakeCreature(Skia, speciesId, variant, dpr, part);
   if (baked) lru.set(key, baked, bakeBytes(baked.bounds, dpr));
   return baked;
+}
+
+/** `fishSourceKey`'s non-molly twin — lets a caller check the cache before committing to the bake+encode behind it. */
+export function creatureSourceKey(
+  speciesId: CreatureSpeciesId,
+  variant: string,
+  dpr: number,
+  part: CreaturePart = "full",
+): string {
+  return `creature|${creatureBakeKey(speciesId, variant, part)}|${dpr.toFixed(2)}`;
+}
+
+/** `getCachedFishSource`'s non-molly twin — the encoded bake a static preview tile shows through a plain `<Image>`. */
+export function getCachedCreatureSource(
+  speciesId: CreatureSpeciesId,
+  variant: string,
+  dpr: number,
+  part: CreaturePart = "full",
+): BakedImageSource | null {
+  const baked = getCachedCreature(speciesId, variant, dpr, part);
+  if (!baked) return null;
+  return bakedImageSource(creatureSourceKey(speciesId, variant, dpr, part), baked);
 }

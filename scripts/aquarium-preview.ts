@@ -22,7 +22,7 @@ import { composeSpriteScene } from "@/shared/aquarium/scene/compose-sprites";
 import { composeScene, GENERATORS } from "@/shared/aquarium/scene/compose";
 import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import { SCENE_SPRITES } from "@/shared/aquarium/scene/sprites/sprite-manifest";
-import { SPRITE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
+import { SPRITE_SCAPE_FILLED } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
 import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
 import { SPECIES_LIST } from "@/shared/creature/catalog";
 import type { SpeciesDef, SpeciesId } from "@/shared/creature/types";
@@ -32,7 +32,12 @@ import type { BodyId, DorsalId, FishTraits, LifeStage, TailId } from "@/shared/f
 import { parseHex } from "@/shared/lib/color";
 import { processTransform } from "@shopify/react-native-skia/src/skia/types/Matrix";
 import type { Matrix4, Transforms3d } from "@shopify/react-native-skia/src/skia/types/Matrix4";
-import { TileMode } from "@shopify/react-native-skia/src/skia/types";
+import {
+  ClipOp,
+  FilterMode,
+  MipmapMode,
+  TileMode,
+} from "@shopify/react-native-skia/src/skia/types";
 
 const OUT_PATH = path.join(__dirname, "..", "src", "docs", "aquarium-preview.html");
 const STAGES: LifeStage[] = ["egg", "fry", "juvenile", "adult"];
@@ -305,7 +310,7 @@ async function main() {
     [844, 390],
   ] as const) {
     const substrateY = h - 60;
-    const spriteScene = composeSpriteScene(SPRITE_SCAPE, w, h, substrateY);
+    const spriteScene = composeSpriteScene(SPRITE_SCAPE_FILLED, w, h, substrateY);
     if (spriteScene.pieces.length === 0) {
       spriteSceneCells.push({
         label: `${w}x${h} — no sprite assets supplied`,
@@ -330,33 +335,63 @@ async function main() {
       ),
     );
     canvas.drawRect(Skia.XYWHRect(0, 0, w, h), waterPaint);
-    // Sprite mode's ground is the painted sand piece itself, stretched to
-    // the canvas width, over a solid base fill (the piece is a rounded oval
-    // clump, not a strip — the fill is what keeps its curved edge from
-    // showing water at the corners) — see `render/sprite-layers.tsx`'s
-    // `SpriteSubstrate`.
-    const sandBasePaint = Skia.Paint();
-    sandBasePaint.setShader(
+    // Sprite mode's ground is the SAME procedural substrate shader the 2D
+    // theme uses, only with a warmer/lighter palette, and clipped to a wavy
+    // top edge. Keep all of this in sync with `render/sprite-layers.tsx`'s
+    // SPRITE_SAND_* / SAND_SEAM_* / SAND_WAVE_MAX constants. It used to
+    // stretch `sand-patch.png` edge to edge; see that file's
+    // `SpriteSubstrate` doc for why that had to go.
+    const spriteSandHeight = h - substrateY;
+    const SAND_WAVE_MAX = 5;
+    const waveAmp = Math.min(SAND_WAVE_MAX, spriteSandHeight * 0.14);
+    const sandPath = Skia.Path.Make();
+    sandPath.moveTo(0, h);
+    const WAVE_STEPS = 64;
+    for (let i = 0; i <= WAVE_STEPS; i++) {
+      const t = i / WAVE_STEPS;
+      const wave = Math.sin(t * Math.PI * 3.1) * 0.6 + Math.sin(t * Math.PI * 7.7 + 1.7) * 0.4;
+      sandPath.lineTo(w * t, substrateY + wave * waveAmp);
+    }
+    sandPath.lineTo(w, h);
+    sandPath.close();
+
+    canvas.save();
+    canvas.clipPath(sandPath, ClipOp.Intersect, true);
+    if (substrateEffect) {
+      const spriteUniforms: Record<string, number | number[]> = {
+        width: w,
+        height: spriteSandHeight,
+        colorTop: [0.906, 0.843, 0.702],
+        colorBottom: [0.757, 0.663, 0.51],
+        speckleColor: [0.494, 0.416, 0.298],
+        grainStrength: 0.055,
+        speckleDensity: 0.14,
+      };
+      const spriteSandPaint = Skia.Paint();
+      spriteSandPaint.setShader(
+        substrateEffect.makeShader(SUBSTRATE_UNIFORM_KEYS.flatMap((key) => spriteUniforms[key])),
+      );
+      canvas.save();
+      canvas.translate(0, substrateY - SAND_WAVE_MAX);
+      canvas.drawRect(Skia.XYWHRect(0, 0, w, spriteSandHeight + SAND_WAVE_MAX), spriteSandPaint);
+      canvas.restore();
+    }
+    // Sand/water seam shadow — mirrors SAND_SEAM_SHADOW/SAND_SEAM_FRACTION.
+    const seamPaint = Skia.Paint();
+    seamPaint.setShader(
       Skia.Shader.MakeLinearGradient(
-        Skia.Point(0, substrateY),
-        Skia.Point(0, h),
-        [Skia.Color("#efe0ba"), Skia.Color("#cbb887")],
+        Skia.Point(0, substrateY - SAND_WAVE_MAX),
+        Skia.Point(0, substrateY + spriteSandHeight * 0.42),
+        [Skia.Color("rgba(52, 74, 84, 0.34)"), Skia.Color("rgba(52, 74, 84, 0)")],
         [0, 1],
         TileMode.Clamp,
       ),
     );
-    canvas.drawRect(Skia.XYWHRect(0, substrateY, w, h - substrateY), sandBasePaint);
-    const sandSprite = SCENE_SPRITES.sandPatch;
-    const sandPngPath = path.join(__dirname, "..", sandSprite.file);
-    if (fs.existsSync(sandPngPath)) {
-      const sandBytes = fs.readFileSync(sandPngPath);
-      const sandImage = Skia.Image.MakeImageFromEncoded(Skia.Data.fromBytes(sandBytes));
-      if (sandImage) {
-        const sandSrcRect = Skia.XYWHRect(0, 0, sandImage.width(), sandImage.height());
-        const sandDestRect = Skia.XYWHRect(0, substrateY, w, h - substrateY);
-        canvas.drawImageRect(sandImage, sandSrcRect, sandDestRect, Skia.Paint());
-      }
-    }
+    canvas.drawRect(
+      Skia.XYWHRect(0, substrateY - SAND_WAVE_MAX, w, spriteSandHeight * 0.42 + SAND_WAVE_MAX),
+      seamPaint,
+    );
+    canvas.restore();
     for (const piece of spriteScene.pieces) {
       const sprite = SCENE_SPRITES[piece.spriteId];
       const pngPath = path.join(__dirname, "..", sprite.file);

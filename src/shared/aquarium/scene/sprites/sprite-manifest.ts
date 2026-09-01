@@ -22,6 +22,14 @@
 //      tooling without pulling in a native asset resolver).
 //   4. Reference the id from a placement in `themes/nature-scape-sprites.ts`.
 //
+// This record is also the id space `@/shared/decor/catalog.ts` (the Decor
+// Store's priced item list) is keyed against, and `db/schema.ts`'s
+// `decorItems.itemId` stores these ids directly. REMOVING an entry orphans
+// any `decor_items` row that references it — the row survives (nothing here
+// deletes it), the piece just stops rendering, same "skip rather than throw"
+// contract `compose-sprites.ts` already has for an unknown `spriteId`. Add a
+// data migration if you ever need to refund an orphaned purchase.
+//
 // Dependency-free — no React/RN/Skia imports — so Node tooling
 // (aquarium-preview.ts, verify-aquarium.ts) can read it directly.
 
@@ -45,88 +53,88 @@ export const SCENE_SPRITES: Record<string, SceneSprite> = {
   // once seen on device.
   driftwoodLog: {
     file: "assets/images/scene/driftwood-log.png",
-    width: 330,
-    height: 130,
+    width: 320,
+    height: 168,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 0,
   },
   driftwoodBranch: {
     file: "assets/images/scene/driftwood-branch.png",
-    width: 496,
-    height: 271,
+    width: 93,
+    height: 205,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 0,
   },
   driftwoodBranch2: {
     file: "assets/images/scene/driftwood-branch2.png",
-    width: 428,
-    height: 190,
+    width: 78,
+    height: 172,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 0,
   },
   rockA: {
     file: "assets/images/scene/rock-a.png",
-    width: 164,
-    height: 121,
+    width: 295,
+    height: 136,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 0,
   },
   rockB: {
     file: "assets/images/scene/rock-b.png",
-    width: 125,
-    height: 85,
+    width: 248,
+    height: 147,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 0,
   },
   kelp: {
     file: "assets/images/scene/kelp.png",
-    width: 128,
-    height: 257,
+    width: 190,
+    height: 426,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 100,
   },
   tallGrass: {
     file: "assets/images/scene/tall-grass.png",
-    width: 139,
-    height: 214,
+    width: 222,
+    height: 414,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 90,
   },
   rotalaTall: {
     file: "assets/images/scene/rotala-tall.png",
-    width: 171,
-    height: 246,
+    width: 160,
+    height: 341,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 80,
   },
   cabomba: {
     file: "assets/images/scene/cabomba.png",
-    width: 142,
-    height: 213,
+    width: 146,
+    height: 333,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 85,
   },
   anubiasA: {
     file: "assets/images/scene/anubias-a.png",
-    width: 194,
-    height: 211,
+    width: 168,
+    height: 150,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 45,
   },
   anubiasB: {
     file: "assets/images/scene/anubias-b.png",
-    width: 149,
-    height: 181,
+    width: 204,
+    height: 269,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 40,
@@ -149,8 +157,8 @@ export const SCENE_SPRITES: Record<string, SceneSprite> = {
   },
   leafyClump: {
     file: "assets/images/scene/leafy-clump.png",
-    width: 96,
-    height: 96,
+    width: 156,
+    height: 127,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 0,
@@ -171,53 +179,37 @@ export const SCENE_SPRITES: Record<string, SceneSprite> = {
     anchorY: 1.0,
     swayHeight: 0,
   },
-  pebble: {
-    file: "assets/images/scene/pebble.png",
-    width: 76,
-    height: 52,
-    anchorX: 0.5,
-    anchorY: 1.0,
-    swayHeight: 0,
-  },
   rockHuge: {
     file: "assets/images/scene/rock-huge.png",
-    width: 225,
-    height: 159,
+    width: 288,
+    height: 177,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 0,
   },
   rockSmall: {
     file: "assets/images/scene/rock-small.png",
-    width: 70,
-    height: 48,
+    width: 197,
+    height: 147,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 0,
   },
   leafyBush: {
     file: "assets/images/scene/leafy-bush.png",
-    width: 141,
-    height: 104,
+    width: 238,
+    height: 147,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 20,
   },
   grassSpiky: {
     file: "assets/images/scene/grass-spiky.png",
-    width: 156,
-    height: 125,
+    width: 181,
+    height: 167,
     anchorX: 0.5,
     anchorY: 1.0,
     swayHeight: 60,
-  },
-  pebbleBrown: {
-    file: "assets/images/scene/pebble-brown.png",
-    width: 62,
-    height: 43,
-    anchorX: 0.5,
-    anchorY: 1.0,
-    swayHeight: 0,
   },
 };
 

@@ -74,11 +74,36 @@ const TURN_RATE_MIN = 1.5; // rad/s — slower than the shared model's 1.6: a le
 // flip back quickly): the old value took long enough to sweep through
 // edge-on that the arc read as a wide, slow "U" rather than a fish quickly
 // wheeling around. Still a continuous yaw sweep (see the module header on
-// why this isn't a discrete flip), just compressed into a much shorter arc —
-// `TURN_RATE_CEIL` in `scripts/verify-aquarium.ts`'s swim trace is
-// duplicated from this value and must be bumped alongside it.
+// why this isn't a discrete flip), just compressed into a much shorter arc.
+// It is no longer the fastest rate in the module — see TURN_RATE_REVERSE
+// below, which is what `scripts/verify-aquarium.ts`'s `TURN_RATE_CEIL`
+// tracks — this remains only the WALL-proximity ceiling.
 const TURN_RATE_MAX_WALL = 4.4;
 const TURN_RATE_BURST = 3.0;
+/**
+ * Turn rate for a COMMITTED reversal, rad/s. The two rates above are keyed
+ * to wall proximity and swim mode, which means an ordinary mid-tank
+ * about-face — the "lật lại" actually watched most of the time — swept at
+ * `TURN_RATE_MIN` (1.5 rad/s): ~2.1s to cross π, most of it spent edge-on
+ * and near-invisible. That is the "cá lật quá chậm" complaint, and raising
+ * the wall ceiling never fixed it, because a mid-tank turn never reaches
+ * that ceiling (q = 0 away from the glass).
+ *
+ * So the ceiling is driven by HEADING ERROR instead: a small correction
+ * still arcs lazily at the mode/wall rate, while a large one (past
+ * `REVERSE_ERROR_FULL`) whips around at this rate — π in ~0.3s. Still one
+ * continuous, turn-rate-limited yaw sweep and not a discrete flip (see the
+ * module header), just compressed hard enough to read as a fish snapping
+ * around rather than drifting through a wide U.
+ *
+ * `TURN_RATE_CEIL` in `scripts/verify-aquarium.ts`'s swim trace is
+ * duplicated from this value and must be bumped alongside it.
+ */
+const TURN_RATE_REVERSE = 10;
+/** Heading error (rad) below which the reverse rate contributes nothing — routine steering keeps its leisurely arc. */
+const REVERSE_ERROR_MIN = 0.35;
+/** Heading error (rad) at which the reverse rate applies in full. Under a right angle, so a turn commits before the fish is edge-on. */
+const REVERSE_ERROR_FULL = 1.2;
 // Raised from 0.5: a faster accel tau read as a sudden jolt whenever a mode
 // change (esp. into "burst") kicked `target` up — requested directly ("no
 // bơi nhanh đột ngột" / don't swim suddenly fast). 0.9 makes every speed
@@ -102,6 +127,42 @@ const HOVER_JITTER = 20;
  * vertically, not how much of the tank it can explore over time.
  */
 const VERTICAL_WANDER = 50;
+/**
+ * How far from the glass a crossing target sits, in px — see
+ * `crossTargetX`. Deliberately INSIDE `WALL_MARGIN_X`, at 0.8 of it: a
+ * target parked deep in the wall-avoidance band is one the fish can never
+ * reach, because avoidance steers it inward while the target pulls it
+ * outward, and the two fight into a ping-pong at the glass. 0.4 puts the
+ * arrival point just inside that band (q = 0.6, ~31% inward blend), which
+ * is what starts the turn banking BEFORE the flip — safe only because
+ * arrival below also fires on passing the target, so a fish held off its
+ * exact target by avoidance still ends the leg instead of stalling there.
+ */
+const CROSS_MARGIN = WALL_MARGIN_X * 0.4;
+/**
+ * Randomised depth of the far-end arrival zone, as a fraction of box width.
+ * Keeps the shuttle from being metronomic (every fish stopping on the exact
+ * same two lines) without meaningfully shortening the traverse.
+ */
+const CROSS_BAND = 0.06;
+/**
+ * How close to the end (as a fraction of box width) the fish must already
+ * be before a new leg is allowed to double back — see `crossTargetX`.
+ */
+const REVERSE_ZONE = 0.25;
+/**
+ * Max depth change (px) one leg may aim for, replacing a full
+ * `lerp(-Z_MAX, Z_MAX, rand())` — the same reasoning as VERTICAL_WANDER,
+ * for the same reason it now matters. A target at the far side of the depth
+ * box is a heading component the fish must eventually swim off, and once
+ * the x part of the trip is nearly done the remaining vector is pure z:
+ * `yaw` swings to ±π/2, `cos(yaw)` hovers around zero, and the sprite's
+ * facing flips back and forth while the fish makes no horizontal progress —
+ * the "lật liên tục tại 1 điểm" report. Bounded to a wander around the
+ * CURRENT z, depth is a tilt taken during a crossing rather than a
+ * destination that can outvote it.
+ */
+const DEPTH_WANDER = 30;
 export const MAX_DT = 0.064;
 
 /**
@@ -191,8 +252,18 @@ function pickModeDuration(mode: SwimMode, rand: () => number): number {
     // watching a fish drift rather than dart from spot to spot.
     case "glide":
       return lerp(8, 14, rand());
+    // RETUNED once hover actually started running. These numbers were
+    // authored for a mode that, in practice, never lasted: hover's target is
+    // a jitter within HOVER_JITTER (20px) of the fish, the old arrival test
+    // was `hypot(dx, dz) < ARRIVE_RADIUS` (26), so hover retargeted out of
+    // itself within a frame or two. A trace of the shipped build measured it
+    // at 0.3% of elapsed time. Excluding hover from arrival (below) fixed
+    // that bug and, for the first time, let a 3-6s hover run — which
+    // measured 18% of all time and stalls up to 9.4s, i.e. "the fish keeps
+    // stopping for no reason". Short enough now to read as a pause rather
+    // than a freeze; re-measure with the stall trace if you change it.
     case "hover":
-      return lerp(3, 6, rand());
+      return lerp(1.2, 2.6, rand());
     case "burst":
       return lerp(0.5, 0.9, rand());
     default:
@@ -205,13 +276,18 @@ function nextMode(mode: SwimMode, rand: () => number): SwimMode {
   "worklet";
   const r = rand();
   switch (mode) {
+    // Hover's share of ENTRIES is down too, not just its duration — 0.20
+    // from cruise and 0.50 from glide were set when entering hover cost
+    // nothing because it ended immediately. The freed probability goes to
+    // glide, which is the mode that carries the intended "slow, rewarding"
+    // drift while still visibly moving. Burst is unchanged at 0.05.
     case "cruise":
       if (r < 0.35) return "cruise";
-      if (r < 0.75) return "glide";
+      if (r < 0.83) return "glide";
       if (r < 0.95) return "hover";
       return "burst";
     case "glide":
-      return r < 0.5 ? "hover" : "cruise";
+      return r < 0.3 ? "hover" : "cruise";
     case "hover":
       return r < 0.875 ? "cruise" : "burst";
     case "burst":
@@ -228,8 +304,13 @@ function targetSpeed(mode: SwimMode, base: number, beatPhase: number, seedPhase:
       return base * (0.75 + 0.35 * Math.sin(beatPhase * 0.11 + seedPhase));
     case "glide":
       return base * 0.35;
+    // A hovering fish holds station; it does not stop dead. At 0.12 the
+    // sprite was motionless apart from the spine warp, which reads as a
+    // freeze — and because `holdYaw` also pins its heading during hover,
+    // there was no movement of any kind left to see. Enough drift to look
+    // like sculling, still clearly below glide's 0.35.
     case "hover":
-      return base * 0.12;
+      return base * 0.28;
     // Lowered from 2.2x: paired with the raised ACCEL_TAU above, a burst
     // now reads as "a bit quicker" rather than a sudden dash.
     case "burst":
@@ -239,11 +320,46 @@ function targetSpeed(mode: SwimMode, base: number, beatPhase: number, seedPhase:
   }
 }
 
+/**
+ * Horizontal target for a non-hover leg: the far END of the tank from
+ * wherever the fish currently is, so one leg is a full-width traverse and a
+ * turn only happens once it gets there.
+ *
+ * Replaces `lerp(box.minX, box.maxX, rand())` — a uniformly random point,
+ * which lands BEHIND the fish half the time and only ~W/3 away on average.
+ * Paired with arrival-driven retargeting that made the fish reverse every
+ * few seconds wherever it happened to be ("cá bị lật liên tục tại 1 điểm"),
+ * and the faster reverse rate above only made each of those flips more
+ * conspicuous. Picking the opposite end instead means the sign of the
+ * heading changes at the ends of the tank and nowhere else.
+ */
+function crossTargetX(s: V2SwimState, box: V2WanderBox, rand: () => number): number {
+  "worklet";
+  const width = box.maxX - box.minX;
+  // Both bounds scale with the box so a narrow one (the in-session single-
+  // fish view) degrades to "aim at the far side" instead of inverting.
+  const margin = Math.min(CROSS_MARGIN, width * 0.2);
+  const band = Math.min(CROSS_BAND * width, Math.max(0, width - 2 * margin) * 0.5);
+  // Carry on the way the fish is already POINTED whenever there is real
+  // room left that way, rather than picking by which half of the tank it is
+  // standing in. Those agree for a fish that just finished a leg, and
+  // disagree for one the shared current has carried past the middle while
+  // it hovered or glided — where "which half" hands it a target behind its
+  // own nose and it turns around in open water. Measured with the current
+  // on, that case alone was a third of all reversals.
+  const roomAhead = Math.cos(s.yaw) >= 0 ? box.maxX - margin - s.x : s.x - box.minX - margin;
+  const keepGoing = roomAhead > width * REVERSE_ZONE;
+  const goRight = keepGoing === Math.cos(s.yaw) >= 0;
+  const edge = goRight ? box.maxX - margin : box.minX + margin;
+  return clamp(edge + (goRight ? -1 : 1) * band * rand(), box.minX, box.maxX);
+}
+
 function retarget(
   s: V2SwimState,
   box: V2WanderBox,
   rand: () => number,
   nextModeOverride?: SwimMode,
+  keepCrossing: boolean = false,
 ): void {
   "worklet";
   const mode = nextModeOverride ?? nextMode(s.mode, rand);
@@ -254,12 +370,16 @@ function retarget(
     s.targetY = clamp(s.y + (rand() - 0.5) * HOVER_JITTER * 2, box.minY, box.maxY);
     s.targetZ = clamp(s.z + (rand() - 0.5) * HOVER_JITTER * 2, -Z_MAX, Z_MAX);
   } else {
-    s.targetX = lerp(box.minX, box.maxX, rand());
+    // `keepCrossing` = the mode timer expired mid-traverse. Swap the mode
+    // (and with it the speed, depth and vertical wander) but leave `targetX`
+    // alone, so a cruise->glide handover can't abort a crossing halfway and
+    // spin the fish around in open water. Only ARRIVING re-picks an end.
+    s.targetX = keepCrossing ? s.targetX : crossTargetX(s, box, rand);
     // Jittered around the CURRENT y (like hover, just a wider band), not a
     // fresh `lerp(minY, maxY, rand())` — see VERTICAL_WANDER's doc comment.
-    // X keeps roaming the full box; only vertical excursions are capped.
+    // Only vertical excursions are capped; X is the full-width traverse above.
     s.targetY = clamp(s.y + (rand() - 0.5) * VERTICAL_WANDER * 2, box.minY, box.maxY);
-    s.targetZ = lerp(-Z_MAX, Z_MAX, rand());
+    s.targetZ = clamp(s.z + (rand() - 0.5) * DEPTH_WANDER * 2, -Z_MAX, Z_MAX);
   }
 }
 
@@ -344,22 +464,41 @@ export function stepV2Swim(
   // spins the fish in place. Hold the last steered heading instead of
   // chasing it.
   const nearTarget = Math.hypot(s.targetX - s.x, s.targetZ - s.z) < 30;
-  let yawDesired = nearTarget ? s.yaw : yawToTarget;
+  // Hover holds its heading outright, not just inside the `nearTarget`
+  // radius. Its target is a random jitter around the fish's own position, so
+  // it lands BEHIND the fish half the time, and the z part of that jitter
+  // alone can push the distance past the freeze radius — which had a hovering
+  // fish turning around, and back, for a 20px move it did not need to make.
+  // At 0.12x speed it simply idles forward on its existing heading instead.
+  const holdYaw = nearTarget || s.mode === "hover";
+  let yawDesired = holdYaw ? s.yaw : yawToTarget;
 
   if (q > 0) {
     const cx = (box.minX + box.maxX) / 2;
     const inward = Math.atan2(0 - s.z, cx - s.x);
     const w = q * q * 0.85;
     yawDesired = blendAngles(yawDesired, inward, w);
-  } else if (!nearTarget) {
+  } else if (!holdYaw) {
     // Broadside bias — only while clear of the walls; at a wall, facing the
     // glass to turn around IS the good behaviour, so the bias would fight it.
     const broadsideTarget = Math.abs(wrapToPi(yawToTarget)) < Math.PI / 2 ? 0 : Math.PI;
     yawDesired = blendAngles(yawDesired, broadsideTarget, BROADSIDE_BIAS);
   }
 
-  const omega = s.mode === "burst" ? TURN_RATE_BURST : lerp(TURN_RATE_MIN, TURN_RATE_MAX_WALL, q);
   const e = wrapToPi(yawDesired - s.yaw);
+  const omegaBase =
+    s.mode === "burst" ? TURN_RATE_BURST : lerp(TURN_RATE_MIN, TURN_RATE_MAX_WALL, q);
+  // Error-driven ceiling (see TURN_RATE_REVERSE). `Math.max` so the
+  // wall/burst rate is never LOWERED by a small error, only raised by a big
+  // one. The blend rides |e|, which shrinks as the sweep proceeds, so the
+  // fish eases out of the turn instead of overshooting into a jittering
+  // correction.
+  const reverseBlend = clamp(
+    (Math.abs(e) - REVERSE_ERROR_MIN) / (REVERSE_ERROR_FULL - REVERSE_ERROR_MIN),
+    0,
+    1,
+  );
+  const omega = Math.max(omegaBase, lerp(omegaBase, TURN_RATE_REVERSE, reverseBlend));
   const dYaw = clamp(e, -omega * dt, omega * dt);
   s.yaw = wrapToPi(s.yaw + dYaw);
   s.turnRate = approach(s.turnRate, dYaw / dt, dt, TURN_RATE_TAU);
@@ -435,9 +574,30 @@ export function stepV2Swim(
   s.roll = approach(s.roll, rollTarget, dt, ROLL_TAU);
 
   s.modeLeft -= dt;
-  const dist = Math.hypot(s.targetX - s.x, s.targetZ - s.z);
-  if (dist < ARRIVE_RADIUS || s.modeLeft <= 0) {
+  // Arrival is measured on X ALONE, not `hypot(dx, dz)`: a leg IS a
+  // horizontal traverse, and letting an unfinished depth component hold the
+  // leg open past the end of the tank leaves the fish swimming edge-on in
+  // place, waiting on a z it could reach at any x.
+  //
+  // Reaching or PASSING the end counts too, not only landing inside
+  // `ARRIVE_RADIUS` — `crossTargetX` always aims at one end or the other,
+  // so which end is simply which side of centre the target is on. Without
+  // this the radius alone decides, and the fish turns a full radius short of
+  // the end every time (plus however far the wall blend pushed it in).
+  const dxToTarget = s.targetX - s.x;
+  const arrived =
+    Math.abs(dxToTarget) < ARRIVE_RADIUS ||
+    (s.targetX > (box.minX + box.maxX) / 2 ? dxToTarget <= 0 : dxToTarget >= 0);
+  if (arrived && s.mode !== "hover") {
+    // Reached the far end — pick the other one (and a fresh mode).
     retarget(s, box, rand);
+  } else if (s.modeLeft <= 0) {
+    // Hover's target is a few px away by construction, so it is "arrived"
+    // from its first frame; letting arrival retarget it would end every
+    // hover instantly and burn a fresh leg per frame. Hover ends on its
+    // timer only, and any OTHER mode timing out mid-traverse keeps its
+    // crossing (see `keepCrossing`).
+    retarget(s, box, rand, undefined, !arrived);
   }
 
   // Never fully still: floored so the spine warp keeps a faint breathing

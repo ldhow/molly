@@ -8,8 +8,21 @@
 
 import type { Node } from "@/shared/aquarium/core/ir";
 
-/** "far" sits behind "back" — dim distant silhouettes, no fish band, exempt from the composition invariants exactly like "back". */
-export type SceneLayer = "far" | "back" | "mid" | "front";
+/**
+ * "far" sits behind everything else — dim distant silhouettes, no fish
+ * band, exempt from the composition invariants exactly like "back".
+ *
+ * "back" / "mid" / "front" are the three tiers the AUTHORED themes and the
+ * procedural backdrop fill use; "backMid" / "frontMid" / "frontMost" are
+ * three additional depth tiers for user-placed decor (the Decor Store),
+ * giving 6 placeable tiers total instead of 3. They're pure ADDITIONS to
+ * this union, not renames — nothing authored ever needs to reference them,
+ * so `nature-scape.ts`, `nature-scape-sprites.ts`, `backdrop*.ts`, and
+ * `verify-aquarium.ts` needed zero literal changes when these were added.
+ * Draw/parallax/depth order, farthest to nearest: far, back, backMid, mid,
+ * frontMid, front, frontMost.
+ */
+export type SceneLayer = "far" | "back" | "backMid" | "mid" | "frontMid" | "front" | "frontMost";
 
 export type SpeciesId =
   | "driftwood"
@@ -58,10 +71,20 @@ export type Generator = (args: GeneratorArgs) => GeneratedPiece;
 export interface Placement {
   species: SpeciesId;
   layer: SceneLayer;
-  /** Fraction of canvas width/height, [0,1] — origin at the substrate line, y measured upward. */
+  /** Fraction of canvas width — origin at the substrate line, y measured upward. Normally [0,1]; `scene/backdrop.ts` bleeds slightly past both edges so the parallax drift never exposes a seam. */
   xFraction: number;
   scale: number;
   seed: number;
+  /**
+   * Px ABOVE the substrate line (pre-`sizeFactor`) this piece's base sits at
+   * — the far band's receding bank in `scene/backdrop.ts`. Restricted to
+   * `far` by convention: `render/aquarium-canvas.tsx` turns every
+   * back/mid/front piece >=34px tall into a `sim/crawl.ts` climb prop, and a
+   * lifted prop would hand a snail a stem whose base floats off the sand. No
+   * fish band ever occupies `far` (`bandOf`), so its props are collected and
+   * never read.
+   */
+  yLift?: number;
   /** Index into this placement's own generated anchors that a later placement can reference. */
   attachToId?: string;
   /** This placement's own id, so a later one can `attachToId` it. */

@@ -81,6 +81,7 @@ import { composeSpriteScene, type SpriteSceneTheme } from "@/shared/aquarium/sce
 import { composeScene, GENERATORS } from "@/shared/aquarium/scene/compose";
 import { DEFAULT_SCENE_DESIGN, type SceneDesign } from "@/shared/aquarium/scene/scene-design";
 import { SCENE_SPRITES } from "@/shared/aquarium/scene/sprites/sprite-manifest";
+import { SPRITE_BACKDROP_FILL } from "@/shared/aquarium/scene/backdrop-sprites";
 import { SPRITE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
 import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
 import { sandHeightFor } from "@/shared/constants/tank";
@@ -352,9 +353,21 @@ async function renderSpriteScene(
   // tool with no untrusted caller, so a cast at the boundary (rather than
   // runtime validation) matches how every other route in this file already
   // trusts its request body's shape.
+  // `SPRITE_BACKDROP_FILL` goes LAST, not first as it does in
+  // `SPRITE_SCAPE_FILLED`. `composeSpriteScene` derives `PlacedSprite.key`
+  // from array index and this tool's drag mapping keys on it, so anything
+  // prepended would shift every authored index and misapply every drag.
+  // Appended, authored placements keep indices 0..N-1 and `additions` keep
+  // theirs. The only difference from what ships is within-layer overlap
+  // order among back-layer pieces — the fill draws over the authored back
+  // decor here and under it in the app.
   const theme: SpriteSceneTheme = {
     ...SPRITE_SCAPE,
-    placements: [...SPRITE_SCAPE.placements, ...additions] as SpriteSceneTheme["placements"],
+    placements: [
+      ...SPRITE_SCAPE.placements,
+      ...additions,
+      ...SPRITE_BACKDROP_FILL,
+    ] as SpriteSceneTheme["placements"],
   };
 
   const substrateY = height - sandHeightFor(height);

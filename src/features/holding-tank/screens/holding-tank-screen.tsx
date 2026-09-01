@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -13,6 +13,7 @@ import {
 import type { SessionRow } from "@/db/schema";
 import { Button } from "@/shared/components/button";
 import { EmptyState } from "@/shared/components/empty-state";
+import { FishTile } from "@/shared/components/fish-tile";
 import { ScreenContainer } from "@/shared/components/screen-container";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 import { getSpeciesDef } from "@/shared/creature/catalog";
@@ -21,7 +22,6 @@ import { TANK_CAPACITY } from "@/shared/lib/tank-membership";
 
 import { useFishCollection } from "../api/use-fish-collection";
 import { useSwapTankFishMutation } from "../api/use-swap-tank-fish-mutation";
-import { FishTile } from "../components/fish-tile";
 
 export function HoldingTankScreen() {
   const router = useRouter();
@@ -33,35 +33,46 @@ export function HoldingTankScreen() {
 
   const tankFull = inTank.length >= TANK_CAPACITY;
 
-  const onPressHolding = (row: SessionRow) => {
-    if (pickingReplacementFor) return; // mid-pick — only in-tank tiles are actionable
-    if (!tankFull) {
-      swap.mutate({ addId: row.id });
-      return;
-    }
-    setPickingReplacementFor(row.id);
-  };
+  // Stable across renders (a `useCallback` per handler, not a closure built
+  // fresh inside `renderItem` per row) so every `FishTile` in either grid
+  // gets the SAME `onPress` reference — that's what lets `memo(FishTile)`
+  // actually skip re-rendering (and re-drawing its Skia preview) for every
+  // fish except the one just tapped or swapped. See `FishTile`'s doc.
+  const onPressHolding = useCallback(
+    (row: SessionRow) => {
+      if (pickingReplacementFor) return; // mid-pick — only in-tank tiles are actionable
+      if (!tankFull) {
+        swap.mutate({ addId: row.id });
+        return;
+      }
+      setPickingReplacementFor(row.id);
+    },
+    [pickingReplacementFor, tankFull, swap],
+  );
 
-  const onPressInTank = (row: SessionRow) => {
-    if (pickingReplacementFor) {
-      swap.mutate({ addId: pickingReplacementFor, removeId: row.id });
-      setPickingReplacementFor(null);
-      return;
-    }
-    const noun = getSpeciesDef(speciesOfRow(row)).copy.noun;
-    Alert.alert(
-      "Send back to holding tank?",
-      `This ${noun} will leave the tank and move to your Holding Tank.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Send back",
-          style: "destructive",
-          onPress: () => swap.mutate({ removeId: row.id }),
-        },
-      ],
-    );
-  };
+  const onPressInTank = useCallback(
+    (row: SessionRow) => {
+      if (pickingReplacementFor) {
+        swap.mutate({ addId: pickingReplacementFor, removeId: row.id });
+        setPickingReplacementFor(null);
+        return;
+      }
+      const noun = getSpeciesDef(speciesOfRow(row)).copy.noun;
+      Alert.alert(
+        "Send back to holding tank?",
+        `This ${noun} will leave the tank and move to your Holding Tank.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Send back",
+            style: "destructive",
+            onPress: () => swap.mutate({ removeId: row.id }),
+          },
+        ],
+      );
+    },
+    [pickingReplacementFor, swap],
+  );
 
   if (isLoading) return null;
 
@@ -103,7 +114,7 @@ export function HoldingTankScreen() {
             numColumns={numColumns}
             columnWrapperStyle={numColumns > 1 ? styles.column : undefined}
             scrollEnabled={false}
-            renderItem={({ item }) => <FishTile row={item} onPress={() => onPressInTank(item)} />}
+            renderItem={({ item }) => <FishTile row={item} onPress={onPressInTank} />}
           />
         )}
 
@@ -126,7 +137,7 @@ export function HoldingTankScreen() {
               <FishTile
                 row={item}
                 selected={item.id === pickingReplacementFor}
-                onPress={() => onPressHolding(item)}
+                onPress={onPressHolding}
               />
             )}
           />

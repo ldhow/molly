@@ -40,10 +40,15 @@ half4 main(float2 p) {
 
   // God-ray shafts. Each is a soft band leaning with depth, and each drifts
   // horizontally on its own slow phase so the set never reads as a static
-  // striped overlay. Strengthened toward the reference's prominent vertical
-  // light: five shafts of varying width instead of three identical ones,
-  // brighter near the surface and fading with depth (real shafts scatter
-  // out). Still smoothstep-soft — a hard-edged beam looks like a bug.
+  // striped overlay. Five shafts of varying width rather than three
+  // identical ones, brighter near the surface and fading with depth (real
+  // shafts scatter out). Still smoothstep-soft — a hard-edged beam looks
+  // like a bug.
+  //
+  // Deliberately DIMMER than the old marine pass (0.17 -> 0.13): light
+  // through a shallow pond is diffuse, and cathedral-bright shafts pull the
+  // scene back toward the deep-reef look the palette moved away from. See
+  // scene-design.ts's water palette comment.
   float ray = 0.0;
   ray += smoothstep(70.0, 0.0, abs(p.x - width * 0.14 - p.y * 0.13 + sin(time * 0.11) * 16.0)) * 0.9;
   ray += smoothstep(44.0, 0.0, abs(p.x - width * 0.33 - p.y * 0.10 + sin(time * 0.17 + 1.7) * 12.0)) * 0.7;
@@ -51,7 +56,7 @@ half4 main(float2 p) {
   ray += smoothstep(40.0, 0.0, abs(p.x - width * 0.72 - p.y * 0.11 + sin(time * 0.15 + 4.4) * 13.0)) * 0.65;
   ray += smoothstep(64.0, 0.0, abs(p.x - width * 0.89 - p.y * 0.13 + sin(time * 0.13 + 5.6) * 17.0)) * 0.85;
   float rayFade = smoothstep(1.0, 0.12, t);   // strongest at the surface
-  base += ray * 0.17 * rayFade;
+  base += ray * 0.13 * rayFade;
 
   // Suspended dust motes, concentrated inside the shafts (that's the only
   // place you'd actually see them — a mote is visible because light catches

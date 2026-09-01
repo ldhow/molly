@@ -51,7 +51,7 @@ export const SPECIES_DEFS: Record<SpeciesId, SpeciesDef> = {
     emoji: "🐌",
     unlock: { type: "sessionMinutes", minutes: 25 },
     locomotion: "crawl",
-    sizeRatio: 0.55,
+    sizeRatio: 0.68,
     copy: {
       grownVerb: "made it",
       diedVerb: "didn't survive",

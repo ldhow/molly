@@ -29,6 +29,12 @@ This tree imports only:
 - `@/shared/store/scene-art-store.ts` — the procedural/sprites toggle, read
   only by `render/aquarium-canvas.tsx`.
 
+`render/fish-preview.tsx` and `render/creature-preview.tsx` additionally
+import `expo-image`. They show an already-baked texture as a flat thumbnail,
+and a Skia `<Canvas>` there costs a native view plus its own EGL window
+surface per tile — see `render/baked-uri.ts` for why that price is only worth
+paying for the animated tank canvas.
+
 One deliberate exception: `scene/sprites/sprite-sources.ts` imports from
 `@/assets/images/scene/*` (raster PNGs for the "sprites" background art
 mode, see `scene/sprites/sprite-manifest.ts`) — the only file in this tree
@@ -48,13 +54,32 @@ and `render/creature-preview.tsx` (the static per-tile previews used by the
 Holding Tank tile, Fishdex cards, and the home-screen picker), and
 `index.ts`'s exports.
 
+`index.ts` also re-exports `scene/sprites/sprite-manifest.ts`'s `SCENE_SPRITES`/
+`SpriteId` and `sprite-sources.ts`'s `SPRITE_SOURCES` — plain data that was
+already a de facto public contract for Node tooling (`verify-aquarium.ts`,
+`aquarium-design-editor.ts`) before it had a formal export. `@/shared/decor/catalog.ts`
+(the Decor Store's priced item list) is a view over these same ids, and its
+shop tiles need `SPRITE_SOURCES` for thumbnails — re-exporting here, rather
+than having `shared/decor/` reach into `scene/sprites/` directly, keeps this
+tree's boundary a single seam instead of a rule with exceptions. It also
+re-exports the `SpritePlacement`/`SpriteSceneTheme`/`PlacedSprite` types (zero
+runtime cost) and the `composeSpriteScene` function itself so
+`@/shared/decor/scape.ts` can build a theme from owned+placed decor, and the
+Decorate screen can run that same pure composition a second time to hit-test
+"which piece did this tap land on" (tap-to-select on the canvas), without
+either reaching into `scene/compose-sprites.ts` directly.
+
 ## Structure
 
 - `core/` — the IR (`ir.ts`), the one imperative emitter (`emit.ts`), the
-  bake/LRU cache (`bake.ts`), and two low-level toolkits shared by every
+  bake/LRU cache (`bake.ts`), and three low-level toolkits shared by every
   creature module: `pigment-toolkit.ts` (rng seeding, `blobPath` for small
-  decorative blobs, `ribbonAlongPath`) and `limb-chain.ts` (`circleChain`, a
-  tapered chain of overlapping circles for jointed/stalk-like limbs).
+  decorative blobs, `ribbonAlongPath`), `limb-chain.ts` (`circleChain`, a
+  tapered chain of overlapping circles for jointed/stalk-like limbs), and
+  `shading.ts` — the one place light and tone live (`LIGHT_DIR`, the
+  hue-aware `warmLight`/`coolShadow` that replace `lighten`/`darken`,
+  `SPECULAR_TINT`/`RIM_TINT`, the counter-shading ramp), so the fish and the
+  five creatures cannot drift into disagreeing about where the light is.
   `skia-types.ts` is a type-only bridge so the same emitter runs on-device
   and under Node (`scripts/lib/skia-node.ts`, CanvasKit-backed) with no
   second backend to keep in sync.
@@ -71,7 +96,11 @@ Holding Tank tile, Fishdex cards, and the home-screen picker), and
   species without a `case` in that dispatcher yet. See
   `src/docs/aquarium-guide.md`'s "Creatures" section for the full picture.
 - `scene/` — procedural planted-aquarium decor: generators (`gen/`),
-  composition (`compose.ts`), and the authored theme (`themes/`). Its
+  composition (`compose.ts`), the authored theme (`themes/`), and
+  `backdrop.ts` — the seeded far/back fill that covers the full canvas width
+  behind that theme. The fill is confined to `far`/`back` at the type level
+  and draws from a fixed pool of literal-scale variants; both constraints are
+  load-bearing, see its header and the guide. Its
   sprite-mode counterpart lives alongside it: `sprites/` (the PNG manifest +
   RN `require` sources), `compose-sprites.ts`, and
   `themes/nature-scape-sprites.ts` — see `sprites/sprite-manifest.ts`'s

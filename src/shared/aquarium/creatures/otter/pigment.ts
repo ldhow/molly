@@ -5,7 +5,7 @@
 //
 // Dependency-free: no React/RN/Skia imports. Runs under plain Node.
 
-import { darken, lighten } from "@/shared/lib/color";
+import { coolShadow, warmLight } from "@/shared/aquarium/core/shading";
 
 export interface OtterPalette {
   base: string;
@@ -24,11 +24,18 @@ export function otterPaletteFor(variant: string): OtterPalette {
   return PALETTE_BY_VARIANT[variant] ?? PALETTE_BY_VARIANT.river;
 }
 
+/**
+ * `warmLight`/`coolShadow`, not `lighten`/`darken` — the same `t` values, but
+ * hue-aware. `lighten`/`darken` mix toward pure white/black, which moves only
+ * value and washes the fur out; see `core/shading.ts`'s header. Fur is still
+ * light-on-top: this is top-lit shading, NOT the fish's counter-shading, and
+ * the pale belly stays a separate radial patch in `bake-creature.ts`.
+ */
 export function otterSkinPaint(palette: OtterPalette) {
   return {
-    top: lighten(palette.base, 0.12),
+    top: warmLight(palette.base, 0.12),
     mid: palette.base,
-    bottom: darken(palette.base, 0.22),
-    outline: darken(palette.base, 0.55),
+    bottom: coolShadow(palette.base, 0.22),
+    outline: coolShadow(palette.base, 0.55),
   };
 }

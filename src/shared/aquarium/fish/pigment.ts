@@ -595,6 +595,27 @@ const SCALE_COLS = 18;
 const SCALE_ROWS = 8;
 
 /**
+ * How strongly a scale plate reads at depth `v` (0 = top of the back, 1 =
+ * bottom of the belly).
+ *
+ * Placement was already body-relative and correct, but every one of the ~300
+ * arcs was painted at the SAME opacity, which is what turned good geometry
+ * into patterned wallpaper. A scale is only visible where light rakes across
+ * it: strongest on the upper flank under the specular, fading over the dark
+ * dorsal, and near-invisible on the belly, which on a real fish is smooth
+ * silver. This is a light response, so it peaks where `bake-fish.ts` puts the
+ * gloss lobe rather than at the geometric middle of the body.
+ */
+function scaleVisibility(u: number, v: number): number {
+  const weight = Math.max(0, 1 - Math.abs(v - 0.35) / 0.62) ** 1.4;
+  // A fish has no body scales on its snout or operculum — the head is smooth
+  // plate and skin. Rows used to run straight over the face, which put a
+  // scale texture across exactly the area the eye reads as "head".
+  const head = Math.min(1, Math.max(0, (u - 0.2) / 0.16));
+  return (0.25 + 1.15 * weight) * head;
+}
+
+/**
  * Overlapping scale plates (vảy cá) across the trunk — the fish's skin
  * texture.
  *
@@ -663,7 +684,7 @@ export function scalePrimitives(
         return `M ${f(p0.x)} ${f(p0.y)} Q ${f(ctl.x)} ${f(ctl.y)} ${f(p2.x)} ${f(p2.y)}`;
       };
 
-      const contrast = material.patternContrast;
+      const contrast = material.patternContrast * scaleVisibility(u, v);
       children.push({
         kind: "path",
         d: bow(0),

@@ -7,7 +7,7 @@
 
 import type { Node } from "@/shared/aquarium/core/ir";
 import { scatterBlobPrimitives } from "@/shared/aquarium/core/pigment-toolkit";
-import { darken, lighten } from "@/shared/lib/color";
+import { coolShadow, warmLight } from "@/shared/aquarium/core/shading";
 import { makeRng } from "@/shared/lib/rng";
 
 export interface FrogPalette {
@@ -28,12 +28,13 @@ export function frogPaletteFor(variant: string): FrogPalette {
   return PALETTE_BY_VARIANT[variant] ?? PALETTE_BY_VARIANT.leaf;
 }
 
+/** Hue-aware tones — see `core/shading.ts` and the note on `otterSkinPaint`. Top-lit, not counter-shaded. */
 export function frogSkinPaint(palette: FrogPalette) {
   return {
-    top: lighten(palette.base, 0.1),
+    top: warmLight(palette.base, 0.1),
     mid: palette.base,
-    bottom: darken(palette.base, 0.18),
-    outline: darken(palette.base, 0.5),
+    bottom: coolShadow(palette.base, 0.18),
+    outline: coolShadow(palette.base, 0.5),
   };
 }
 

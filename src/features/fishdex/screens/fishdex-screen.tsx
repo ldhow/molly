@@ -13,6 +13,7 @@ import { formatRarity, RARITY_COLORS } from "@/shared/fish/rarity";
 import type { Rarity } from "@/shared/fish/types";
 import { useToggleColorGrantMutation, useUnlocks } from "@/shared/fish/use-unlocks";
 import { useSessionsQuery } from "@/shared/hooks/use-sessions-query";
+import { durationHint } from "@/shared/lib/roll";
 
 import { FishdexCard } from "../components/fishdex-card";
 
@@ -178,6 +179,9 @@ export function FishdexScreen() {
                         </Text>
                       </View>
                     </View>
+                    {unlocked && durationHint(def.rarity) ? (
+                      <Text style={styles.sectionHint}>{durationHint(def.rarity)}</Text>
+                    ) : null}
                     {unlocked
                       ? def.variants.map((variant) => (
                           <View key={variant.id} style={styles.traitRow}>

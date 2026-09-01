@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { CreaturePreview } from "@/shared/aquarium/render/creature-preview";
 import { FishPreview } from "@/shared/aquarium/render/fish-preview";
 import { Button } from "@/shared/components/button";
+import { CoinChip } from "@/shared/components/coin-chip";
 import { ScreenContainer } from "@/shared/components/screen-container";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 import { getSpeciesDef, standardVariant } from "@/shared/creature/catalog";
@@ -16,6 +17,7 @@ import { unlockHint } from "@/shared/fish/unlocks";
 import { useUnlocks } from "@/shared/fish/use-unlocks";
 import { useNow } from "@/shared/hooks/use-now";
 import { useSessionsQuery } from "@/shared/hooks/use-sessions-query";
+import { minMinutesFor } from "@/shared/lib/roll";
 import { computeCurrentStreak } from "@/shared/lib/sessions";
 
 import { DurationPicker } from "../components/duration-picker";
@@ -55,6 +57,12 @@ export function FocusHomeScreen() {
   // body/tail/dorsal already follow (see `creature/catalog.ts`'s header).
   const selectedUnlocked = isMolly ? colorUnlocked : speciesUnlocked;
 
+  // Layered on top of the unlock ladder: a rare pick also needs a long
+  // enough session. Kept separate from `selectedUnlocked` so the copy below
+  // can tell the user which condition they're missing.
+  const requiredMinutes = minMinutesFor(isMolly ? selectedColor.rarity : speciesDef.rarity);
+  const durationOk = minutes >= requiredMinutes;
+
   const startPress = () => {
     const selection: CreatureSelection = isMolly ? { speciesId: "molly", colorId } : { speciesId };
     startSession(selection, minutes);
@@ -68,11 +76,14 @@ export function FocusHomeScreen() {
             <Text style={styles.title}>Molly</Text>
             <Text style={styles.subtitle}>Focus. Let your fish grow.</Text>
           </View>
-          {currentStreak > 0 ? (
-            <View style={styles.streakChip}>
-              <Text style={styles.streakText}>🔥 {currentStreak}d</Text>
-            </View>
-          ) : null}
+          <View style={styles.headerChips}>
+            <CoinChip />
+            {currentStreak > 0 ? (
+              <View style={styles.streakChip}>
+                <Text style={styles.streakText}>🔥 {currentStreak}d</Text>
+              </View>
+            ) : null}
+          </View>
         </View>
 
         <View style={styles.previewCard}>
@@ -132,6 +143,7 @@ export function FocusHomeScreen() {
               {isMolly
                 ? "Body & fins are revealed when your molly grows up 🎲"
                 : `Its coat is revealed when your ${speciesDef.copy.noun} grows up 🎲`}
+              {requiredMinutes > 0 ? ` · needs a ${requiredMinutes}-minute session` : ""}
             </Text>
           ) : null}
         </View>
@@ -144,6 +156,7 @@ export function FocusHomeScreen() {
         >
           {speciesEntries.map(({ def, unlocked }) => {
             const active = def.id === speciesId;
+            const tooShort = unlocked && minutes < minMinutesFor(def.rarity);
             return (
               <Pressable
                 key={def.id}
@@ -159,6 +172,9 @@ export function FocusHomeScreen() {
                 <Text style={[styles.variantLabel, active && styles.variantLabelActive]}>
                   {unlocked ? def.name : "🔒"}
                 </Text>
+                {tooShort ? (
+                  <Text style={styles.variantMinutesBadge}>{minMinutesFor(def.rarity)}m</Text>
+                ) : null}
               </Pressable>
             );
           })}
@@ -174,6 +190,7 @@ export function FocusHomeScreen() {
             >
               {colorEntries.map(({ def, unlocked }) => {
                 const active = def.id === colorId;
+                const tooShort = unlocked && minutes < minMinutesFor(def.rarity);
                 return (
                   <Pressable
                     key={def.id}
@@ -189,6 +206,9 @@ export function FocusHomeScreen() {
                     <Text style={[styles.variantLabel, active && styles.variantLabelActive]}>
                       {unlocked ? def.name : "🔒"}
                     </Text>
+                    {tooShort ? (
+                      <Text style={styles.variantMinutesBadge}>{minMinutesFor(def.rarity)}m</Text>
+                    ) : null}
                   </Pressable>
                 );
               })}
@@ -197,18 +217,23 @@ export function FocusHomeScreen() {
         ) : null}
 
         <Text style={styles.sectionTitle}>Focus for</Text>
-        <DurationPicker minutes={minutes} onChange={setMinutes} />
+        <DurationPicker minutes={minutes} onChange={setMinutes} dimBelow={requiredMinutes} />
 
         <Button
           label={`Start ${minutes} min focus`}
           onPress={startPress}
-          disabled={!selectedUnlocked}
+          disabled={!selectedUnlocked || !durationOk}
           style={styles.startButton}
         />
         {!selectedUnlocked ? (
           <Text style={styles.lockedNote}>
             This {speciesDef.copy.noun} is still locked —{" "}
             {unlockHint(isMolly ? selectedColor.unlock : speciesDef.unlock).toLowerCase()}.
+          </Text>
+        ) : !durationOk ? (
+          <Text style={styles.lockedNote}>
+            {isMolly ? selectedColor.name : speciesDef.name} needs a {requiredMinutes}-minute
+            session — you&apos;ve picked {minutes}.
           </Text>
         ) : (
           <Text style={styles.lockedNote}>
@@ -230,6 +255,7 @@ const styles = StyleSheet.create({
   },
   title: { color: palette.text, fontSize: 32, fontWeight: "800" },
   subtitle: { color: palette.textDim, fontSize: 14, marginTop: 2 },
+  headerChips: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   streakChip: {
     backgroundColor: palette.surface,
     borderColor: palette.border,
@@ -278,6 +304,7 @@ const styles = StyleSheet.create({
   variantDot: { width: 10, height: 10, borderRadius: 5 },
   variantLabel: { color: palette.textDim, fontSize: 14, fontWeight: "600" },
   variantLabelActive: { color: palette.text },
+  variantMinutesBadge: { color: palette.textFaint, fontSize: 10, fontWeight: "700" },
   startButton: { marginTop: spacing.sm },
   lockedNote: {
     color: palette.textFaint,

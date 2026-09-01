@@ -7,7 +7,7 @@
 
 import type { Node, XY } from "@/shared/aquarium/core/ir";
 import { blobPath } from "@/shared/aquarium/core/pigment-toolkit";
-import { darken, lighten } from "@/shared/lib/color";
+import { coolShadow, warmLight } from "@/shared/aquarium/core/shading";
 import { makeRng } from "@/shared/lib/rng";
 
 export interface TurtlePalette {
@@ -38,12 +38,13 @@ export function turtlePaletteFor(variant: string): TurtlePalette {
   return PALETTE_BY_VARIANT[variant] ?? PALETTE_BY_VARIANT.river;
 }
 
+/** Hue-aware tones — see `core/shading.ts` and the note on `otterSkinPaint`. A shell is top-lit, so this ramp stays light-on-top. */
 export function turtleSkinPaint(palette: TurtlePalette) {
   return {
-    top: lighten(palette.shellBase, 0.12),
+    top: warmLight(palette.shellBase, 0.12),
     mid: palette.shellBase,
-    bottom: darken(palette.shellBase, 0.26),
-    outline: darken(palette.shellBase, 0.55),
+    bottom: coolShadow(palette.shellBase, 0.26),
+    outline: coolShadow(palette.shellBase, 0.55),
   };
 }
 
@@ -74,7 +75,7 @@ export function turtleScutePrimitives(
     out.push({
       kind: "path",
       d,
-      paint: { type: "solid", color: darken(palette.scuteColor, 0.35), opacity: 0.4 },
+      paint: { type: "solid", color: coolShadow(palette.scuteColor, 0.35), opacity: 0.4 },
       stroke: { width: 1 },
       blend: "multiply",
       blur: 0.5,

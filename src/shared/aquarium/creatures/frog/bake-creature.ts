@@ -5,6 +5,7 @@
 import { bakeNodes, type BakedArt } from "@/shared/aquarium/core/bake";
 import { inflateBox, type Box, type Node } from "@/shared/aquarium/core/ir";
 import { circleChainNodes } from "@/shared/aquarium/core/limb-chain";
+import { SPECULAR_TINT, tinted } from "@/shared/aquarium/core/shading";
 import type { SkiaApi } from "@/shared/aquarium/core/skia-types";
 import { rgba } from "@/shared/lib/color";
 
@@ -86,9 +87,9 @@ export function buildFrogAquariumSpec(variant: string): { nodes: Node[]; bounds:
       center: { x: -6, y: -12 },
       radius: 20,
       stops: [
-        { offset: 0, color: "rgba(255,255,255,0.24)" },
-        { offset: 0.6, color: "rgba(255,255,255,0.06)" },
-        { offset: 1, color: "rgba(255,255,255,0)" },
+        { offset: 0, color: tinted(SPECULAR_TINT, 0.24) },
+        { offset: 0.6, color: tinted(SPECULAR_TINT, 0.06) },
+        { offset: 1, color: tinted(SPECULAR_TINT, 0) },
       ],
     },
   });

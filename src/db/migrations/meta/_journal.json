@@ -29,6 +29,20 @@
       "when": 1786602934827,
       "tag": "0003_little_thunderball",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788086356231,
+      "tag": "0004_bent_tomorrow_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788267763115,
+      "tag": "0005_lethal_millenium_guard",
+      "breakpoints": true
     }
   ]
 }

@@ -17,22 +17,27 @@ const syncKvStorage = {
 };
 
 /**
- * Which background art the 2D V2 tank draws: the generated decor
- * (`scene/gen/*`, always available) or shipped PNG sprites
- * (`scene/sprites/*`, only as good as the assets dropped into
- * `assets/images/scene/`). A dev-only A/B toggle, not a user-facing
- * preference — see the Tank screen's Scene button (`__DEV__`-gated).
+ * Which background art the 2D V2 tank draws: shipped PNG sprites
+ * (`scene/sprites/*`) — the shipped default, and the only mode the Decor
+ * Store's items render in — or the generated decor (`scene/gen/*`), kept
+ * around as a dev-only A/B comparison behind the Tank screen's Scene button
+ * (`__DEV__`-gated).
  */
 export const useSceneArtStore = create<SceneArtStore>()(
   persist(
     (set) => ({
-      sceneArtMode: "procedural",
+      sceneArtMode: "sprites",
       setSceneArtMode: (mode) => set({ sceneArtMode: mode }),
     }),
     {
       name: "sceneArtMode",
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => syncKvStorage),
+      // v1 defaulted to "procedural" for everyone. v2 makes sprites the real,
+      // shipped renderer (it's what the Decor Store's items draw), so any
+      // device that persisted the old default gets moved onto sprites too —
+      // only an explicit prior choice of "sprites" is left alone either way.
+      migrate: () => ({ sceneArtMode: "sprites" }) as SceneArtStore,
     },
   ),
 );

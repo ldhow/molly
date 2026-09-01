@@ -18,9 +18,10 @@ import type { Generator } from "@/shared/aquarium/scene/types";
 import { lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
-import { ribbonPath, spinePath } from "./ribbon";
+import { ribbonCrossAxis, ribbonPath, spinePath } from "./ribbon";
 
 const DESIGN = DEFAULT_SCENE_DESIGN.species.sword;
+const LIGHT = DEFAULT_SCENE_DESIGN.lighting;
 
 /** A long arching lance leaf: grows outward, then droops in its outer third — the silhouette a straight spade leaf (anubias.ts) doesn't have. */
 function leafSpine(leafLen: number, rad: number, droop: number): XY[] {
@@ -56,17 +57,20 @@ export const generateSwordPlant: Generator = ({ seed, scale }) => {
     const droop = (DESIGN.droopMin + rng() * DESIGN.droopRange) * scale;
     const spine = leafSpine(leafLen, rad, droop);
     const tip = spine[spine.length - 1];
+    const widthAt = (t: number) =>
+      leafWidth * Math.sin(Math.min(1, t * 1.05) * Math.PI) * (1 - t * 0.1);
 
+    // Across the blade, not crown-to-tip. These leaves are authored in world
+    // space (`leafSpine` bakes `rad` into the spine), so the scene light
+    // applies directly — no counter-rotation, unlike anubias/stemBush.
+    const cross = ribbonCrossAxis(spine, widthAt, { x: LIGHT.dirX, y: LIGHT.dirY });
     nodes.push({
       kind: "path",
-      d: ribbonPath(
-        spine,
-        (t) => leafWidth * Math.sin(Math.min(1, t * 1.05) * Math.PI) * (1 - t * 0.1),
-      ),
+      d: ribbonPath(spine, widthAt),
       paint: {
         type: "linear",
-        from: { x: 0, y: 0 },
-        to: tip,
+        from: cross.from,
+        to: cross.to,
         stops: [
           { offset: 0, color: LEAF_DARK },
           { offset: 0.6, color: LEAF_MID },

@@ -18,9 +18,10 @@ import type { Generator } from "@/shared/aquarium/scene/types";
 import { darken, lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
-import { ribbonPath } from "./ribbon";
+import { ribbonCrossAxis, ribbonPath } from "./ribbon";
 
 const DESIGN = DEFAULT_SCENE_DESIGN.species.kelp;
+const LIGHT = DEFAULT_SCENE_DESIGN.lighting;
 
 export const generateKelp: Generator = ({ seed, scale, mirror }) => {
   // Read at call time — see anubias.ts's identical note on why. Dark, cool,
@@ -52,18 +53,29 @@ export const generateKelp: Generator = ({ seed, scale, mirror }) => {
     // Wide at the base, tapering but never to a point — a kelp blade ends
     // bluntly, unlike a grass tip. Broad on purpose — see `KelpDesign.widthMin`'s doc.
     const width = (DESIGN.widthMin + rng() * DESIGN.widthRange) * scale;
-    const d = ribbonPath(spine, (t) => width * (1 - t * 0.55) * (1 + 0.12 * Math.sin(t * 9)));
+    const widthAt = (t: number) => width * (1 - t * 0.55) * (1 + 0.12 * Math.sin(t * 9));
+    const d = ribbonPath(spine, widthAt);
     const color = FROND_COLORS[i % FROND_COLORS.length];
+    // Shade ACROSS the frond, not along it. This used to be a base-to-tip
+    // gradient, which is the wrong axis: a frond's length already reads
+    // through its taper and curve, so a gradient there is invisible, while
+    // its width is what tells you the blade is a curved surface rather than
+    // a cutout. A frond this broad is the piece that most needed it.
+    const cross = ribbonCrossAxis(spine, widthAt, { x: LIGHT.dirX, y: LIGHT.dirY });
     nodes.push({
       kind: "path",
       d,
       paint: {
         type: "linear",
-        from: { x: baseX, y: 0 },
-        to: { x: baseX + lean + curve, y: -height },
+        from: cross.from,
+        to: cross.to,
+        // The base colour sits off-centre (0.62, not 0.5) so the shaded side
+        // occupies more of the blade than the lit side — light falls off
+        // faster than it builds, and an evenly-split blade reads mechanical.
         stops: [
-          { offset: 0, color: darken(color, 0.35) },
-          { offset: 1, color: lighten(color, 0.14) },
+          { offset: 0, color: darken(color, LIGHT.formDarken) },
+          { offset: 0.62, color },
+          { offset: 1, color: lighten(color, LIGHT.formLighten) },
         ],
         opacity: 0.95,
       },

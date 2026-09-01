@@ -26,7 +26,7 @@ import {
   type Transforms3d,
   type Uniforms,
 } from "@shopify/react-native-skia";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { PixelRatio } from "react-native";
 import {
   runOnJS,
@@ -105,10 +105,25 @@ export interface FishLayerProps {
  * Never touch the shared `TANK_FISH_SCALE` constant — the legacy 2D renderer
  * still uses it.
  */
-const AQUARIUM_FISH_SCALE = 0.6;
+const AQUARIUM_FISH_SCALE = 0.4;
 
-/** Upper bound on `scale × AQUARIUM_FISH_SCALE` (or unscaled in center mode) — feeds bake DPR so the largest fish stays crisp without over-baking the common case. */
-const MAX_RENDER_SCALE_TANK = 1.2 * AQUARIUM_FISH_SCALE;
+/**
+ * Upper bound on `scale × AQUARIUM_FISH_SCALE` (or unscaled in center mode) —
+ * feeds bake DPR so the largest fish stays crisp without over-baking the
+ * common case.
+ *
+ * DELIBERATELY NOT derived from `AQUARIUM_FISH_SCALE`. It used to be
+ * `1.2 * AQUARIUM_FISH_SCALE`, which meant shrinking the fish also LOWERED
+ * its bake resolution — the two losses compound, and the eye and fin rays are
+ * the first things to go. Iris brightness, fin-membrane alpha and fin-ray
+ * spacing were all tuned against the old 0.6 (`fish/eyes.ts`,
+ * `core/shading.ts`, and the art-direction section of
+ * `src/docs/aquarium-guide.md`), so at 0.4 the texture is deliberately kept
+ * oversampled relative to its on-screen size to hold that detail together.
+ * Pinned at the 0.48 equivalent: DPR ~1.99 on a 3x screen, versus ~1.66 if it
+ * tracked the shrink.
+ */
+const MAX_RENDER_SCALE_TANK = 1.2 * 0.48;
 const MAX_RENDER_SCALE_CENTER = 1.2;
 
 /**
@@ -261,7 +276,21 @@ function WarpedBody({
   );
 }
 
-export function FishLayer({
+/**
+ * `memo`'d because the tank re-renders on every `["sessions"]` cache write —
+ * selling a fish, finishing a session — and the Tank screen stays mounted
+ * underneath the screens pushed over it, so those writes arrive while this is
+ * off-screen too. Every prop `aquarium-canvas.tsx` passes is either a
+ * primitive or a reference that is stable by construction (`traits` per row
+ * object via `use-owned-fish.ts`'s cache, `bounds` from layout state,
+ * `climbProps` memoised), so an unrelated write now bails out here instead of
+ * re-running anatomy/pivot work for every fish in the tank.
+ *
+ * Note this is `React.memo`, unrelated to the file's `"use no memo"` pragma
+ * (React Compiler) at the top — that opt-out is exactly why the memo has to
+ * be written by hand.
+ */
+export const FishLayer = memo(function FishLayer({
   traits,
   stage,
   status,
@@ -504,4 +533,4 @@ export function FishLayer({
       </Group>
     </Group>
   );
-}
+});

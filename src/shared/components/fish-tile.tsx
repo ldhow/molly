@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import type { SessionRow } from "@/db/schema";
@@ -17,14 +18,28 @@ const PREVIEW_H = 72;
 interface Props {
   row: SessionRow;
   selected?: boolean;
-  onPress: () => void;
+  /** Takes the row rather than being pre-bound, so a caller can pass ONE
+   *  stable (`useCallback`'d) function for an entire list instead of a new
+   *  closure per row per render — see the `memo` note below for why that
+   *  matters. Omit for a non-interactive tile (e.g. the "can't be sold" grid). */
+  onPress?: (row: SessionRow) => void;
 }
 
 /**
- * Static preview card for the Holding Tank grid — see `resolveCreature`'s
- * header for why this can't just call `traitsOfRow`.
+ * Static preview card for a fish grid (Holding Tank, Sell Fish) — see
+ * `resolveCreature`'s header for why this can't just call `traitsOfRow`.
+ *
+ * `memo`'d because its preview is a real Skia `Canvas` (`FishPreview`/
+ * `CreaturePreview`), not a cheap `Image` — re-rendering it is real work even
+ * when the bake itself hits the LRU cache. Every list this appears in reads
+ * from `useSessionsQuery`, and a mutation there only ever changes ONE row's
+ * *reference* (see `use-sell-fish-mutation.ts`'s optimistic update); without
+ * this `memo`, every OTHER tile in the list would still re-render on that
+ * mutation because `renderItem` hands them a freshly-constructed `onPress`
+ * closure each pass. This only pays off if the caller's `onPress` is itself
+ * stable (`useCallback`) — a fresh closure per render defeats it the same way.
  */
-export function FishTile({ row, selected, onPress }: Props) {
+export const FishTile = memo(function FishTile({ row, selected, onPress }: Props) {
   const alive = row.outcome === "completed";
   const resolved = resolveCreature(row);
   const stage: LifeStage = alive ? "adult" : stageForProgress(deathProgress(row));
@@ -35,10 +50,19 @@ export function FishTile({ row, selected, onPress }: Props) {
         getSpeciesDef(resolved.speciesId).name);
 
   return (
-    <Pressable style={[styles.card, selected && styles.selectedCard]} onPress={onPress}>
+    <Pressable
+      style={[styles.card, selected && styles.selectedCard]}
+      onPress={onPress ? () => onPress(row) : undefined}
+      disabled={!onPress}
+    >
       <View style={styles.canvas}>
         {resolved.speciesId === "molly" ? (
-          <FishPreview traits={resolved.traits} stage={stage} width={PREVIEW_W} height={PREVIEW_H} />
+          <FishPreview
+            traits={resolved.traits}
+            stage={stage}
+            width={PREVIEW_W}
+            height={PREVIEW_H}
+          />
         ) : (
           <CreaturePreview
             speciesId={resolved.speciesId}
@@ -57,7 +81,7 @@ export function FishTile({ row, selected, onPress }: Props) {
       </View>
     </Pressable>
   );
-}
+});
 
 /** How far through the planned session the fish got before it died. */
 function deathProgress(row: SessionRow): number {

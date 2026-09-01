@@ -73,6 +73,81 @@ export function ribbonPath(spine: readonly XY[], widthAt: (t: number) => number)
   return d + " Z";
 }
 
+/**
+ * The ribbon's cross-axis at its widest point: the two edge points of the
+ * span perpendicular to the spine, ordered so `from` is the edge facing AWAY
+ * from `light` and `to` is the edge facing into it.
+ *
+ * This is what `ribbonPath` alone can't give you. A blade filled with one
+ * flat colour — or with a gradient running base-to-tip ALONG the spine, which
+ * is what most of the generators did — reads as a paper cutout, because a
+ * real leaf's most obvious shading is ACROSS its width: the edge turned away
+ * from the key light falls off, the edge turned into it catches a highlight.
+ * Feed these two points into a `linear` paint with dark -> base -> light
+ * stops and a flat ribbon gains form for one gradient's cost.
+ *
+ * `light` is a direction the light travels FROM, in local space (+y down, so
+ * a light from above is negative y). Callers should pass the scene-wide value
+ * rather than picking their own — decor lit from inconsistent directions is
+ * worse than decor that is uniformly flat.
+ */
+export function ribbonCrossAxis(
+  spine: readonly XY[],
+  widthAt: (t: number) => number,
+  light: XY,
+): { from: XY; to: XY } {
+  const smooth = catmullRomSample(spine);
+  const n = smooth.length;
+
+  // Widest sample, not the midpoint — taper profiles are rarely symmetric
+  // (kelp is broadest at the base, a lance leaf a third of the way up), and
+  // shading the widest span is what keeps the gradient spanning the shape
+  // instead of running off its narrow end.
+  let bestI = 0;
+  let bestW = -1;
+  for (let i = 0; i < n; i++) {
+    const w = widthAt(i / (n - 1));
+    if (w > bestW) {
+      bestW = w;
+      bestI = i;
+    }
+  }
+
+  const p = smooth[bestI];
+  const prev = smooth[Math.max(0, bestI - 1)];
+  const next = smooth[Math.min(n - 1, bestI + 1)];
+  const dx = next.x - prev.x;
+  const dy = next.y - prev.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const half = bestW / 2;
+
+  const a = { x: p.x + nx * half, y: p.y + ny * half };
+  const b = { x: p.x - nx * half, y: p.y - ny * half };
+  // Whichever edge the normal points toward the light is the lit one. Without
+  // this test a mirrored or steeply-leaning piece gets lit from the wrong
+  // side, which reads worse than no form shading at all.
+  return nx * light.x + ny * light.y > 0 ? { from: b, to: a } : { from: a, to: b };
+}
+
+/**
+ * The scene light re-expressed in the local space of a child drawn inside a
+ * group rotated by `rotateDeg`.
+ *
+ * Generators that author a leaf pointing "up" and then rotate it into place
+ * (anubias, stemBush) must pass this to `ribbonCrossAxis` rather than the raw
+ * scene light — otherwise every leaf is lit from the same side of ITS OWN
+ * geometry, which after rotation means a rosette lit from all directions at
+ * once. That looks like no lighting model at all.
+ */
+export function lightInLocalSpace(light: XY, rotateDeg: number): XY {
+  const r = (-rotateDeg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  return { x: light.x * cos - light.y * sin, y: light.x * sin + light.y * cos };
+}
+
 /** The spine itself as a stroke-friendly path (for a midrib line, etc). */
 export function spinePath(spine: readonly XY[]): string {
   const smooth = catmullRomSample(spine);

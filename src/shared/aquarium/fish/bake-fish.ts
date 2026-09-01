@@ -25,6 +25,18 @@ import {
   type Paint,
   type XY,
 } from "@/shared/aquarium/core/ir";
+import {
+  BODY_KEYLINE,
+  countershadeStops,
+  FIN_MEMBRANE,
+  finTipAlpha,
+  iridescenceBands,
+  keylineColor,
+  LIGHT_DIR,
+  RIM_TINT,
+  SPECULAR_TINT,
+  tinted,
+} from "@/shared/aquarium/core/shading";
 import type { SkiaApi } from "@/shared/aquarium/core/skia-types";
 import { getColorDef } from "@/shared/fish/catalog";
 import type { ColorDef, FishTraits, LifeStage } from "@/shared/fish/types";
@@ -143,13 +155,28 @@ function finMembraneNodes(
    * so it isn't outlined twice at the peduncle.
    */
   strokeD: string | null = fin.d,
+  /**
+   * Drawn between the membrane fill and the rays — the caudal's peduncle
+   * continuation (see `buildFishAquariumSpec`). Inside the group so it
+   * inherits the fin's own alpha and isolation, and UNDER the rays so the
+   * ray structure still reads across the root.
+   */
+  rootBlend: Node | null = null,
 ): Node {
   const children: Node[] = [
     { kind: "path", d: fin.d, paint: membranePaint },
+    ...(rootBlend ? [rootBlend] : []),
+    // Rays carry more of the fin now that the membrane is translucent: at
+    // tank scale the fill alone no longer reads, and the rays are what keep
+    // a see-through fin legible. See `FIN_MEMBRANE.RAY_BOOST`.
     ...fin.rays.map((d): Node => ({
       kind: "path",
       d,
-      paint: { type: "solid", color: rayColor, opacity: fin.rayAlpha },
+      paint: {
+        type: "solid",
+        color: rayColor,
+        opacity: Math.min(1, fin.rayAlpha * FIN_MEMBRANE.RAY_BOOST),
+      },
       stroke: { width: 1 },
       blend: "multiply",
       clip: fin.d,
@@ -172,19 +199,18 @@ function finMembraneNodes(
       },
     },
   ];
-  // Fin keyline — bolder than the old 0.34/1.1/0.9 soft edge so fins read as
-  // drawn shapes matching the body's contour weight, but deliberately
-  // lighter than the body's own line (0.62 vs 0.88, 1.5 vs 2.1): a fin is a
-  // translucent membrane, and an equally heavy outline makes it look like a
-  // solid paddle glued on. `null` skips this node entirely (caudal — see
-  // `strokeD`'s doc comment above).
+  // Fin keyline — now a hint rather than a drawn edge. The membrane itself
+  // carries the shape once it is genuinely translucent; a 0.62-alpha 1.5px
+  // line around a see-through fin re-creates exactly the solid-paddle read
+  // the translucency exists to remove. `null` skips this node entirely
+  // (caudal — see `strokeD`'s doc comment above).
   if (strokeD) {
     children.push({
       kind: "path",
       d: strokeD,
-      paint: { type: "solid", color: outlineColor, opacity: 0.62 },
-      stroke: { width: 1.5 },
-      blur: 0.25,
+      paint: { type: "solid", color: outlineColor, opacity: FIN_MEMBRANE.KEYLINE_ALPHA },
+      stroke: { width: FIN_MEMBRANE.KEYLINE_WIDTH },
+      blur: FIN_MEMBRANE.KEYLINE_BLUR,
     });
   }
   return { kind: "group", children, opacity: fin.alpha, isolate: true };
@@ -215,7 +241,11 @@ export function buildFishAquariumSpec(
   const material = materialFor(def.rarity.tier);
   const seed = traits.patternSeed ?? 0;
   const p = aquaDef.palette;
-  const outlineColor = darken(p.back, 0.45);
+  // Every line on this fish — fin keylines, the gill crease, the eye ring —
+  // shares the body contour's tone so they read as one animal's shading
+  // rather than an ink pass laid over it. `coolShadow` via `keylineColor`,
+  // not `darken`: mixing toward black gave a dead, hueless line.
+  const outlineColor = keylineColor(p.back);
 
   const pigmentGeom: PigmentGeom = {
     d: outlineD,
@@ -233,16 +263,14 @@ export function buildFishAquariumSpec(
   const belly = landmarks.bellyLow.y;
   const px = landmarks.peduncleTop.x;
 
-  // One shared key-light direction ("update 2d fish v2" plan Part E) every
-  // lighting cue below derives its placement from — mostly overhead with a
-  // slight lean toward the nose (x negative, since the nose sits at
-  // negative local x), matching the reference image's own upper-front key
-  // light. Previously each cue (counter-shading axis, gloss position, rim
-  // axis, AO shadow centre) was placed independently and didn't visually
-  // agree on where the light was coming from; this is what makes them read
-  // as one coherent light hitting a volumetric form instead of four
-  // unrelated glows.
-  const LIGHT_DIR = { x: -0.32, y: -0.95 };
+  // Every lighting cue below derives its placement from the one shared
+  // `LIGHT_DIR` ("update 2d fish v2" plan Part E), which now lives in
+  // `core/shading.ts` so the five creature renderers agree with the fish
+  // about where the light comes from. Previously each cue (counter-shading
+  // axis, gloss position, rim axis, AO shadow centre) was placed
+  // independently and didn't visually agree; this is what makes them read as
+  // one coherent light hitting a volumetric form instead of four unrelated
+  // glows.
   const bodyCx = (landmarks.nose.x + px) / 2;
   const bodyCy = (bp + belly) / 2;
 
@@ -252,26 +280,25 @@ export function buildFishAquariumSpec(
   // previous hand-tuned "nose.x + 21 / + 19 / + 20" constants could not do.
   const U_EYE = 0.155;
   const U_GILL = 0.26;
-  const U_BLUSH = 0.2;
   const xAt = (u: number) => landmarks.x0 + u * landmarks.length;
   const topAt = (u: number) => -anatomy.baseTop(u);
-  const botAt = (u: number) => anatomy.baseBottom(u);
   // How much deeper this body is than the standard body's own head — the
   // gill patch's hand-authored shape (proven to look right) scales with it
   // instead of a fixed-size patch looking undersized on balloon's head.
   const gillScale = landmarks.halfHeight / 28.5;
 
+  // A real membrane, not a paddle — see `FIN_MEMBRANE`'s header for why the
+  // root stays nearly opaque, why the hue is deliberately left alone, and
+  // what the tip floor is protecting.
+  const tipAlpha = finTipAlpha(material.finTrail);
   const finPaint = (pivot: XY, tip: XY): Paint => ({
     type: "linear",
     from: pivot,
     to: tip,
     stops: [
-      { offset: 0, color: rgba(darken(p.fin, 0.24), 0.9) },
-      { offset: 0.55, color: rgba(p.fin, 0.8) },
-      // Lighter toward the tip than the old pipeline's 0.9x — now that fins
-      // are large enough to actually read, the translucency is more visible
-      // and more of the point ("dark near the body, lighter at the edges").
-      { offset: 1, color: rgba(p.fin, material.finTrail * 0.75) },
+      { offset: 0, color: rgba(darken(p.fin, 0.24), FIN_MEMBRANE.ROOT_ALPHA) },
+      { offset: 0.55, color: rgba(p.fin, FIN_MEMBRANE.MID_ALPHA) },
+      { offset: 1, color: rgba(p.fin, tipAlpha) },
     ],
   });
   const rayColor = darken(p.finRay, 0.1);
@@ -280,11 +307,31 @@ export function buildFishAquariumSpec(
   // in yet at this stage — `fry` skips every fin but the caudal this way.
   // `mul >= 1` (adult, the common case) reuses `f` unchanged so the output is
   // byte-identical to the pre-stage code path.
+  /**
+   * Where a fin actually leaves the flank: `sink` units along the hub->tip
+   * axis from the buried `pivot`.
+   *
+   * The membrane gradient used to be anchored at `pivot` itself, which for
+   * every sunk fin (dorsal 7, anal 8/6, pelvic 4) put the dark opaque root
+   * stop INSIDE the body where it is covered by the skin fill. The visible
+   * fin therefore started partway along the ramp and read as one flat slab
+   * of colour — the dorsal on the pale varieties looked like a lobe floating
+   * above the back rather than something growing out of it. Anchoring here
+   * gives the visible part of every fin the full dark-root -> translucent-tip
+   * fall-off the membrane design always intended. The caudal and pectorals
+   * have `sink` 0-1, so they are unaffected.
+   */
+  const emergence = (f: FinShape): XY => {
+    const dx = f.tip.x - f.pivot.x;
+    const dy = f.tip.y - f.pivot.y;
+    const len = Math.hypot(dx, dy) || 1;
+    return { x: f.pivot.x + (dx / len) * f.sink, y: f.pivot.y + (dy / len) * f.sink };
+  };
   const fin = (f: FinShape, key: FinKey): Node | null => {
     const mul = finAlphaMul[key];
     if (mul <= 0) return null;
     const scaled = mul >= 1 ? f : { ...f, alpha: f.alpha * mul };
-    return finMembraneNodes(scaled, finPaint(f.pivot, f.tip), rayColor, outlineColor);
+    return finMembraneNodes(scaled, finPaint(emergence(f), f.tip), rayColor, outlineColor);
   };
 
   // The caudal's own root tone: `p.mid` is the body skin gradient's own
@@ -301,10 +348,10 @@ export function buildFishAquariumSpec(
     from: fins.caudal.pivot,
     to: fins.caudal.tip,
     stops: [
-      { offset: 0, color: rgba(p.mid, 1) },
-      { offset: 0.25, color: rgba(darken(p.fin, 0.24), 0.95) },
-      { offset: 0.55, color: rgba(p.fin, 0.8) },
-      { offset: 1, color: rgba(p.fin, material.finTrail * 0.75) },
+      { offset: 0, color: rgba(p.mid, FIN_MEMBRANE.CAUDAL_HUB_ALPHA) },
+      { offset: 0.34, color: rgba(darken(p.fin, 0.24), FIN_MEMBRANE.CAUDAL_ROOT_ALPHA) },
+      { offset: 0.62, color: rgba(p.fin, FIN_MEMBRANE.MID_ALPHA) },
+      { offset: 1, color: rgba(p.fin, tipAlpha) },
     ],
   };
 
@@ -324,7 +371,50 @@ export function buildFishAquariumSpec(
   if (caudalMul > 0) {
     const caudalFin =
       caudalMul >= 1 ? fins.caudal : { ...fins.caudal, alpha: fins.caudal.alpha * caudalMul };
-    nodes.push(finMembraneNodes(caudalFin, caudalPaint, rayColor, outlineColor, null));
+    // THE BODY DOES NOT STOP AT THE PEDUNCLE.
+    //
+    // The body fill carries a VERTICAL counter-shading ramp (dark dorsal ->
+    // silver ventral) right up to the peduncle plane. The caudal's own
+    // gradient runs pivot->tip, so at the root it is one FLAT horizontal
+    // band. Two surfaces meeting along a vertical line, one graded across
+    // that line and one not, read as two pieces glued together at EVERY
+    // height — which is why matching the average tone (the `p.mid` hub stop
+    // above) was never enough on its own, and why the tail still looked
+    // detached once fin translucency made the mismatch easier to see.
+    //
+    // The fix carries the body's own ramp a SHORT way into the tail, on a
+    // slab clipped to the caudal's fill whose alpha blurs out rearward.
+    // `blur` here is MASK blur, so it softens the slab's alpha while the
+    // vertical gradient inside it stays crisp — that is the whole trick.
+    //
+    // REACH IS THE WHOLE BALANCE, and it is easy to get wrong in the
+    // generous direction: a first attempt at 0.4 of the tail with a matching
+    // blur left goldDust's near-black caudal painted gold and zebra's white,
+    // i.e. it fixed the seam by deleting the fin's own colour. This models a
+    // fleshy peduncle stub, nothing more — past it the membrane is the
+    // membrane.
+    const caudalLen = Math.max(1, fins.caudal.tip.x - px);
+    const rootReach = px + caudalLen * 0.12;
+    const rootFront = px - landmarks.halfHeight * 1.2;
+    const rootTop = bp * 1.6;
+    const rootBottom = belly * 1.6;
+    const caudalRootBlend: Node = {
+      kind: "path",
+      d:
+        `M ${F(rootFront)} ${F(rootTop)} L ${F(rootReach)} ${F(rootTop)} ` +
+        `L ${F(rootReach)} ${F(rootBottom)} L ${F(rootFront)} ${F(rootBottom)} Z`,
+      clip: fins.caudal.d,
+      blur: caudalLen * 0.1,
+      paint: {
+        type: "linear",
+        from: { x: 0, y: bp },
+        to: { x: 0, y: belly },
+        stops: countershadeStops(p.back, p.mid, p.belly),
+      },
+    };
+    nodes.push(
+      finMembraneNodes(caudalFin, caudalPaint, rayColor, outlineColor, null, caudalRootBlend),
+    );
   }
   pushIf(nodes, fin(fins.dorsal, "dorsal"));
   pushIf(nodes, fin(fins.anal, "anal"));
@@ -350,11 +440,10 @@ export function buildFishAquariumSpec(
         type: "linear",
         from: { x: 0, y: bp },
         to: { x: 0, y: belly },
-        stops: [
-          { offset: 0, color: p.back },
-          { offset: 0.5, color: p.mid },
-          { offset: 1, color: p.belly },
-        ],
+        // Real counter-shading, not a same-hue value ramp — see
+        // `countershadeStops`. The catalogue's own back/mid/belly still own
+        // the variety's colour; only the ramp's shape changed.
+        stops: countershadeStops(p.back, p.mid, p.belly),
       },
     },
   ];
@@ -368,6 +457,11 @@ export function buildFishAquariumSpec(
           ...patternPrimitives(def.id, aquaDef.pattern, pigmentGeom, material, seed),
           ...(shimmer ? [shimmer.base] : []),
           ...scalePrimitives(def, pigmentGeom, material, outlineD, seed),
+          // Structural colour, over the pigment it competes with. Grouped
+          // with the other "detail" so it fades in with life stage (a fry has
+          // no sheen yet) and stays UNDER the core shadow/AO below, which is
+          // what keeps the sheen from glowing on the fish's shadow side.
+          ...iridescenceBands(outlineD, p.mid, bp, belly),
         ]
       : [];
   pushStaged(skinAlbedo, detailNodes);
@@ -427,9 +521,14 @@ export function buildFishAquariumSpec(
   // reads as a bright core plus a softer surrounding glow, not one uniform
   // ellipse. Both positioned along LIGHT_DIR from the body centre, so they
   // agree with the core shadow above about where the light is.
+  //
+  // `SPECULAR_TINT`, not white: the key light has already been filtered by
+  // the water column before it gets here, and a pure-white highlight over
+  // warm skin is the single clearest "plastic toy" cue. Peak is trimmed to
+  // 0.75x for the same reason — the old value blew out the flank.
   const glossCx = bodyCx + LIGHT_DIR.x * landmarks.halfHeight * 0.75;
   const glossCy = bodyCy + LIGHT_DIR.y * landmarks.halfHeight * 0.75;
-  const glossPeak = Math.min(0.95, material.gloss * 1.5 + material.bloom * 0.35);
+  const glossPeak = Math.min(0.95, material.gloss * 1.5 + material.bloom * 0.35) * 0.75;
   skin.push({
     kind: "path",
     d: outlineD,
@@ -442,9 +541,9 @@ export function buildFishAquariumSpec(
       radius: landmarks.halfHeight * 0.5,
       scale: { x: 2.2, y: 1 },
       stops: [
-        { offset: 0, color: `rgba(255,255,255,${glossPeak.toFixed(2)})` },
-        { offset: 0.55, color: `rgba(255,255,255,${(glossPeak * 0.35).toFixed(2)})` },
-        { offset: 1, color: "rgba(255,255,255,0)" },
+        { offset: 0, color: tinted(SPECULAR_TINT, glossPeak) },
+        { offset: 0.55, color: tinted(SPECULAR_TINT, glossPeak * 0.35) },
+        { offset: 1, color: tinted(SPECULAR_TINT, 0) },
       ],
     },
   });
@@ -460,8 +559,8 @@ export function buildFishAquariumSpec(
       radius: landmarks.halfHeight * 0.16,
       scale: { x: 1.6, y: 1 },
       stops: [
-        { offset: 0, color: `rgba(255,255,255,${Math.min(0.98, glossPeak * 1.35).toFixed(2)})` },
-        { offset: 1, color: "rgba(255,255,255,0)" },
+        { offset: 0, color: tinted(SPECULAR_TINT, Math.min(0.98, glossPeak * 1.35)) },
+        { offset: 1, color: tinted(SPECULAR_TINT, 0) },
       ],
     },
   });
@@ -491,36 +590,100 @@ export function buildFishAquariumSpec(
 
   nodes.push({ kind: "group", children: skin, isolate: true });
 
-  // Gill cover — position tracks the new body via `xAt(U_GILL)`, and the
-  // whole hand-authored leaf shape scales with `gillScale` so it doesn't
-  // look undersized on a deeper head (balloon).
+  // Gill cover. Position tracks the body via `xAt(U_GILL)`, and the
+  // hand-authored leaf shape scales with `gillScale` so it doesn't look
+  // undersized on a deeper head (balloon).
+  //
+  // AN OPERCULUM IS A MARGIN, NOT A PATCH. This used to fill the whole leaf
+  // with flat `#ffffff` at 0.16 — which on a dark variety is a large
+  // relative lift, so black and goldDust wore an obvious hard-edged pale
+  // slab across the cheek. It was the loudest decal left on the fish. On a
+  // real fish the plate is the same skin as the cheek around it; what you
+  // actually see is its REAR MARGIN — a crease, with the plate lifting just
+  // proud of the flank in front of it.
+  //
+  // So: no flat fill. A gradient that is nothing at the front of the plate
+  // and only lifts as it approaches the margin, plus the crease itself,
+  // which now fades out at both ends instead of terminating in hard caps.
   const gx = xAt(U_GILL);
   const gs = gillScale;
+  const marginD = (dx: number) =>
+    `M ${F(gx + dx)} ${F(bp + 7 * gs)} C ${F(gx + dx + 7 * gs)} ${F(bp + 15 * gs)} ` +
+    `${F(gx + dx + 7 * gs)} ${F(6 * gs)} ${F(gx + dx)} ${F(15 * gs)}`;
+  const gillMarginD = marginD(0);
+  /** Vertical fade so the fold has no endpoints — shared by both margin passes. */
+  const marginFade = (color: string, peak: number): Paint => ({
+    type: "linear",
+    from: { x: 0, y: bp + 7 * gs },
+    to: { x: 0, y: 15 * gs },
+    stops: [
+      { offset: 0, color: rgba(color, 0) },
+      { offset: 0.35, color: rgba(color, peak) },
+      { offset: 0.75, color: rgba(color, peak * 0.9) },
+      { offset: 1, color: rgba(color, 0) },
+    ],
+  });
+  const gillPlateD =
+    gillMarginD +
+    ` C ${F(gx - 10 * gs)} ${F(13 * gs)} ${F(gx - 17 * gs)} ${F(4 * gs)} ${F(gx - 18 * gs)} ${F(-4 * gs)} ` +
+    `C ${F(gx - 18 * gs)} ${F(-12 * gs)} ${F(gx - 11 * gs)} ${F(bp + 8 * gs)} ${F(gx)} ${F(bp + 7 * gs)} Z`;
   nodes.push({
     kind: "path",
-    d:
-      `M ${F(gx)} ${F(bp + 7 * gs)} C ${F(gx + 7 * gs)} ${F(bp + 15 * gs)} ${F(gx + 7 * gs)} ${F(6 * gs)} ${F(gx)} ${F(15 * gs)} ` +
-      `C ${F(gx - 10 * gs)} ${F(13 * gs)} ${F(gx - 17 * gs)} ${F(4 * gs)} ${F(gx - 18 * gs)} ${F(-4 * gs)} ` +
-      `C ${F(gx - 18 * gs)} ${F(-12 * gs)} ${F(gx - 11 * gs)} ${F(bp + 8 * gs)} ${F(gx)} ${F(bp + 7 * gs)} Z`,
-    paint: { type: "solid", color: "#ffffff", opacity: 0.16 },
+    d: gillPlateD,
     clip: outlineD,
+    blend: "screen",
+    blur: 1.2,
+    paint: {
+      type: "linear",
+      from: { x: gx - 18 * gs, y: 0 },
+      to: { x: gx + 5 * gs, y: 0 },
+      stops: [
+        { offset: 0, color: tinted(SPECULAR_TINT, 0) },
+        { offset: 0.6, color: tinted(SPECULAR_TINT, 0.03) },
+        { offset: 1, color: tinted(SPECULAR_TINT, 0.13) },
+      ],
+    },
+  });
+  // The fold itself, as TWO passes: the crease's own shadow, and a light
+  // catch on the plate edge just forward of it.
+  //
+  // Both are needed because neither works alone across the palette. The
+  // crease is drawn in the body's keyline tone, which on `black`
+  // (`coolShadow("#000000")`) is black-on-black and vanishes entirely — the
+  // operculum is one of the strongest features of a real fish head, so
+  // losing it is not an acceptable outcome of removing the old pale slab.
+  // The light catch covers exactly that case, and on pale varieties it is
+  // the crease that carries the read instead. A real fold has a shadow on
+  // one side and a lit edge on the other anyway.
+  nodes.push({
+    kind: "path",
+    d: gillMarginD,
+    stroke: { width: 1.3 },
+    blur: 0.5,
+    clip: outlineD,
+    paint: marginFade(outlineColor, 0.5),
   });
   nodes.push({
     kind: "path",
-    d: `M ${F(gx)} ${F(bp + 7 * gs)} C ${F(gx + 7 * gs)} ${F(bp + 15 * gs)} ${F(gx + 7 * gs)} ${F(6 * gs)} ${F(gx)} ${F(15 * gs)}`,
-    paint: { type: "solid", color: outlineColor, opacity: 0.55 },
-    stroke: { width: 1.6 },
-    blur: 0.3,
+    d: marginD(-2 * gs),
+    stroke: { width: 1.5 },
+    blur: 1,
+    blend: "screen",
     clip: outlineD,
+    paint: marginFade(
+      `#${SPECULAR_TINT.map((c) => c.toString(16).padStart(2, "0")).join("")}`,
+      0.2,
+    ),
   });
 
-  // Contour — a BOLD drawn keyline (mascot pass). This deliberately reverses
-  // the earlier "soft, storybook" treatment (0.34 alpha / 1.1 width / 0.9
-  // blur / multiply), which read as a soft shadow rather than a line: a
-  // near-opaque solid stroke at ~2x the width and almost no blur is the
-  // single biggest thing separating the reference's clean illustrated look
-  // from a soft-shaded vector blob. `multiply` is dropped too — it made the
-  // line's darkness depend on whatever it happened to sit over.
+  // Contour — a form edge, NOT an ink outline. The mascot pass had this at
+  // 0.88 alpha / 2.1px / blur 0.15, which was by far the biggest single thing
+  // making the fish read as a sticker: it drew a hard border around an animal
+  // that should just turn away from the light. `BODY_KEYLINE` puts it in the
+  // same weight band the five creature renderers already use (0.6-1.4px), and
+  // `keylineColor` rotates the tone cool instead of mixing toward black, so
+  // the line reads as shaded skin rather than a drawn edge. `multiply` stays
+  // dropped — it made the line's darkness depend on whatever it sat over.
   //
   // Strokes `silhouetteStrokeD`, NOT `outlineD` — the body's own outline
   // still ends in a straight peduncle edge (needed to close the FILL
@@ -532,9 +695,9 @@ export function buildFishAquariumSpec(
   nodes.push({
     kind: "path",
     d: silhouetteStrokeD,
-    paint: { type: "solid", color: outlineColor, opacity: 0.88 },
-    stroke: { width: 2.1 },
-    blur: 0.15,
+    paint: { type: "solid", color: outlineColor, opacity: BODY_KEYLINE.ALPHA },
+    stroke: { width: BODY_KEYLINE.WIDTH },
+    blur: BODY_KEYLINE.BLUR,
   });
   // Rim light (Part E): axis re-derived from LIGHT_DIR instead of the old
   // fixed nose-belly -> peduncle-back diagonal — `from` sits toward the
@@ -551,21 +714,35 @@ export function buildFishAquariumSpec(
     x: bodyCx - LIGHT_DIR.x * bodyHalfLength,
     y: bodyCy - LIGHT_DIR.y * landmarks.halfHeight,
   };
+  //
+  // Strokes and clips `silhouetteStrokeD`, NOT `outlineD` — the same
+  // correction the ink keyline above already had, which this node was simply
+  // never switched over to. `outlineD` closes with a straight peduncle
+  // end-cap, so stroking it painted a bright vertical bar straight across
+  // the tail joint; and because `rimTo` sits toward the rear/shadow side,
+  // the gradient is at MAXIMUM strength exactly there. That bar, running up
+  // from the belly line, was the white seam that made the tail look stuck on
+  // as a separate piece. Clipping to `silhouetteStrokeD` (a closed path
+  // enclosing body AND caudal) additionally lets the rim carry on around the
+  // tail's own margin, which is where light wrapping the silhouette would
+  // really go.
   nodes.push({
     kind: "path",
-    d: outlineD,
+    d: silhouetteStrokeD,
     stroke: { width: 2 },
     blend: "plusLighter",
     blur: 0.8,
-    clip: outlineD,
+    clip: silhouetteStrokeD,
     paint: {
       type: "linear",
       from: rimFrom,
       to: rimTo,
+      // `RIM_TINT` is cooler than the specular: a rim is light that has
+      // wrapped around the silhouette through MORE water than the highlight.
       stops: [
-        { offset: 0, color: "rgba(255,255,255,0)" },
-        { offset: 0.55, color: `rgba(255,255,255,${(material.rim * 0.32).toFixed(2)})` },
-        { offset: 1, color: `rgba(255,255,255,${material.rim})` },
+        { offset: 0, color: tinted(RIM_TINT, 0) },
+        { offset: 0.55, color: tinted(RIM_TINT, material.rim * 0.32 * 0.75) },
+        { offset: 1, color: tinted(RIM_TINT, material.rim * 0.75) },
       ],
     },
   });
@@ -578,46 +755,58 @@ export function buildFishAquariumSpec(
   // pectoral sits on top, not buried behind it.
   pushIf(nodes, fin(fins.pectoralNear, "pectoralNear"));
 
-  // Mouth.
+  // Mouth. A molly's is small, terminal and upturned — it sits at the very
+  // tip of the snout, not as a bar across the middle of it.
+  //
+  // This was two parallel hard strokes (a 1.6px `#000` at 0.5 and a 1.3px
+  // `#fff` at 0.28) that read as a dash with a second dash floating above
+  // it, most obvious on the pale varieties. Now: one shorter line that fades
+  // to nothing at its rear end the way a real mouth line does, in the body's
+  // own keyline tone rather than pure black, plus a much subtler lip catch
+  // confined to the front half where the lip actually turns up into the
+  // light.
   const nx = landmarks.nose.x;
   const ny = landmarks.nose.y;
   nodes.push({
     kind: "path",
-    d: `M ${F(nx + 0.5)} ${F(ny + 3)} C ${F(nx + 3)} ${F(ny + 4.5)} ${F(nx + 6)} ${F(ny + 5.5)} ${F(nx + 9)} ${F(ny + 5.5)}`,
-    paint: { type: "solid", color: "#000000", opacity: 0.5 },
-    stroke: { width: 1.6 },
-    clip: outlineD,
-  });
-  nodes.push({
-    kind: "path",
-    d: `M ${F(nx + 1)} ${F(ny + 1)} C ${F(nx + 4)} ${F(ny + 2)} ${F(nx + 7)} ${F(ny + 2.5)} ${F(nx + 10)} ${F(ny + 2.5)}`,
-    paint: { type: "solid", color: "#ffffff", opacity: 0.28 },
-    stroke: { width: 1.3 },
-    clip: outlineD,
-  });
-
-  // Blush — dialled down (Pondlife pass: cute comes from proportion, not a decal).
-  const blushCx = xAt(U_BLUSH);
-  const blushCy = botAt(U_BLUSH) * 0.1;
-  const blushR = 6.5;
-  nodes.push({
-    kind: "circle",
-    cx: blushCx,
-    cy: blushCy,
-    r: blushR,
-    blur: 1.8,
+    d: `M ${F(nx + 0.5)} ${F(ny + 3)} C ${F(nx + 2.5)} ${F(ny + 4.4)} ${F(nx + 4.5)} ${F(ny + 5.1)} ${F(nx + 7)} ${F(ny + 5.3)}`,
+    stroke: { width: 1.25 },
+    blur: 0.3,
     clip: outlineD,
     paint: {
-      type: "radial",
-      center: { x: blushCx, y: blushCy },
-      radius: blushR,
+      type: "linear",
+      from: { x: nx, y: 0 },
+      to: { x: nx + 7, y: 0 },
       stops: [
-        { offset: 0, color: "rgba(255,120,140,0.16)" },
-        { offset: 0.55, color: "rgba(255,120,140,0.09)" },
-        { offset: 1, color: "rgba(255,120,140,0)" },
+        { offset: 0, color: rgba(outlineColor, 0.78) },
+        { offset: 0.55, color: rgba(outlineColor, 0.5) },
+        { offset: 1, color: rgba(outlineColor, 0) },
       ],
     },
   });
+  nodes.push({
+    kind: "path",
+    d: `M ${F(nx + 1)} ${F(ny + 1.4)} C ${F(nx + 3)} ${F(ny + 2.2)} ${F(nx + 5)} ${F(ny + 2.6)} ${F(nx + 6.5)} ${F(ny + 2.7)}`,
+    stroke: { width: 1 },
+    blur: 0.5,
+    blend: "screen",
+    clip: outlineD,
+    paint: {
+      type: "linear",
+      from: { x: nx, y: 0 },
+      to: { x: nx + 6.5, y: 0 },
+      stops: [
+        { offset: 0, color: tinted(SPECULAR_TINT, 0.22) },
+        { offset: 1, color: tinted(SPECULAR_TINT, 0) },
+      ],
+    },
+  });
+
+  // The pink cheek blush that used to sit at `U_BLUSH` is gone. It had
+  // already been "dialled down" once on the grounds that cute comes from
+  // proportion rather than a decal — and it was the one element on the fish
+  // with no physical referent at all, so the naturalism pass removed it
+  // rather than dialling it down a third time.
 
   // Eye — the mascot pass's scaled-up sclera/ring/pupil/catchlight structure
   // is kept intact; `eyes.ts` adds the iris it was missing (the thing that

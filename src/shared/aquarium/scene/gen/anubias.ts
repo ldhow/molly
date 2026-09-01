@@ -16,21 +16,27 @@ import type { Generator } from "@/shared/aquarium/scene/types";
 import { lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
-import { ribbonPath } from "./ribbon";
+import { lightInLocalSpace, ribbonCrossAxis, ribbonPath } from "./ribbon";
 
 const DESIGN = DEFAULT_SCENE_DESIGN.species.anubias;
+const LIGHT = DEFAULT_SCENE_DESIGN.lighting;
 
-/** A spade/lance leaf blade, authored pointing straight up (-y) from its own base. */
-function leafPath(len: number, width: number): string {
+/**
+ * A spade/lance leaf blade, authored pointing straight up (-y) from its own
+ * base. Returns the spine and width profile alongside the path because the
+ * caller needs both to build the matching cross-axis form shading.
+ */
+function leafPath(
+  len: number,
+  width: number,
+): { d: string; spine: XY[]; widthAt: (t: number) => number } {
   const spine: XY[] = [
     { x: 0, y: 0 },
     { x: width * 0.15, y: -len * 0.55 },
     { x: 0, y: -len },
   ];
-  return ribbonPath(
-    spine,
-    (t) => width * Math.sin(Math.min(1, t * 1.15) * Math.PI) * (1 - t * 0.15),
-  );
+  const widthAt = (t: number) => width * Math.sin(Math.min(1, t * 1.15) * Math.PI) * (1 - t * 0.15);
+  return { d: ribbonPath(spine, widthAt), spine, widthAt };
 }
 
 export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
@@ -89,14 +95,23 @@ export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
     const tipX = Math.cos(rad) * stemLen;
     const tipY = Math.sin(rad) * stemLen;
     const leaf = leafPath(leafLen, leafWidth);
+    // Authored pointing up, then rotated by `angleDeg + 90` in the group
+    // below — so the light must be counter-rotated into leaf space, or every
+    // leaf in the rosette ends up lit from its own left and the plant reads
+    // as having no light source at all.
+    const leafCross = ribbonCrossAxis(
+      leaf.spine,
+      leaf.widthAt,
+      lightInLocalSpace({ x: LIGHT.dirX, y: LIGHT.dirY }, angleDeg + 90),
+    );
     const leafChildren: Node[] = [
       {
         kind: "path",
-        d: leaf,
+        d: leaf.d,
         paint: {
           type: "linear",
-          from: { x: 0, y: 0 },
-          to: { x: 0, y: -leafLen },
+          from: leafCross.from,
+          to: leafCross.to,
           stops: [
             { offset: 0, color: LEAF_DARK },
             { offset: 0.6, color: LEAF_MID },

@@ -24,8 +24,11 @@ interface DecorPieceProps {
 const LAYER_OPACITY: Record<PlacedPiece["layer"], number> = {
   far: DEFAULT_SCENE_DESIGN.layers.opacityFar,
   back: DEFAULT_SCENE_DESIGN.layers.opacityBack,
+  backMid: DEFAULT_SCENE_DESIGN.layers.opacityBackMid,
   mid: DEFAULT_SCENE_DESIGN.layers.opacityMid,
+  frontMid: DEFAULT_SCENE_DESIGN.layers.opacityFrontMid,
   front: DEFAULT_SCENE_DESIGN.layers.opacityFront,
+  frontMost: DEFAULT_SCENE_DESIGN.layers.opacityFrontMost,
 };
 
 /**
@@ -36,10 +39,35 @@ const LAYER_OPACITY: Record<PlacedPiece["layer"], number> = {
  */
 const CURRENT_LEAN = DEFAULT_SCENE_DESIGN.layers.currentLean;
 
-function DecorPiece({ piece, clock }: DecorPieceProps) {
+function bakedRect(baked: NonNullable<ReturnType<typeof getCachedDecor>>) {
+  return Skia.XYWHRect(baked.bounds.x, baked.bounds.y, baked.bounds.width, baked.bounds.height);
+}
+
+/**
+ * Hardscape and ground cover — `swayHeight === 0`, so the transform is
+ * CONSTANT. Split out of `SwayingDecorPiece` because that one carries a
+ * `useDerivedValue` that reads the clock every frame, and `scene/backdrop.ts`
+ * put ~60 more pieces on screen, most of them rocks, pebbles, mounds, carpet
+ * and driftwood. Paying for a per-frame worklet to recompute a value that
+ * never changes, sixty times a frame, is the kind of cost that doesn't show
+ * up in any single profile line.
+ */
+function StaticDecorPiece({ piece }: { piece: PlacedPiece }) {
+  const baked = getCachedDecor(piece);
+  if (!baked) return null;
+  return (
+    <Group
+      transform={[{ translateX: piece.worldX }, { translateY: piece.worldY }]}
+      opacity={LAYER_OPACITY[piece.layer]}
+    >
+      <SkiaImage image={baked.image} rect={bakedRect(baked)} fit="fill" />
+    </Group>
+  );
+}
+
+function SwayingDecorPiece({ piece, clock }: DecorPieceProps) {
   const baked = getCachedDecor(piece);
   const swayPhase = piece.seed * 1.7;
-  const swayAmount = piece.swayHeight > 0 ? 0.07 : 0;
 
   const transform = useDerivedValue(() => [
     { translateX: piece.worldX },
@@ -51,21 +79,15 @@ function DecorPiece({ piece, clock }: DecorPieceProps) {
       // respond to one flow, which is what sells "one body of water" far
       // more than the fish drift does on its own.
       skewX:
-        Math.sin(clock.value / 1500 + swayPhase) * swayAmount +
-        (swayAmount > 0 ? currentAt(clock.value / 1000) * CURRENT_LEAN : 0),
+        Math.sin(clock.value / 1500 + swayPhase) * 0.07 +
+        currentAt(clock.value / 1000) * CURRENT_LEAN,
     },
   ]);
 
   if (!baked) return null;
-  const rect = Skia.XYWHRect(
-    baked.bounds.x,
-    baked.bounds.y,
-    baked.bounds.width,
-    baked.bounds.height,
-  );
   return (
     <Group transform={transform} opacity={LAYER_OPACITY[piece.layer]}>
-      <SkiaImage image={baked.image} rect={rect} fit="fill" />
+      <SkiaImage image={baked.image} rect={bakedRect(baked)} fit="fill" />
     </Group>
   );
 }
@@ -79,9 +101,16 @@ export function SceneLayerGroup({ pieces }: SceneLayerProps) {
   const clock = useClock();
   return (
     <>
-      {pieces.map((piece) => (
-        <DecorPiece key={piece.key} piece={piece} clock={clock} />
-      ))}
+      {/* Branch is stable per key — `swayHeight` is a property of the piece's
+          generated art, not of any render-time state — so this can't swap a
+          hook-using component for a hookless one under the same key. */}
+      {pieces.map((piece) =>
+        piece.swayHeight > 0 ? (
+          <SwayingDecorPiece key={piece.key} piece={piece} clock={clock} />
+        ) : (
+          <StaticDecorPiece key={piece.key} piece={piece} />
+        ),
+      )}
     </>
   );
 }

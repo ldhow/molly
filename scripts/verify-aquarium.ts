@@ -10,8 +10,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { loadSkiaNode } from "./lib/skia-node";
-import { bakeNodes } from "@/shared/aquarium/core/bake";
-import { boxContainsBox } from "@/shared/aquarium/core/ir";
+import { bakeBytes, bakeNodes } from "@/shared/aquarium/core/bake";
+import {
+  DECOR_BUDGET_BYTES,
+  DECOR_DPR_BY_LAYER,
+  DECOR_PAD,
+} from "@/shared/aquarium/core/decor-budget";
+import { boxContainsBox, inflateBox } from "@/shared/aquarium/core/ir";
 import type { Box, Node } from "@/shared/aquarium/core/ir";
 import { getWarpEffect, WARP_UNIFORM_KEYS } from "@/shared/aquarium/core/sksl/warp";
 import { bodyDepthAt, buildFishAnatomy } from "@/shared/aquarium/fish/anatomy";
@@ -30,12 +35,15 @@ import {
   pointInPolygon,
   polygonSelfIntersects,
 } from "@/shared/aquarium/fish/geometry";
+import { materialFor } from "@/shared/aquarium/fish/pigment";
 import { linspace, pchip } from "@/shared/aquarium/fish/profile";
+import { countershadeStops, finTipAlpha } from "@/shared/aquarium/core/shading";
 import { composeSpriteScene, type PlacedSprite } from "@/shared/aquarium/scene/compose-sprites";
 import { composeScene, GENERATORS, type PlacedPiece } from "@/shared/aquarium/scene/compose";
 import { SCENE_SPRITES } from "@/shared/aquarium/scene/sprites/sprite-manifest";
-import { SPRITE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
+import { SPRITE_SCAPE_FILLED } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
 import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
+import { BACKDROP_SEED_MIN, BACKDROP_VARIANTS } from "@/shared/aquarium/scene/backdrop";
 import {
   CAUDAL_FIN_AMP_MAX,
   finSecondaryInjectivityBudget,
@@ -695,6 +703,74 @@ async function main() {
         `${scene.pieces.length} pieces`,
       );
 
+      // 8b. Decor bake working set — ALL FOUR layers, so this has to run
+      // before the mid/front filters below. `render/decor-cache.ts` bakes
+      // SYNCHRONOUSLY inside render and evicts by LRU, so a theme whose
+      // distinct `bakeKey`s don't all fit in the budget re-bakes evicted
+      // pieces EVERY FRAME — a permanent frame-rate cliff with no visible
+      // artifact, exactly the class of regression only a headless check
+      // catches. Summed per bakeKey, not per piece: `bakeKey` excludes
+      // `worldX`, so many placements share one texture, and that sharing is
+      // what `scene/backdrop.ts`'s literal-scale variant pool exists to buy.
+      const bytesByKey = new Map<string, number>();
+      for (const piece of scene.pieces) {
+        if (bytesByKey.has(piece.bakeKey)) continue;
+        const attachTo =
+          piece.attachAngleDeg !== undefined
+            ? { x: 0, y: 0, angleDeg: piece.attachAngleDeg }
+            : undefined;
+        const generated = GENERATORS[piece.species]({
+          seed: piece.seed,
+          scale: piece.scale,
+          attachTo,
+          mirror: piece.mirror,
+        });
+        bytesByKey.set(
+          piece.bakeKey,
+          bakeBytes(inflateBox(generated.bbox, DECOR_PAD), DECOR_DPR_BY_LAYER[piece.layer]),
+        );
+      }
+      const workingSet = [...bytesByKey.values()].reduce((a, b) => a + b, 0);
+      const MB = (n: number) => `${(n / 1048576).toFixed(2)}MB`;
+      // Margin, not a bare fit: the LRU is a module singleton shared across
+      // canvas sizes, so a rotation transiently holds both sizes' key sets
+      // and only settles once the old ones age out.
+      check(
+        `${w}x${h}: decor working set fits the bake budget with 25% margin`,
+        workingSet <= DECOR_BUDGET_BYTES * 0.75,
+        `${MB(workingSet)} of ${MB(DECOR_BUDGET_BYTES)} across ${bytesByKey.size} bakes / ${scene.pieces.length} pieces`,
+      );
+
+      // One runaway piece can eat the budget on its own (kelp is ~1MB at the
+      // scales this theme places it at), and it shows up here long before the
+      // total does — so name the worst offender, don't only sum.
+      let worstKey = "";
+      let worstBytes = 0;
+      for (const [key, bytes] of bytesByKey) {
+        if (bytes > worstBytes) {
+          worstBytes = bytes;
+          worstKey = key;
+        }
+      }
+      check(
+        `${w}x${h}: no single decor bake exceeds 1.5MB`,
+        worstBytes <= 1.5 * 1024 * 1024,
+        `${worstKey} = ${MB(worstBytes)}`,
+      );
+
+      // The sharing itself, checked directly. If a refactor ever puts
+      // `worldX` back into `bakeKey`, or `backdrop.ts` starts COMPUTING
+      // scales instead of copying pool literals, the fill's bake count
+      // tracks its placement count and the total above blows — this says
+      // WHY in one line instead of leaving the next reader to bisect it.
+      const fill = scene.pieces.filter((p) => p.seed >= BACKDROP_SEED_MIN);
+      const fillKeys = new Set(fill.map((p) => p.bakeKey));
+      check(
+        `${w}x${h}: backdrop fill collapses its placements onto a bounded pool`,
+        fill.length > 0 && fillKeys.size <= BACKDROP_VARIANTS && fill.length >= fillKeys.size * 1.5,
+        `${fill.length} placements -> ${fillKeys.size} bakes (pool ${BACKDROP_VARIANTS})`,
+      );
+
       // Back- and far-layer decor doesn't count toward any of these — both
       // read as background, not an obstacle (same exemption the old
       // back-only check made, extended to `far` when that layer was added).
@@ -836,7 +912,7 @@ async function main() {
         [844, 390],
       ] as const) {
         const substrateY = h - 60;
-        const spriteScene = composeSpriteScene(SPRITE_SCAPE, w, h, substrateY);
+        const spriteScene = composeSpriteScene(SPRITE_SCAPE_FILLED, w, h, substrateY);
         const midFront = spriteScene.pieces.filter((p) => p.layer === "mid" || p.layer === "front");
         const occAll = spriteOccupancyRaster(Skia, midFront, w, substrateY);
         const meanOcc = occAll.length ? occAll.reduce((a, b) => a + b, 0) / occAll.length : 0;
@@ -874,12 +950,27 @@ async function main() {
     const DURATION_S = 60;
     const STEPS = Math.round(DURATION_S / DT);
     const SEEDS = 20;
-    // The steering law's own ceiling (`TURN_RATE_BURST` in sim/swim.ts) —
-    // duplicated here as a literal rather than imported so this check fails
-    // loudly if the source ceiling ever changes without this trace being
-    // re-examined, instead of silently tracking a moving target.
-    const TURN_RATE_CEIL = 4.4;
+    // The steering law's own ceiling (`TURN_RATE_REVERSE` in sim/swim.ts,
+    // which outranks the wall and burst rates whenever the heading error is
+    // large) — duplicated here as a literal rather than imported so this
+    // check fails loudly if the source ceiling ever changes without this
+    // trace being re-examined, instead of silently tracking a moving target.
+    const TURN_RATE_CEIL = 10;
     const EDGE_ON_MIN_WIDTH = 0.3;
+    /**
+     * Horizontal speed (px/s) below which a fish reads as STOPPED rather than
+     * slow. Guards the "cá hay dừng lại không rõ lý do" regression, which had
+     * a specific and easy-to-repeat cause: `hover`'s duration and speed were
+     * authored for a mode that never actually ran (its target sits within
+     * `HOVER_JITTER` of the fish, so the old `hypot(dx,dz) < ARRIVE_RADIUS`
+     * arrival test retargeted straight out of it — traced at 0.3% of elapsed
+     * time). Fixing that bug let the untested 3-6s duration run for the first
+     * time: hover jumped to 18% of all time and stalls reached 9.4s. Nothing
+     * here caught it, because every existing check measures mean speed or
+     * turn behaviour, and a fish that is motionless 1/8 of the time still has
+     * a perfectly good mean.
+     */
+    const STALL_VX = 8;
     // Duplicated from sim/swim.ts / render/fish-layer.tsx for the same
     // "fails loudly if the source changes without this trace being
     // re-examined" reason as TURN_RATE_CEIL above ("update 2d fish v2"
@@ -922,6 +1013,12 @@ async function main() {
       meanAbsVx: number;
       meanStraightness: number;
       turningArcVisibleFrac: number;
+      /** Mean horizontal span of one leg, as a fraction of box width. */
+      meanLegSpanFrac: number;
+      /** Fraction of all elapsed time spent below `STALL_VX` of horizontal travel. */
+      stalledFrac: number;
+      /** Longest single run below `STALL_VX`, in seconds. */
+      longestStallS: number;
     }
 
     function runTrace(currentStrength: number): TraceResult {
@@ -934,8 +1031,18 @@ async function main() {
       let meanAbsVxSum = 0;
       let straightnessSum = 0;
       let straightnessWindows = 0;
+      let stalledSteps = 0;
+      let longestStallS = 0;
       let turningSteps = 0;
       let turningVisibleSteps = 0;
+      // Horizontal span of one leg — how far across the tank the fish gets
+      // between two changes of facing. Guards the "cá bị lật liên tục tại 1
+      // điểm" regression directly: a fish that reverses wherever it happens
+      // to be still satisfies every check above (bounds, turn rate, mean
+      // speed, even reversals/min — it OVER-satisfies that one), so nothing
+      // here caught it. `sim/swim.ts`'s `crossTargetX` is what this pins.
+      let legSpanSum = 0;
+      let legs = 0;
 
       for (let seedIdx = 0; seedIdx < SEEDS; seedIdx++) {
         const seed = seedIdx / SEEDS;
@@ -952,6 +1059,10 @@ async function main() {
         // Straightness is measured in the (x,y) SCREEN plane, not (x,z) —
         // it's "does the visible path wander or circle", and z is a steering
         // variable the viewer never sees directly.
+        let legMinX = state.x;
+        let legMaxX = state.x;
+        let stallRun = 0;
+        let prevStallX = state.x;
         let winStartX = state.x;
         let winStartY = state.y;
         let winPathLen = 0;
@@ -988,7 +1099,19 @@ async function main() {
 
           const cosYaw = Math.cos(state.yaw);
           const cosSign = Math.sign(cosYaw) || prevCosSign;
-          if (cosSign !== prevCosSign) reversals++;
+          legMinX = Math.min(legMinX, state.x);
+          legMaxX = Math.max(legMaxX, state.x);
+          if (cosSign !== prevCosSign) {
+            reversals++;
+            // Skip the first 10s: every fish starts at `targetX === x` and
+            // its first leg is a partial one from wherever it spawned.
+            if (i > 10 / DT) {
+              legSpanSum += legMaxX - legMinX;
+              legs++;
+            }
+            legMinX = state.x;
+            legMaxX = state.x;
+          }
           prevCosSign = cosSign;
 
           if (Math.abs(cosYaw) < EDGE_ON_MIN_WIDTH) edgeOnSteps++;
@@ -1008,6 +1131,17 @@ async function main() {
             if (Math.abs(state.roll * ARC_GAIN_PX_PER_RAD) > ARC_VISIBLE_PX) turningVisibleSteps++;
           }
 
+          // Stall tracking — "the fish keeps stopping for no reason".
+          const stallVx = Math.abs(state.x - prevStallX) / DT;
+          prevStallX = state.x;
+          if (stallVx < STALL_VX) {
+            stallRun += DT;
+            stalledSteps++;
+          } else {
+            longestStallS = Math.max(longestStallS, stallRun);
+            stallRun = 0;
+          }
+
           winPathLen += Math.hypot(state.x - winPrevX, state.y - winPrevY);
           winPrevX = state.x;
           winPrevY = state.y;
@@ -1022,6 +1156,7 @@ async function main() {
           }
         }
 
+        longestStallS = Math.max(longestStallS, stallRun);
         edgeOnFracSum += edgeOnSteps / STEPS;
         reversalsPerMinSum += reversals / (DURATION_S / 60);
         meanAbsVxSum += vxAbsSum / STEPS;
@@ -1037,6 +1172,9 @@ async function main() {
         meanAbsVx: meanAbsVxSum / SEEDS,
         meanStraightness: straightnessWindows > 0 ? straightnessSum / straightnessWindows : 0,
         turningArcVisibleFrac: turningSteps > 0 ? turningVisibleSteps / turningSteps : 0,
+        meanLegSpanFrac: legs > 0 ? legSpanSum / legs / (box.maxX - box.minX) : 0,
+        stalledFrac: stalledSteps / (STEPS * SEEDS),
+        longestStallS,
       };
     }
 
@@ -1083,6 +1221,21 @@ async function main() {
         `${tag}: straightness index in the natural 0.35-0.75 band`,
         r.meanStraightness >= 0.35 && r.meanStraightness <= 0.75,
         `${r.meanStraightness.toFixed(2)} (<0.15 = circling, >0.9 = on rails)`,
+      );
+      check(
+        `${tag}: a leg crosses most of the tank before the fish turns (>= 45% of box width)`,
+        r.meanLegSpanFrac >= 0.45,
+        `mean leg span ${(r.meanLegSpanFrac * 100).toFixed(0)}% of box width`,
+      );
+      check(
+        `${tag}: not visually stalled more than 7% of the time`,
+        r.stalledFrac <= 0.07,
+        `${(r.stalledFrac * 100).toFixed(1)}% below ${STALL_VX}px/s`,
+      );
+      check(
+        `${tag}: no single stall longer than 7.5s`,
+        r.longestStallS <= 7.5,
+        `longest ${r.longestStallS.toFixed(2)}s`,
       );
       check(
         `${tag}: wall-turns produce a visible (>${ARC_VISIBLE_PX}px) on-screen arc most of the time`,
@@ -1384,6 +1537,55 @@ async function main() {
     "pattern separates from the flank (contrast >= 1.80)",
     worstPattern >= 1.8,
     `worst ${worstPattern.toFixed(2)}`,
+  );
+
+  // 10e-2. The RENDERED counter-shading ramp, not just the palette it is built
+  // from. Everything above reads `r.palette` — the catalogue's authored
+  // intent — but `core/shading.ts`'s `countershadeStops` is what actually
+  // reaches the canvas, and the two can disagree. These run the real function
+  // over every breed.
+  let worstVentralDesat = -Infinity;
+  let worstDorsalDrop = -Infinity;
+  let dorsalDarkerThanFlank = true;
+  for (const r of recipes) {
+    const stops = countershadeStops(r.palette.back, r.palette.mid, r.palette.belly);
+    const dorsal = hexToHsl(stops[0].color);
+    const flank = hexToHsl(stops[2].color);
+    const ventral = hexToHsl(stops[stops.length - 1].color);
+    // Positive = the ventral end is MORE saturated than the flank, i.e. the
+    // ramp failed to desaturate toward the belly.
+    worstVentralDesat = Math.max(worstVentralDesat, ventral.s - flank.s);
+    worstDorsalDrop = Math.max(worstDorsalDrop, hexToHsl(r.palette.back).l - dorsal.l);
+    if (dorsal.l >= flank.l) dorsalDarkerThanFlank = false;
+  }
+  // Counter-shading is a SATURATION move as much as a lightness one — a belly
+  // that stays as chromatic as the flank reads as a lighting gradient on a
+  // plastic tube, which is exactly what the old 3-stop same-hue ramp did.
+  check(
+    "rendered ramp desaturates toward the belly",
+    worstVentralDesat < 0,
+    `worst ventral-minus-flank saturation ${worstVentralDesat.toFixed(3)}`,
+  );
+  check("rendered ramp's dorsal stop is darker than its flank", dorsalDarkerThanFlank);
+  // THE IDENTITY GUARD. `MAX_DORSAL_DROP` in `core/shading.ts` exists because
+  // an earlier ramp scaled dorsal lightness by a flat factor, which crushed
+  // goldDust — a GOLD fish — into a uniformly dark one. Shading may deepen a
+  // variety's authored `back`, never replace it. Keep this a hair above the
+  // constant so a rounding wobble doesn't redden the build.
+  check(
+    "dorsal stop never falls more than 0.17 below the authored `back` (identity guard)",
+    worstDorsalDrop <= 0.17,
+    `worst drop ${worstDorsalDrop.toFixed(3)}`,
+  );
+  // Tank mode draws fish at `AQUARIUM_FISH_SCALE = 0.6` against decor, so a
+  // membrane that fades out completely stops reading as a fin at all.
+  const worstTip = Math.min(
+    ...COLOR_DEFS.map((d) => finTipAlpha(materialFor(d.rarity.tier).finTrail)),
+  );
+  check(
+    "fin membrane tip stays above the legibility floor (>= 0.24)",
+    worstTip >= 0.24,
+    `worst tip alpha ${worstTip.toFixed(3)}`,
   );
 
   // 10f. Downgrade legality — this is what keeps the legacy renderer and the
