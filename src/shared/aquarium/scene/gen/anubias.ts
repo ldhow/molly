@@ -16,6 +16,7 @@ import type { Generator } from "@/shared/aquarium/scene/types";
 import { lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
+import { contactShadow, depthShade, specularStreak } from "./depth";
 import { lightInLocalSpace, ribbonCrossAxis, ribbonPath } from "./ribbon";
 
 const DESIGN = DEFAULT_SCENE_DESIGN.species.anubias;
@@ -104,6 +105,14 @@ export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
       leaf.widthAt,
       lightInLocalSpace({ x: LIGHT.dirX, y: LIGHT.dirY }, angleDeg + 90),
     );
+    // A rosette's outer leaves turn away from the viewer, so depth is
+    // distance from the centre of the fan, not emit order. Without it every
+    // leaf carried the same value and the plant read as a flat paper
+    // cut-out — see `depth.ts`'s header for why this outweighs the
+    // across-the-leaf gradient it sits on top of.
+    const fromCentre =
+      leafCount > 1 ? Math.abs(i - (leafCount - 1) / 2) / ((leafCount - 1) / 2) : 0;
+    const depth = fromCentre * 0.85;
     const leafChildren: Node[] = [
       {
         kind: "path",
@@ -113,9 +122,9 @@ export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
           from: leafCross.from,
           to: leafCross.to,
           stops: [
-            { offset: 0, color: LEAF_DARK },
-            { offset: 0.6, color: LEAF_MID },
-            { offset: 1, color: LEAF_TIP },
+            { offset: 0, color: depthShade(LEAF_DARK, depth) },
+            { offset: 0.6, color: depthShade(LEAF_MID, depth) },
+            { offset: 1, color: depthShade(LEAF_TIP, depth) },
           ],
         },
       },
@@ -126,6 +135,20 @@ export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
         stroke: { width: 0.8 * scale },
       },
     ];
+    // The broad glossy leaf is exactly the surface the sprite art gives its
+    // hardest highlight to — `anubias-a.png` puts a bright blob on every
+    // front leaf. Front leaves only, for the reason in `plants.ts`.
+    if (depth < 0.5) {
+      leafChildren.push(
+        specularStreak(
+          leaf.spine,
+          leaf.widthAt,
+          lightInLocalSpace({ x: LIGHT.dirX, y: LIGHT.dirY }, angleDeg + 90),
+          lighten(LEAF_MID, 0.65),
+          0.4 * (1 - depth * 2),
+        ),
+      );
+    }
     // The leaf continues the stem's outward lean (angleDeg), authored
     // pointing up (-y = angleDeg 0 in this rotation's terms), so rotate by
     // `angleDeg + 90` to align "up" with the stem's own direction.
@@ -148,5 +171,13 @@ export const generateAnubias: Generator = ({ seed, scale, attachTo }) => {
     });
   }
 
-  return { nodes, bbox, anchors: [], swayHeight: DESIGN.swayHeightFactor * scale };
+  return {
+    // Only a PLANTED anubias gets a ground shadow. An `attachTo` piece is
+    // mounted partway up driftwood with open water beneath it, where a pool
+    // of shadow at its own origin would be a dark smear floating in midwater.
+    nodes: attachTo ? nodes : [contactShadow(0, DESIGN.rhizomeSpan * 2.6 * scale, 0.24), ...nodes],
+    bbox,
+    anchors: [],
+    swayHeight: DESIGN.swayHeightFactor * scale,
+  };
 };

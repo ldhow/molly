@@ -18,7 +18,7 @@ import { ScreenContainer } from "@/shared/components/screen-container";
 import { palette, radius, spacing } from "@/shared/constants/theme";
 import { getSpeciesDef } from "@/shared/creature/catalog";
 import { speciesOfRow } from "@/shared/creature/resolve";
-import { TANK_CAPACITY } from "@/shared/lib/tank-membership";
+import { occupiesTankSlot, TANK_CAPACITY, tankSlotsUsed } from "@/shared/lib/tank-membership";
 
 import { useFishCollection } from "../api/use-fish-collection";
 import { useSwapTankFishMutation } from "../api/use-swap-tank-fish-mutation";
@@ -31,7 +31,11 @@ export function HoldingTankScreen() {
   const { width } = useWindowDimensions();
   const numColumns = width >= 700 ? 4 : 2;
 
-  const tankFull = inTank.length >= TANK_CAPACITY;
+  // Crawlers (snail, shrimp) are free — they never consume a slot, so the
+  // tank being "full" only blocks slot-consuming species. See
+  // `occupiesTankSlot`.
+  const slotsUsed = tankSlotsUsed(inTank);
+  const tankFull = slotsUsed >= TANK_CAPACITY;
 
   // Stable across renders (a `useCallback` per handler, not a closure built
   // fresh inside `renderItem` per row) so every `FishTile` in either grid
@@ -41,7 +45,7 @@ export function HoldingTankScreen() {
   const onPressHolding = useCallback(
     (row: SessionRow) => {
       if (pickingReplacementFor) return; // mid-pick — only in-tank tiles are actionable
-      if (!tankFull) {
+      if (!tankFull || !occupiesTankSlot(row)) {
         swap.mutate({ addId: row.id });
         return;
       }
@@ -88,7 +92,7 @@ export function HoldingTankScreen() {
           />
           <Text style={styles.title}>Holding Tank</Text>
           <Text style={styles.subtitle}>
-            {inTank.length}/{TANK_CAPACITY} in tank · {holding.length} in holding
+            {slotsUsed}/{TANK_CAPACITY} slots used · {holding.length} in holding
           </Text>
         </View>
 
@@ -102,7 +106,8 @@ export function HoldingTankScreen() {
         ) : null}
 
         <Text style={styles.sectionTitle}>
-          In Tank ({inTank.length}/{TANK_CAPACITY})
+          In Tank ({inTank.length}
+          {inTank.length !== slotsUsed ? ` · ${slotsUsed}/${TANK_CAPACITY} slots` : ""})
         </Text>
         {inTank.length === 0 ? (
           <EmptyState emoji="🫧" title="Your tank is empty" />

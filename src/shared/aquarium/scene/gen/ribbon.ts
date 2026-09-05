@@ -148,6 +148,95 @@ export function lightInLocalSpace(light: XY, rotateDeg: number): XY {
   return { x: light.x * cos - light.y * sin, y: light.x * sin + light.y * cos };
 }
 
+/**
+ * The blade split into its two halves either side of the midrib, plus each
+ * half's own shading axis (midrib -> that half's own edge).
+ *
+ * `ribbonCrossAxis` gives ONE gradient spanning edge-to-edge, and that is
+ * exactly why a flat-shaded leaf reads as a smooth cylinder instead of a
+ * folded blade: a real strap leaf is two near-flat surfaces meeting at an
+ * angle along its midrib, and the visible tell of that is a VALUE BREAK
+ * right at the crease — not a continuous gradient, which has no seam to
+ * break at. Filling each half from its own `{from: midrib, to: edge}` axis
+ * reproduces that for free: both halves agree at the crease (same colour at
+ * `offset 0`, so the fold line itself stays continuous, which is physically
+ * right — the two faces touch there) and diverge outward at whatever rate
+ * each half's own stops describe.
+ *
+ * `leftIsLit` reuses the exact same widest-point light test
+ * `ribbonCrossAxis` uses, so the two functions never disagree about which
+ * side of a piece is lit.
+ */
+export function ribbonFold(
+  spine: readonly XY[],
+  widthAt: (t: number) => number,
+  light: XY,
+): {
+  litPath: string;
+  shadowPath: string;
+  litAxis: { from: XY; to: XY };
+  shadowAxis: { from: XY; to: XY };
+} {
+  const smooth = catmullRomSample(spine);
+  const n = smooth.length;
+  const left: XY[] = [];
+  const right: XY[] = [];
+  for (let i = 0; i < n; i++) {
+    const p = smooth[i];
+    const prev = smooth[Math.max(0, i - 1)];
+    const next = smooth[Math.min(n - 1, i + 1)];
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const w = widthAt(i / (n - 1)) / 2;
+    left.push({ x: p.x + nx * w, y: p.y + ny * w });
+    right.push({ x: p.x - nx * w, y: p.y - ny * w });
+  }
+  const closeHalf = (edge: readonly XY[]) => {
+    let d = `M ${F(smooth[0].x)} ${F(smooth[0].y)}`;
+    for (let i = 1; i < n; i++) d += ` L ${F(smooth[i].x)} ${F(smooth[i].y)}`;
+    for (let i = n - 1; i >= 0; i--) d += ` L ${F(edge[i].x)} ${F(edge[i].y)}`;
+    return d + " Z";
+  };
+  const leftPath = closeHalf(left);
+  const rightPath = closeHalf(right);
+
+  let bestI = 0;
+  let bestW = -1;
+  for (let i = 0; i < n; i++) {
+    const w = widthAt(i / (n - 1));
+    if (w > bestW) {
+      bestW = w;
+      bestI = i;
+    }
+  }
+  const p = smooth[bestI];
+  const prev = smooth[Math.max(0, bestI - 1)];
+  const next = smooth[Math.min(n - 1, bestI + 1)];
+  const dx = next.x - prev.x;
+  const dy = next.y - prev.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const leftIsLit = nx * light.x + ny * light.y > 0;
+
+  return leftIsLit
+    ? {
+        litPath: leftPath,
+        shadowPath: rightPath,
+        litAxis: { from: p, to: left[bestI] },
+        shadowAxis: { from: p, to: right[bestI] },
+      }
+    : {
+        litPath: rightPath,
+        shadowPath: leftPath,
+        litAxis: { from: p, to: right[bestI] },
+        shadowAxis: { from: p, to: left[bestI] },
+      };
+}
+
 /** The spine itself as a stroke-friendly path (for a midrib line, etc). */
 export function spinePath(spine: readonly XY[]): string {
   const smooth = catmullRomSample(spine);

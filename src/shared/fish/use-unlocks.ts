@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Storage from "expo-sqlite/kv-store";
 import { useMemo } from "react";
 
+import { DEV_UNLOCK_ALL } from "@/shared/lib/dev-flags";
 import { useSessionsQuery } from "@/shared/hooks/use-sessions-query";
 
 import { COLOR_DEFS } from "./catalog";
@@ -53,7 +54,9 @@ export function useUnlocks() {
     const grantedColors = granted ?? [];
     const entries = COLOR_DEFS.map((def) => ({
       def,
-      unlocked: isColorUnlocked(def, sessionRows, grantedColors),
+      // Dev builds show the whole catalogue — see `DEV_UNLOCK_ALL` for the
+      // blast radius, which reaches past the Fishdex into the species picker.
+      unlocked: DEV_UNLOCK_ALL || isColorUnlocked(def, sessionRows, grantedColors),
     }));
     return {
       entries,

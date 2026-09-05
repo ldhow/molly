@@ -41,7 +41,8 @@
 // UNLIKE `backdrop.ts`, scales here do NOT need to come from a bounded pool:
 // sprite mode has no bake step and no LRU (`render/sprite-layers.tsx` draws
 // the PNG directly), so a distinct scale costs nothing. The cost that does
-// exist is image DECODES, which is bounded by the manifest — 21 sprites —
+// exist is image DECODES, which is bounded by the manifest (the painted set
+// here plus the Blender-rendered set added alongside it) —
 // and shared across every piece by `SpriteLayerGroup`'s hoisted loader. The
 // variant pool here is therefore about art direction, not about bytes.
 //

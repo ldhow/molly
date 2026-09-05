@@ -17,8 +17,10 @@ import { useMemo } from "react";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
 import { sandHeightFor } from "@/shared/constants/tank";
+import { parseHex } from "@/shared/lib/color";
 
 import { getSubstrateEffect } from "../core/sksl/substrate";
+import { getWaterEffect } from "../core/sksl/water";
 
 import type { PlacedSprite } from "../scene/compose-sprites";
 import { DEFAULT_SCENE_DESIGN } from "../scene/scene-design";
@@ -38,6 +40,79 @@ const LAYER_OPACITY: Record<PlacedSprite["layer"], number> = {
   front: DEFAULT_SCENE_DESIGN.layers.opacityFront,
   frontMost: DEFAULT_SCENE_DESIGN.layers.opacityFrontMost,
 };
+
+/**
+ * How far a layer's colour is pulled toward the water haze — the OTHER half
+ * of atmospheric perspective, and the half this renderer was missing.
+ *
+ * Alpha alone does not make something look far away. A back-layer piece at
+ * `opacityFar` over a bright water gradient does not recede; it goes
+ * translucent, letting the background show straight through its middle, and
+ * reads as a semi-transparent decal floating in front of the water rather
+ * than as an object sitting in it. That is the "pieces detach from the
+ * background as they recede" failure exactly.
+ *
+ * What actually happens underwater is that intervening water SCATTERS light
+ * into the line of sight: a distant object stays opaque but loses contrast
+ * and shifts toward the water's own colour. So the fix is a colour pull, not
+ * more transparency — and once the pull carries the depth cue, the opacity
+ * reduction can be dialled back hard (see `hazedOpacity`), which is what
+ * stops far pieces looking see-through.
+ */
+const LAYER_HAZE: Record<PlacedSprite["layer"], number> = {
+  far: 0.62,
+  back: 0.4,
+  backMid: 0.24,
+  mid: 0.1,
+  frontMid: 0.04,
+  front: 0,
+  frontMost: 0,
+};
+
+/**
+ * The colour distance pieces are hazed toward.
+ *
+ * Deliberately NOT `SPRITE_WATER_TOP`: decor sits in the lower half of the
+ * frame, so the water actually behind a plant is the mid/bottom tone, and
+ * hazing toward the pale surface colour would make far pieces read as
+ * back-LIT rather than far away. Sampled between mid and bottom.
+ */
+const HAZE_RGB = hexToUnit(DEFAULT_SCENE_DESIGN.layers.hazeColor);
+
+/**
+ * With the haze carrying the depth cue, opacity only has to soften an edge —
+ * so it is compressed toward 1 rather than used raw. `0.45` for `far` became
+ * `~0.78` here, which is the single biggest reason far pieces stop looking
+ * cut out.
+ */
+function hazedOpacity(layer: PlacedSprite["layer"]): number {
+  return 1 - (1 - LAYER_OPACITY[layer]) * DEFAULT_SCENE_DESIGN.layers.hazeOpacityRelief;
+}
+
+/**
+ * `out.rgb = in.rgb * (1 - k) + haze * k`, alpha untouched — an affine
+ * colour op, so it fits a 4x5 colour matrix exactly and costs one filter
+ * rather than a second draw of the same image.
+ */
+function hazeMatrix(k: number): number[] {
+  const inv = 1 - k;
+  return [
+    inv, 0, 0, 0, HAZE_RGB[0] * k,
+    0, inv, 0, 0, HAZE_RGB[1] * k,
+    0, 0, inv, 0, HAZE_RGB[2] * k,
+    0, 0, 0, 1, 0,
+  ];
+}
+
+/** One paint per layer, built once — a `<Paint>` element per piece per frame would allocate on every tick. */
+const HAZE_PAINT: Partial<Record<PlacedSprite["layer"], ReturnType<typeof Skia.Paint>>> = {};
+for (const layer of Object.keys(LAYER_HAZE) as PlacedSprite["layer"][]) {
+  const k = LAYER_HAZE[layer];
+  if (k <= 0) continue;
+  const paint = Skia.Paint();
+  paint.setColorFilter(Skia.ColorFilter.MakeMatrix(hazeMatrix(k)));
+  HAZE_PAINT[layer] = paint;
+}
 
 const CURRENT_LEAN = DEFAULT_SCENE_DESIGN.layers.currentLean;
 
@@ -97,9 +172,10 @@ function SpritePiece({ piece, image, clock }: SpritePieceProps) {
   // `decor-cache.ts`'s `getCachedDecor`.
   if (!image) return null;
   const rect = Skia.XYWHRect(piece.rect.x, piece.rect.y, piece.rect.width, piece.rect.height);
+  const haze = HAZE_PAINT[piece.layer];
   return (
-    <Group transform={transform} opacity={LAYER_OPACITY[piece.layer]}>
-      <SkiaImage image={image} rect={rect} fit="fill" />
+    <Group transform={transform} opacity={hazedOpacity(piece.layer)}>
+      <SkiaImage image={image} rect={rect} fit="fill" paint={haze} />
     </Group>
   );
 }
@@ -130,20 +206,76 @@ interface CanvasSizeProps {
 // reference strip) — sprite mode's water reads noticeably brighter/more
 // pastel-cyan than the procedural theme's default teal, so it gets its own
 // gradient rather than reusing `DEFAULT_SCENE_DESIGN.water`.
-const SPRITE_WATER_TOP = "#b8ecfa";
-const SPRITE_WATER_MID = "#5ec3e0";
-const SPRITE_WATER_BOTTOM = "#1a5f79";
+/** `#rrggbb` -> float3 in 0-1, the form every SkSL colour uniform here wants. */
+function hexToUnit(hex: string): number[] {
+  const rgb = parseHex(hex) ?? [0, 0, 0];
+  return [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255];
+}
 
-/** Sprite mode's water — a static gradient (no caustic/god-ray shader) matching the reference art's brighter palette, since this mode has no procedural water pass of its own. */
+// Darkened from the reference-sampled #b8ecfa / #5ec3e0 / #1a5f79.
+//
+// The old top tone sat at ~0.87 luminance — near white. Fish are drawn OVER
+// this, so a mid-tone fish against a near-white field had almost no value
+// contrast to separate it, and the tank read as a bright background with the
+// subject lost inside it. Pulling the top down and deepening the bottom
+// widens the value range the fish occupy, without abandoning the painted
+// palette's hue — still a pastel cyan, just no longer competing with the
+// thing it is supposed to frame.
+const SPRITE_WATER_TOP = "#7fc4dc";
+const SPRITE_WATER_MID = "#3f93b4";
+const SPRITE_WATER_BOTTOM = "#123f56";
+
+/** The same three, as float3 (0-1) for the shared water shader's uniforms. */
+const SPRITE_WATER_TOP_RGB = hexToUnit(SPRITE_WATER_TOP);
+const SPRITE_WATER_MID_RGB = hexToUnit(SPRITE_WATER_MID);
+const SPRITE_WATER_BOTTOM_RGB = hexToUnit(SPRITE_WATER_BOTTOM);
+
+/**
+ * Sprite mode's water — now the SAME fullscreen shader the procedural mode
+ * uses, fed this mode's own palette through its colour uniforms, rather than
+ * the static gradient it used to be.
+ *
+ * A flat vertical gradient states "brighter at the top" and nothing more,
+ * which is why this mode had no readable light DIRECTION: nothing in frame
+ * said where the light came from, so the decor's own baked-in shading had
+ * nothing to agree with and every piece looked lit by a different sun. The
+ * shared shader carries drifting god-ray shafts and a caustic shimmer, and
+ * the shafts ARE the cue — they establish a source above and to one side,
+ * which is what the rest of the art is already lit for (see
+ * `DEFAULT_SCENE_DESIGN.lighting`).
+ *
+ * One fullscreen draw either way. The gradient fallback is kept for the same
+ * reason `water.tsx` keeps one: a device where the runtime effect fails to
+ * compile still gets water.
+ */
 export function SpriteWater({ width, height }: CanvasSizeProps) {
+  const clock = useClock();
+  const effect = getWaterEffect(Skia);
+
+  const uniforms = useDerivedValue<Record<string, number | number[]>>(() => ({
+    width,
+    height,
+    time: clock.value / 1000,
+    colorTop: SPRITE_WATER_TOP_RGB,
+    colorMid: SPRITE_WATER_MID_RGB,
+    colorBottom: SPRITE_WATER_BOTTOM_RGB,
+  }));
+
+  if (!effect) {
+    return (
+      <Rect x={0} y={0} width={width} height={height}>
+        <LinearGradient
+          start={vec(0, 0)}
+          end={vec(0, height)}
+          colors={[SPRITE_WATER_TOP, SPRITE_WATER_MID, SPRITE_WATER_BOTTOM]}
+          positions={[0, 0.55, 1]}
+        />
+      </Rect>
+    );
+  }
   return (
     <Rect x={0} y={0} width={width} height={height}>
-      <LinearGradient
-        start={vec(0, 0)}
-        end={vec(0, height)}
-        colors={[SPRITE_WATER_TOP, SPRITE_WATER_MID, SPRITE_WATER_BOTTOM]}
-        positions={[0, 0.55, 1]}
-      />
+      <Shader source={effect} uniforms={uniforms} />
     </Rect>
   );
 }

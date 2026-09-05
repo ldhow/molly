@@ -16,6 +16,7 @@ import type { Generator } from "@/shared/aquarium/scene/types";
 import { darken, lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
+import { contactShadow, depthShade, specularStreak } from "./depth";
 import { lightInLocalSpace, ribbonCrossAxis, ribbonPath } from "./ribbon";
 
 const VALLISNERIA_DESIGN = DEFAULT_SCENE_DESIGN.species.vallisneria;
@@ -79,7 +80,13 @@ export const generateVallisneria: Generator = ({ seed, scale }) => {
     // is the other half of why a scaled-up clump read as bare stalks.
     const widthAt = (t: number) => width * (1 - t * 0.7);
     const d = ribbonPath(spine, widthAt);
-    const color = BLADE_COLORS[i % BLADE_COLORS.length];
+    // Blades are emitted back-to-front, so the FIRST one drawn is the
+    // deepest. Without this every blade carried identical brightness and the
+    // clump read as one flat green fan — the across-the-width gradient below
+    // says "this blade is curved" but nothing was saying "this blade is
+    // behind that one". See `depth.ts`'s header.
+    const depth = bladeCount > 1 ? 1 - i / (bladeCount - 1) : 0;
+    const color = depthShade(BLADE_COLORS[i % BLADE_COLORS.length], depth);
     // Vallisneria is authored upright in world space — light applies directly.
     nodes.push({
       kind: "path",
@@ -89,6 +96,14 @@ export const generateVallisneria: Generator = ({ seed, scale }) => {
         opacity: 0.92,
       },
     });
+    // Only the front half of the clump glints. A specular on a blade that is
+    // meant to be sitting in shade is precisely what would flatten the depth
+    // ordering above back out.
+    if (depth < 0.5) {
+      nodes.push(
+        specularStreak(spine, widthAt, LIGHT_DIR, lighten(color, 0.6), 0.34 * (1 - depth * 2)),
+      );
+    }
     bbox = unionBox(bbox, {
       x: baseX + Math.min(0, lean + curve * 1.4) - width,
       y: -height,
@@ -96,7 +111,17 @@ export const generateVallisneria: Generator = ({ seed, scale }) => {
       height,
     });
   }
-  return { nodes, bbox, anchors: [], swayHeight: D.swayHeightFactor * scale };
+  // Grounds the clump. A plant whose blades simply begin at y=0 with nothing
+  // under them reads as standing on the sand rather than growing out of it —
+  // `driftwood.ts` was the only species that had this, and it was the only
+  // one that looked seated.
+  const clumpHalf = ((bladeCount - 1) / 2) * D.bladeSpacing * scale + D.widthMin * scale;
+  return {
+    nodes: [contactShadow(0, clumpHalf * 1.5, 0.26), ...nodes],
+    bbox,
+    anchors: [],
+    swayHeight: D.swayHeightFactor * scale,
+  };
 };
 
 /** Shared body for stemBush and rotala — a bushier silhouette of N stems each carrying one oval leaf, differing only in palette/proportions via `design`. */
@@ -169,20 +194,67 @@ function generateStemPlant(
       leafWidthAt,
       lightInLocalSpace(LIGHT_DIR, angleDeg + 90),
     );
-    nodes.push({
-      kind: "group",
-      children: [
+    // A stem carries leaves ALONG its length, not one lollipop at the tip.
+    // `leafy-bush.png` and `rotala-tall.png` are both dense overlapping
+    // masses; a single terminal leaf per stem is what made this read as
+    // balls on wires. Pairs step down the stem, shrinking toward the base,
+    // and the terminal leaf stays the largest.
+    const leafStations: { t: number; sizeFactor: number }[] = [
+      { t: 1, sizeFactor: 1 },
+      { t: 0.72, sizeFactor: 0.78 },
+      { t: 0.46, sizeFactor: 0.6 },
+    ];
+    // Stems are emitted left-to-right; the middle ones read as the front of
+    // the bush and the outer ones as its flanks turning away, so depth is
+    // distance from centre rather than plain index order. That is what gives
+    // a bush a ROUND silhouette instead of a flat fan.
+    const fromCentre =
+      stemCount > 1 ? Math.abs(i - (stemCount - 1) / 2) / ((stemCount - 1) / 2) : 0;
+    const litLocal = lightInLocalSpace(LIGHT_DIR, angleDeg + 90);
+    for (const station of leafStations) {
+      const sf = station.sizeFactor;
+      // Leaves lower down the stem sit further back inside the bush, on top
+      // of the stem's own distance from centre.
+      const depth = Math.min(1, fromCentre * 0.7 + (1 - station.t) * 0.55);
+      // Lower pairs splay further off the stem axis; the terminal one
+      // continues the stem's own direction.
+      const splay = station.t === 1 ? 0 : (rng() < 0.5 ? -1 : 1) * (26 + rng() * 22);
+      const leafColor = depthShade(
+        LEAF_COLORS[(i + leafStations.indexOf(station)) % LEAF_COLORS.length],
+        depth,
+      );
+      const leafChildren: Node[] = [
         {
           kind: "path",
           d: leafD,
-          paint: {
-            ...bladeGradient(LEAF_COLORS[i % LEAF_COLORS.length], leafCross),
-            opacity: 0.95,
-          },
+          paint: { ...bladeGradient(leafColor, leafCross), opacity: 0.95 },
         },
-      ],
-      transform: { translateX: tipX, translateY: tipY, rotateDeg: angleDeg + 90 },
-    });
+      ];
+      // Wet-leaf glint, front leaves only — see the same guard in
+      // `generateVallisneria` for why a specular on a shaded leaf undoes the
+      // depth ordering it sits inside.
+      if (depth < 0.45) {
+        leafChildren.push(
+          specularStreak(
+            leafSpine,
+            leafWidthAt,
+            litLocal,
+            lighten(leafColor, 0.6),
+            0.36 * (1 - depth * 2.2),
+          ),
+        );
+      }
+      nodes.push({
+        kind: "group",
+        children: leafChildren,
+        transform: {
+          translateX: tipX * station.t,
+          translateY: tipY * station.t,
+          rotateDeg: angleDeg + 90 + splay,
+          scale: sf,
+        },
+      });
+    }
 
     const reach = stemLen + leafLen;
     bbox = unionBox(bbox, {
@@ -192,7 +264,12 @@ function generateStemPlant(
       height: reach,
     });
   }
-  return { nodes, bbox, anchors: [], swayHeight: D.swayHeightFactor * scale };
+  return {
+    nodes: [contactShadow(0, (D.stemLenMin + D.stemLenRange * 0.5) * scale * 0.8, 0.24), ...nodes],
+    bbox,
+    anchors: [],
+    swayHeight: D.swayHeightFactor * scale,
+  };
 }
 
 export const generateStemBush: Generator = ({ seed, scale }) =>

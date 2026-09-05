@@ -40,7 +40,12 @@ import { sandHeightFor } from "@/shared/constants/tank";
 import type { FishTraits, LifeStage } from "@/shared/fish/types";
 
 import type { BakedArt } from "../core/bake";
-import { getWarpEffect } from "../core/sksl/warp";
+import {
+  getWarpEffect,
+  RELIGHT_OFF_UNIFORMS,
+  RELIGHT_STATIC_UNIFORMS,
+  relightYaw,
+} from "../core/sksl/warp";
 import { buildFishAnatomy } from "../fish/anatomy";
 import { densityAwareDpr } from "../fish/bake-fish";
 import { finPivotsFor } from "../fish/fin-secondary";
@@ -61,6 +66,7 @@ import { Z_MAX } from "../sim/swim";
 import { useV2Swim, type V2WanderBox } from "../sim/use-v2-swim";
 import { DEAD_GRAYSCALE_MATRIX, DEAD_OPACITY } from "./dead-fish";
 import { getCachedFish } from "./fish-cache";
+import { getCachedNormalMap } from "./normal-cache";
 
 function lerp(a: number, b: number, t: number): number {
   "worklet"; // called from inside WarpedBody's useDerivedValue (UI thread), not
@@ -175,6 +181,14 @@ const TURN_BEND_GAIN_PX_PER_RAD = 8;
 
 interface WarpedBodyProps {
   baked: BakedArt;
+  /**
+   * The body's normal field (`fish/normal-map.ts`), for the shader's relight
+   * pass. Null when Skia refused the allocation — the shader then runs with
+   * every relight gain at zero, which makes the second child shader's
+   * contents irrelevant and lets this reuse `baked` rather than allocate a
+   * placeholder texture.
+   */
+  normal: BakedArt | null;
   phaseOffset: number;
   beatPhase: SharedValue<number>;
   speedNorm: SharedValue<number>;
@@ -188,6 +202,7 @@ interface WarpedBodyProps {
 /** The swim-bend body: a padded rect, warped through the fish's own baked texture. */
 function WarpedBody({
   baked,
+  normal,
   phaseOffset,
   beatPhase,
   speedNorm,
@@ -201,6 +216,19 @@ function WarpedBody({
     baked.bounds.y,
     baked.bounds.width,
     baked.bounds.height,
+  );
+  // Both children are sampled at the SAME local-space coordinate the warp
+  // solved for, so they align by construction even though the normal map's
+  // box (the body alone) is much smaller than the albedo's (body + fins +
+  // `BOUNDS_PAD`). No shared bounds to keep in sync — each `ImageShader`
+  // carries its own rect. See `fish/normal-map.ts` for why they differ.
+  const hasNormal = normal !== null;
+  const normalArt = normal ?? baked;
+  const normalRect = Skia.XYWHRect(
+    normalArt.bounds.x,
+    normalArt.bounds.y,
+    normalArt.bounds.width,
+    normalArt.bounds.height,
   );
 
   const uniforms = useDerivedValue<Uniforms>(() => {
@@ -247,6 +275,13 @@ function WarpedBody({
       pecNearAmp,
       pecFarAmp,
       caudalAmp,
+      // Relight (core/sksl/warp.ts). `relightYaw` is where the broadside/
+      // edge-on convention and the draw-time mirror are reconciled; keeping
+      // the yaw term here rather than in the transform is the whole point —
+      // it's what makes the highlight travel across the flank as the fish
+      // turns instead of riding along with the texture.
+      ...(hasNormal ? RELIGHT_STATIC_UNIFORMS : RELIGHT_OFF_UNIFORMS),
+      ...(hasNormal ? relightYaw(yaw.value) : { yawCos: 1, yawSin: 0 }),
     };
   });
 
@@ -270,6 +305,19 @@ function WarpedBody({
           tx="decal"
           ty="decal"
           sampling={{ filter: FilterMode.Linear, mipmap: MipmapMode.Linear }}
+        />
+        {/* `decal` is load-bearing here, not just a copy of the line above:
+            outside this rect the shader must read (0,0,0,0) so its `mask`
+            lands at 0 and fins keep their baked colour. No mipmaps — the map
+            is authored coarse (`NORMAL_PX_PER_UNIT`) and is magnified, never
+            minified, so a mip chain would be pure allocation. */}
+        <ImageShader
+          image={normalArt.image}
+          rect={normalRect}
+          fit="fill"
+          tx="decal"
+          ty="decal"
+          sampling={{ filter: FilterMode.Linear, mipmap: MipmapMode.None }}
         />
       </Shader>
     </Rect>
@@ -314,6 +362,11 @@ export const FishLayer = memo(function FishLayer({
     shrink ? MAX_RENDER_SCALE_TANK : MAX_RENDER_SCALE_CENTER,
   );
   const baked = getCachedFish(traits, stage, dpr);
+  // Shared across every fish of this body type and stage — see
+  // `render/normal-cache.ts` for why that key space is small enough not to
+  // need a budget. Deliberately not `dpr`-keyed: the field is smooth, so it
+  // is authored once at its own density and magnified.
+  const normal = getCachedNormalMap(traits, stage);
 
   // Crossfade the previous stage's bake into this one when `stage` advances
   // (egg -> fry -> juvenile -> adult on the session screen) instead of the
@@ -322,14 +375,22 @@ export const FishLayer = memo(function FishLayer({
   // fish is always `"adult"` (see `use-owned-fish.ts`), so this only ever
   // fires for the live session-screen fish.
   const prevStageRef = useRef(stage);
-  const [transitionFrom, setTransitionFrom] = useState<BakedArt | null>(null);
+  // Both textures, not just the albedo: the outgoing stage has its own
+  // normal map (STAGE_SQUISH changes the cross-section), so pairing the new
+  // stage's map with the old stage's bake would light a body shape that is
+  // not the one being drawn.
+  const [transitionFrom, setTransitionFrom] = useState<{
+    baked: BakedArt;
+    normal: BakedArt | null;
+  } | null>(null);
   const crossfade = useSharedValue(1);
   useEffect(() => {
     if (prevStageRef.current === stage) return;
     const prevBaked = getCachedFish(traits, prevStageRef.current, dpr);
+    const prevNormal = getCachedNormalMap(traits, prevStageRef.current);
     prevStageRef.current = stage;
     if (!prevBaked) return;
-    setTransitionFrom(prevBaked);
+    setTransitionFrom({ baked: prevBaked, normal: prevNormal });
     crossfade.value = 0;
     crossfade.value = withTiming(1, { duration: 600 }, (finished) => {
       if (finished) runOnJS(setTransitionFrom)(null);
@@ -510,7 +571,8 @@ export const FishLayer = memo(function FishLayer({
       {transitionFrom && (
         <Group opacity={fadeOut}>
           <WarpedBody
-            baked={transitionFrom}
+            baked={transitionFrom.baked}
+            normal={transitionFrom.normal}
             phaseOffset={phase}
             beatPhase={swim.beatPhase}
             speedNorm={swim.speedNorm}
@@ -523,6 +585,7 @@ export const FishLayer = memo(function FishLayer({
       <Group opacity={fadeIn}>
         <WarpedBody
           baked={baked}
+          normal={normal}
           phaseOffset={phase}
           beatPhase={swim.beatPhase}
           speedNorm={swim.speedNorm}

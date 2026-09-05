@@ -289,3 +289,62 @@ export const BODY_KEYLINE = {
 export function keylineColor(back: string): string {
   return coolShadow(back, 0.55);
 }
+
+// ---------------------------------------------------------------------------
+// Dynamic relighting
+// ---------------------------------------------------------------------------
+
+/**
+ * The one thing every export above cannot do: RESPOND. Countershading, the
+ * gloss lobes and the keyline are all laid down at bake time from `LIGHT_DIR`
+ * and then frozen into the texture, so the highlight sits perfectly still
+ * while the body undulates through a full tail beat, and it is identical
+ * whether the fish is broadside or turning edge-on. `fish/normal-map.ts` bakes
+ * the body's surface normal so `core/sksl/warp.ts` can light it per-frame from
+ * this same vector; these are the gains for that pass.
+ *
+ * DELIBERATELY SMALL, and deliberately a MODULATION rather than a
+ * replacement. The painted pass is what carries every variety's identity and
+ * it has been tuned against the catalogue breed by breed — re-lighting from
+ * scratch would relitigate all of that. So the shader multiplies the baked
+ * colour by `1 + LIGHT_GAIN * mask * dot(n, L)`, which is exactly 1 (a
+ * byte-identical no-op, asserted in `scripts/verify-aquarium.ts`) when the
+ * gains are zero. Raising `LIGHT_GAIN` past ~0.5 starts double-shading
+ * against the countershading ramp; the way to go further is to flatten the
+ * painted pass first, not to turn this up.
+ */
+export const DYNAMIC_RELIGHT = {
+  /**
+   * How much of the key light points at the viewer. `LIGHT_DIR` is a 2-D
+   * screen-space vector; the third component is what decides whether a
+   * broadside flank (normal ~ +z) reads as lit or as neutral. 0.55 keeps the
+   * flank clearly lit while leaving enough lateral bias that turning the fish
+   * visibly changes it — the entire point of the pass.
+   */
+  LIGHT_Z: 0.55,
+  /** Diffuse modulation depth. See above for why this is not larger. */
+  LIGHT_GAIN: 0.34,
+  /**
+   * Additive specular. Tinted with `SPECULAR_TINT`, not white, for the same
+   * reason the baked gloss lobes are — see that constant's doc comment.
+   */
+  SPEC_GAIN: 0.3,
+  /**
+   * Blinn-Phong exponent. High enough that the lobe stays a lobe rather than
+   * washing the whole flank, low enough to survive the coarse
+   * `NORMAL_PX_PER_UNIT` the map is baked at.
+   */
+  SPEC_POWER: 22,
+  /**
+   * Fresnel rim, tinted with `RIM_TINT`. This is the term that does the most
+   * work at yaw: as the fish turns edge-on the flank normal rotates away from
+   * the viewer, `n.z` falls, and the body picks up the wrap-around edge light
+   * a real fish shows when it presents its side to the water surface.
+   */
+  RIM_GAIN: 0.22,
+} as const;
+
+/** `tint` as the 0-1 float triple the SkSL uniforms want. */
+export function tintUnit(tint: readonly [number, number, number]): [number, number, number] {
+  return [tint[0] / 255, tint[1] / 255, tint[2] / 255];
+}

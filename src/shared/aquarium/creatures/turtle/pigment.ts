@@ -1,7 +1,8 @@
 // Turtle palette + scute (shell plate) pattern per variant. Each scute is
-// its own small `blobPath` plate — unlike a whole-body silhouette (see
-// `frog/anatomy.ts`'s header), a small decorative plate is exactly what
-// `blobPath` was built for, so this is the ordinary case, not the exception.
+// its own small `blobPath` plate — unlike a whole-body silhouette (where a
+// wobbled 7-point seam reads as a visible corner), a small decorative plate
+// is exactly what `blobPath` was built for, so this is the ordinary case,
+// not the exception.
 //
 // Dependency-free: no React/RN/Skia imports. Runs under plain Node.
 

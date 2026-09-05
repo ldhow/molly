@@ -17,11 +17,29 @@ import { bakeCreature } from "@/shared/aquarium/creatures/bake-creature";
 import { bakeSnail } from "@/shared/aquarium/creatures/snail/bake-creature";
 import { buildCrawlTrack, sampleTrack } from "@/shared/aquarium/sim/crawl";
 import type { Box, Node } from "@/shared/aquarium/core/ir";
+import type { SkCanvas } from "@shopify/react-native-skia/src/skia/types";
 import { getSubstrateEffect, SUBSTRATE_UNIFORM_KEYS } from "@/shared/aquarium/core/sksl/substrate";
+import { getWaterEffect, WATER_UNIFORM_KEYS } from "@/shared/aquarium/core/sksl/water";
+import {
+  getWarpEffect,
+  RELIGHT_OFF_UNIFORMS,
+  RELIGHT_STATIC_UNIFORMS,
+  relightYaw,
+  WARP_UNIFORM_KEYS,
+} from "@/shared/aquarium/core/sksl/warp";
+import {
+  bakeBodyNormalMap,
+  bakeNormalMap,
+  NORMAL_PX_PER_UNIT,
+} from "@/shared/aquarium/fish/normal-map";
+import { axolotlVolume } from "@/shared/aquarium/creatures/axolotl/normal-map";
+import { SPINE_AMP_MAX, SPINE_K, SPINE_PAD } from "@/shared/aquarium/fish/spine";
 import { composeSpriteScene } from "@/shared/aquarium/scene/compose-sprites";
 import { composeScene, GENERATORS } from "@/shared/aquarium/scene/compose";
 import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
+import { BLENDER_PIECES } from "@/shared/aquarium/scene/sprites/blender-manifest";
 import { SCENE_SPRITES } from "@/shared/aquarium/scene/sprites/sprite-manifest";
+import { BLENDER_SCAPE_FILLED } from "@/shared/aquarium/scene/themes/blender-scape";
 import { SPRITE_SCAPE_FILLED } from "@/shared/aquarium/scene/themes/nature-scape-sprites";
 import { NATURE_SCAPE } from "@/shared/aquarium/scene/themes/nature-scape";
 import { SPECIES_LIST } from "@/shared/creature/catalog";
@@ -181,6 +199,181 @@ async function main() {
     }
   }
 
+  // Relight strips: the ONLY way to judge `fish/normal-map.ts` +
+  // `core/sksl/warp.ts`'s relight pass without a device. Everything here goes
+  // through the real compiled SkSL with the real normal map, at the same
+  // uniforms `render/fish-layer.tsx` feeds it — the point being that the two
+  // things a baked-in highlight cannot do (respond to the body bending,
+  // respond to the fish turning) are exactly the two things these strips
+  // isolate. Each cell is a matched OFF|ON pair so the difference is legible
+  // rather than remembered.
+  console.log("Rendering relight strips...");
+  const relightTraits: FishTraits = {
+    color: "goldDust",
+    body: "standard",
+    tail: "round",
+    dorsal: "standard",
+  };
+  const relightAlbedo = bakeFish(Skia, relightTraits, "adult", dpr);
+  const relightNormal = bakeBodyNormalMap(Skia, relightTraits, "adult");
+  const relightEffect = getWarpEffect(Skia);
+
+  /** One fish drawn through the warp+relight shader into a `size`-square tile. */
+  const drawRelit = (
+    canvas: SkCanvas,
+    originX: number,
+    size: number,
+    phase: number,
+    yaw: number,
+    on: boolean,
+  ): void => {
+    if (!relightAlbedo || !relightEffect) return;
+    // Image-space -> local-space for each child: the albedo is baked at `dpr`
+    // px per unit over its own bounds, the normal map at NORMAL_PX_PER_UNIT
+    // over its (smaller) box. Getting these two matrices right is the whole
+    // registration story — on device `<ImageShader rect=...>` does it, here
+    // it has to be spelled out.
+    const albedoMatrix = Skia.Matrix();
+    albedoMatrix.translate(relightAlbedo.bounds.x, relightAlbedo.bounds.y);
+    albedoMatrix.scale(1 / dpr, 1 / dpr);
+    const albedoShader = relightAlbedo.image.makeShaderOptions(
+      TileMode.Decal,
+      TileMode.Decal,
+      FilterMode.Linear,
+      MipmapMode.None,
+      albedoMatrix,
+    );
+    const normalArt = relightNormal ?? relightAlbedo;
+    const normalMatrix = Skia.Matrix();
+    normalMatrix.translate(normalArt.bounds.x, normalArt.bounds.y);
+    const nUnit = relightNormal ? 1 / NORMAL_PX_PER_UNIT : 1 / dpr;
+    normalMatrix.scale(nUnit, nUnit);
+    const normalShader = normalArt.image.makeShaderOptions(
+      TileMode.Decal,
+      TileMode.Decal,
+      FilterMode.Linear,
+      MipmapMode.None,
+      normalMatrix,
+    );
+
+    const uniforms: Record<string, number | number[]> = {
+      boundsX: relightAlbedo.bounds.x,
+      boundsWidth: relightAlbedo.bounds.width,
+      ampScale: SPINE_AMP_MAX,
+      k: SPINE_K,
+      phase,
+      bendAmp: 0,
+      // Fin secondary rotation off: this strip is about LIGHT, and three
+      // extra moving fins would only make the comparison harder to read.
+      pecNearHub: [0, 0, 1, 1],
+      pecFarHub: [0, 0, 1, 1],
+      caudalHub: [0, 0, 1, 1],
+      pecNearAmp: 0,
+      pecFarAmp: 0,
+      caudalAmp: 0,
+      ...(on ? RELIGHT_STATIC_UNIFORMS : RELIGHT_OFF_UNIFORMS),
+      ...(on ? relightYaw(yaw) : { yawCos: 1, yawSin: 0 }),
+    };
+    const shader = relightEffect.makeShaderWithChildren(
+      WARP_UNIFORM_KEYS.flatMap((key) => uniforms[key]),
+      [albedoShader, normalShader],
+    );
+
+    // The same mirror/foreshorten matrix fish-layer.tsx applies, so a cell
+    // shows the fish at the heading its lighting was computed for.
+    const c = Math.cos(yaw);
+    const s = Math.sin(yaw);
+    const w = -(c >= 0 ? 1 : -1) * Math.max(Math.abs(c), EDGE_ON_MIN_WIDTH);
+    const q = s / (PERSPECTIVE_RATIO * relightAlbedo.bounds.width);
+    const matrix: Matrix4 = [w, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, q, 0, 0, 1];
+
+    canvas.save();
+    processTransform(canvas, [
+      { translateX: originX + size / 2 },
+      { translateY: size / 2 },
+      { matrix },
+    ] as Transforms3d);
+    const paint = Skia.Paint();
+    paint.setShader(shader);
+    canvas.drawRect(
+      Skia.XYWHRect(
+        relightAlbedo.bounds.x - SPINE_PAD,
+        relightAlbedo.bounds.y - SPINE_PAD,
+        relightAlbedo.bounds.width + SPINE_PAD * 2,
+        relightAlbedo.bounds.height + SPINE_PAD * 2,
+      ),
+      paint,
+    );
+    canvas.restore();
+  };
+
+  /** An OFF|ON pair in one PNG, with a hairline between the halves. */
+  const relightPair = (label: string, phase: number, yaw: number): Cell => {
+    const S = 150;
+    const surf = Skia.Surface.Make(S * 2, S);
+    if (!surf) return { label, dataUri: null };
+    const canvas = surf.getCanvas();
+    const bg = Skia.Paint();
+    bg.setColor(Skia.Color("#c9e6f2"));
+    canvas.drawRect(Skia.XYWHRect(0, 0, S * 2, S), bg);
+    drawRelit(canvas, 0, S, phase, yaw, false);
+    drawRelit(canvas, S, S, phase, yaw, true);
+    const divider = Skia.Paint();
+    divider.setColor(Skia.Color("#00000044"));
+    canvas.drawRect(Skia.XYWHRect(S - 0.5, 0, 1, S), divider);
+    const bytes = surf.makeImageSnapshot().encodeToBytes();
+    return { label, dataUri: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}` };
+  };
+
+  // Turning the fish. This is the strip that answers "does yaw do anything?"
+  const relightYawCells: Cell[] = [];
+  for (let i = 0; i < 5; i++) {
+    const deg = i * 45;
+    const yaw = (deg * Math.PI) / 180;
+    relightYawCells.push(relightPair(`yaw ${deg}°  (off | on)`, 0, yaw));
+  }
+
+  // Bending the fish. Same heading, one full tail beat — the highlight
+  // should travel along the flank rather than sit still.
+  const relightBendCells: Cell[] = [];
+  for (let i = 0; i < 5; i++) {
+    const phase = (i / 5) * Math.PI * 2;
+    relightBendCells.push(relightPair(`beat ${Math.round((i / 5) * 360)}°  (off | on)`, phase, 0));
+  }
+
+  // The raw maps, viewed directly: R = normal x, G = normal y, B = body mask.
+  // A malformed map is far easier to spot here than in its effect on a lit
+  // fish — a hole in the mask, a discontinuity at the peduncle, a channel
+  // stuck at a constant all read at a glance.
+  const normalMapCells: Cell[] = [];
+  const pngCell = (
+    label: string,
+    art: { image: { encodeToBytes(): Uint8Array } } | null,
+  ): Cell => ({
+    label,
+    dataUri: art
+      ? `data:image/png;base64,${Buffer.from(art.image.encodeToBytes()).toString("base64")}`
+      : null,
+  });
+  // The axolotl is the only non-molly species with a volume — and the only
+  // one whose profile FLARES at u=1 (a paddle tail), so its mask must stay
+  // solid all the way to the tail tip where a molly's fades out. That
+  // difference is the thing to look for here.
+  normalMapCells.push(
+    pngCell("axolotl (paddle tail, no feather)", bakeNormalMap(Skia, axolotlVolume())),
+  );
+  for (const body of BODIES) {
+    for (const stage of ["fry", "juvenile", "adult"] as LifeStage[]) {
+      const art = bakeBodyNormalMap(Skia, { ...relightTraits, body }, stage);
+      normalMapCells.push({
+        label: `${body} / ${stage}`,
+        dataUri: art
+          ? `data:image/png;base64,${Buffer.from(art.image.encodeToBytes()).toString("base64")}`
+          : null,
+      });
+    }
+  }
+
   // Full-scene composite: the nature-scape theme's decor, drawn at real
   // placed positions via the same `bakeNodes`/`emit` path
   // `render/decor-cache.ts` and `verify-aquarium.ts`'s column-occupancy
@@ -301,118 +494,239 @@ async function main() {
   // Same reference-sampled palette as `render/sprite-layers.tsx`'s
   // `SpriteWater` — duplicated for the same "sprite mode has no dependency
   // on the other render module" reason as that file's LAYER_OPACITY note.
-  const SPRITE_WATER_TOP = "#b8ecfa";
-  const SPRITE_WATER_MID = "#5ec3e0";
-  const SPRITE_WATER_BOTTOM = "#1a5f79";
+  const SPRITE_WATER_TOP = "#7fc4dc";
+  const SPRITE_WATER_MID = "#3f93b4";
+  const SPRITE_WATER_BOTTOM = "#123f56";
+  // Per-layer atmospheric perspective, from the SAME `scene-design.ts` values
+  // the device renderer reads. This loop previously drew every piece with a
+  // bare paint, so the preview showed no depth falloff whatsoever and could
+  // not be used to judge it — which is exactly the thing that needed judging.
+  const L = DEFAULT_SCENE_DESIGN.layers;
+  const LAYER_ALPHA: Record<string, number> = {
+    far: L.opacityFar,
+    back: L.opacityBack,
+    backMid: L.opacityBackMid,
+    mid: L.opacityMid,
+    frontMid: L.opacityFrontMid,
+    front: L.opacityFront,
+    frontMost: L.opacityFrontMost,
+  };
+  const LAYER_HAZE: Record<string, number> = {
+    far: L.hazeFar,
+    back: L.hazeBack,
+    backMid: L.hazeBackMid,
+    mid: L.hazeMid,
+    frontMid: L.hazeFrontMid,
+    front: 0,
+    frontMost: 0,
+  };
+  const unit = (hex: string) => (parseHex(hex) ?? [0, 0, 0]).map((c) => c / 255);
+  const hazeUnit = unit(L.hazeColor);
+  const spritePaintFor = (layer: string) => {
+    const paint = Skia.Paint();
+    paint.setAlphaf(1 - (1 - (LAYER_ALPHA[layer] ?? 1)) * L.hazeOpacityRelief);
+    const k = LAYER_HAZE[layer] ?? 0;
+    if (k > 0) {
+      const inv = 1 - k;
+      paint.setColorFilter(
+        Skia.ColorFilter.MakeMatrix([
+          inv, 0, 0, 0, hazeUnit[0] * k,
+          0, inv, 0, 0, hazeUnit[1] * k,
+          0, 0, inv, 0, hazeUnit[2] * k,
+          0, 0, 0, 1, 0,
+        ]),
+      );
+    }
+    return paint;
+  };
   const spriteSceneCells: { label: string; dataUri: string | null }[] = [];
-  for (const [w, h] of [
-    [390, 844],
-    [844, 390],
-  ] as const) {
-    const substrateY = h - 60;
-    const spriteScene = composeSpriteScene(SPRITE_SCAPE_FILLED, w, h, substrateY);
-    if (spriteScene.pieces.length === 0) {
-      spriteSceneCells.push({
-        label: `${w}x${h} — no sprite assets supplied`,
-        dataUri: null,
-      });
-      continue;
-    }
-    const surf = Skia.Surface.Make(w, h)!;
-    const canvas = surf.getCanvas();
-    const waterPaint = Skia.Paint();
-    waterPaint.setShader(
-      Skia.Shader.MakeLinearGradient(
-        Skia.Point(0, 0),
-        Skia.Point(0, h),
-        [
-          Skia.Color(SPRITE_WATER_TOP),
-          Skia.Color(SPRITE_WATER_MID),
-          Skia.Color(SPRITE_WATER_BOTTOM),
-        ],
-        [0, 0.55, 1],
-        TileMode.Clamp,
-      ),
-    );
-    canvas.drawRect(Skia.XYWHRect(0, 0, w, h), waterPaint);
-    // Sprite mode's ground is the SAME procedural substrate shader the 2D
-    // theme uses, only with a warmer/lighter palette, and clipped to a wavy
-    // top edge. Keep all of this in sync with `render/sprite-layers.tsx`'s
-    // SPRITE_SAND_* / SAND_SEAM_* / SAND_WAVE_MAX constants. It used to
-    // stretch `sand-patch.png` edge to edge; see that file's
-    // `SpriteSubstrate` doc for why that had to go.
-    const spriteSandHeight = h - substrateY;
-    const SAND_WAVE_MAX = 5;
-    const waveAmp = Math.min(SAND_WAVE_MAX, spriteSandHeight * 0.14);
-    const sandPath = Skia.Path.Make();
-    sandPath.moveTo(0, h);
-    const WAVE_STEPS = 64;
-    for (let i = 0; i <= WAVE_STEPS; i++) {
-      const t = i / WAVE_STEPS;
-      const wave = Math.sin(t * Math.PI * 3.1) * 0.6 + Math.sin(t * Math.PI * 7.7 + 1.7) * 0.4;
-      sandPath.lineTo(w * t, substrateY + wave * waveAmp);
-    }
-    sandPath.lineTo(w, h);
-    sandPath.close();
-
-    canvas.save();
-    canvas.clipPath(sandPath, ClipOp.Intersect, true);
-    if (substrateEffect) {
-      const spriteUniforms: Record<string, number | number[]> = {
+  const blenderSceneCells: { label: string; dataUri: string | null }[] = [];
+  for (const [themeCells, theme] of [
+    [spriteSceneCells, SPRITE_SCAPE_FILLED],
+    [blenderSceneCells, BLENDER_SCAPE_FILLED],
+  ] as const)
+    for (const [w, h] of [
+      [390, 844],
+      [844, 390],
+    ] as const) {
+      const substrateY = h - 60;
+      const spriteScene = composeSpriteScene(theme, w, h, substrateY);
+      if (spriteScene.pieces.length === 0) {
+        themeCells.push({
+          label: `${w}x${h} — no sprite assets supplied`,
+          dataUri: null,
+        });
+        continue;
+      }
+      const surf = Skia.Surface.Make(w, h)!;
+      const canvas = surf.getCanvas();
+      const waterPaint = Skia.Paint();
+      // The real water shader, not a linear gradient. The god-ray shafts are
+      // the only thing in frame that states a light DIRECTION, so a preview
+      // that flattens them to a gradient cannot be used to judge the one
+      // complaint they exist to answer. Falls back to the gradient if the
+      // effect will not compile, same contract as `render/water.tsx`.
+      const waterEffect = getWaterEffect(Skia);
+      const waterUniforms: Record<string, number | number[]> = {
         width: w,
-        height: spriteSandHeight,
-        colorTop: [0.906, 0.843, 0.702],
-        colorBottom: [0.757, 0.663, 0.51],
-        speckleColor: [0.494, 0.416, 0.298],
-        grainStrength: 0.055,
-        speckleDensity: 0.14,
+        height: h,
+        time: 0,
+        colorTop: unit(SPRITE_WATER_TOP),
+        colorMid: unit(SPRITE_WATER_MID),
+        colorBottom: unit(SPRITE_WATER_BOTTOM),
       };
-      const spriteSandPaint = Skia.Paint();
-      spriteSandPaint.setShader(
-        substrateEffect.makeShader(SUBSTRATE_UNIFORM_KEYS.flatMap((key) => spriteUniforms[key])),
+      waterPaint.setShader(
+        waterEffect
+          ? waterEffect.makeShader(WATER_UNIFORM_KEYS.flatMap((k) => waterUniforms[k]))
+          : Skia.Shader.MakeLinearGradient(
+          Skia.Point(0, 0),
+          Skia.Point(0, h),
+          [
+            Skia.Color(SPRITE_WATER_TOP),
+            Skia.Color(SPRITE_WATER_MID),
+            Skia.Color(SPRITE_WATER_BOTTOM),
+          ],
+          [0, 0.55, 1],
+          TileMode.Clamp,
+        ),
       );
+      canvas.drawRect(Skia.XYWHRect(0, 0, w, h), waterPaint);
+      // Sprite mode's ground is the SAME procedural substrate shader the 2D
+      // theme uses, only with a warmer/lighter palette, and clipped to a wavy
+      // top edge. Keep all of this in sync with `render/sprite-layers.tsx`'s
+      // SPRITE_SAND_* / SAND_SEAM_* / SAND_WAVE_MAX constants. It used to
+      // stretch `sand-patch.png` edge to edge; see that file's
+      // `SpriteSubstrate` doc for why that had to go.
+      const spriteSandHeight = h - substrateY;
+      const SAND_WAVE_MAX = 5;
+      const waveAmp = Math.min(SAND_WAVE_MAX, spriteSandHeight * 0.14);
+      const sandPath = Skia.Path.Make();
+      sandPath.moveTo(0, h);
+      const WAVE_STEPS = 64;
+      for (let i = 0; i <= WAVE_STEPS; i++) {
+        const t = i / WAVE_STEPS;
+        const wave = Math.sin(t * Math.PI * 3.1) * 0.6 + Math.sin(t * Math.PI * 7.7 + 1.7) * 0.4;
+        sandPath.lineTo(w * t, substrateY + wave * waveAmp);
+      }
+      sandPath.lineTo(w, h);
+      sandPath.close();
+
       canvas.save();
-      canvas.translate(0, substrateY - SAND_WAVE_MAX);
-      canvas.drawRect(Skia.XYWHRect(0, 0, w, spriteSandHeight + SAND_WAVE_MAX), spriteSandPaint);
-      canvas.restore();
-    }
-    // Sand/water seam shadow — mirrors SAND_SEAM_SHADOW/SAND_SEAM_FRACTION.
-    const seamPaint = Skia.Paint();
-    seamPaint.setShader(
-      Skia.Shader.MakeLinearGradient(
-        Skia.Point(0, substrateY - SAND_WAVE_MAX),
-        Skia.Point(0, substrateY + spriteSandHeight * 0.42),
-        [Skia.Color("rgba(52, 74, 84, 0.34)"), Skia.Color("rgba(52, 74, 84, 0)")],
-        [0, 1],
-        TileMode.Clamp,
-      ),
-    );
-    canvas.drawRect(
-      Skia.XYWHRect(0, substrateY - SAND_WAVE_MAX, w, spriteSandHeight * 0.42 + SAND_WAVE_MAX),
-      seamPaint,
-    );
-    canvas.restore();
-    for (const piece of spriteScene.pieces) {
-      const sprite = SCENE_SPRITES[piece.spriteId];
-      const pngPath = path.join(__dirname, "..", sprite.file);
-      if (!fs.existsSync(pngPath)) continue;
-      const bytes = fs.readFileSync(pngPath);
-      const image = Skia.Image.MakeImageFromEncoded(Skia.Data.fromBytes(bytes));
-      if (!image) continue;
-      const srcRect = Skia.XYWHRect(0, 0, image.width(), image.height());
-      const destRect = Skia.XYWHRect(
-        piece.worldX + piece.rect.x,
-        piece.worldY + piece.rect.y,
-        piece.rect.width,
-        piece.rect.height,
+      canvas.clipPath(sandPath, ClipOp.Intersect, true);
+      if (substrateEffect) {
+        const spriteUniforms: Record<string, number | number[]> = {
+          width: w,
+          height: spriteSandHeight,
+          colorTop: [0.906, 0.843, 0.702],
+          colorBottom: [0.757, 0.663, 0.51],
+          speckleColor: [0.494, 0.416, 0.298],
+          grainStrength: 0.055,
+          speckleDensity: 0.14,
+        };
+        const spriteSandPaint = Skia.Paint();
+        spriteSandPaint.setShader(
+          substrateEffect.makeShader(SUBSTRATE_UNIFORM_KEYS.flatMap((key) => spriteUniforms[key])),
+        );
+        canvas.save();
+        canvas.translate(0, substrateY - SAND_WAVE_MAX);
+        canvas.drawRect(Skia.XYWHRect(0, 0, w, spriteSandHeight + SAND_WAVE_MAX), spriteSandPaint);
+        canvas.restore();
+      }
+      // Sand/water seam shadow — mirrors SAND_SEAM_SHADOW/SAND_SEAM_FRACTION.
+      const seamPaint = Skia.Paint();
+      seamPaint.setShader(
+        Skia.Shader.MakeLinearGradient(
+          Skia.Point(0, substrateY - SAND_WAVE_MAX),
+          Skia.Point(0, substrateY + spriteSandHeight * 0.42),
+          [Skia.Color("rgba(52, 74, 84, 0.34)"), Skia.Color("rgba(52, 74, 84, 0)")],
+          [0, 1],
+          TileMode.Clamp,
+        ),
       );
-      canvas.drawImageRect(image, srcRect, destRect, Skia.Paint());
+      canvas.drawRect(
+        Skia.XYWHRect(0, substrateY - SAND_WAVE_MAX, w, spriteSandHeight * 0.42 + SAND_WAVE_MAX),
+        seamPaint,
+      );
+      canvas.restore();
+      for (const piece of spriteScene.pieces) {
+        const sprite = SCENE_SPRITES[piece.spriteId];
+        const pngPath = path.join(__dirname, "..", sprite.file);
+        if (!fs.existsSync(pngPath)) continue;
+        const bytes = fs.readFileSync(pngPath);
+        const image = Skia.Image.MakeImageFromEncoded(Skia.Data.fromBytes(bytes));
+        if (!image) continue;
+        const srcRect = Skia.XYWHRect(0, 0, image.width(), image.height());
+        const destRect = Skia.XYWHRect(
+          piece.worldX + piece.rect.x,
+          piece.worldY + piece.rect.y,
+          piece.rect.width,
+          piece.rect.height,
+        );
+        canvas.drawImageRect(image, srcRect, destRect, spritePaintFor(piece.layer));
+      }
+      const bytes = surf.makeImageSnapshot().encodeToBytes();
+      themeCells.push({
+        label: `${w}x${h} — ${spriteScene.pieces.length} pieces`,
+        dataUri: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`,
+      });
     }
-    const bytes = surf.makeImageSnapshot().encodeToBytes();
-    spriteSceneCells.push({
-      label: `${w}x${h} — ${spriteScene.pieces.length} pieces`,
-      dataUri: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`,
-    });
+
+  // Three-way decor comparison — the whole point of the Blender pipeline,
+  // and the only place all three approaches to the same species sit next to
+  // each other at the same size:
+  //
+  //   A  `scene/gen/*.ts`     Skia paths, infinitely variable, flat-lit
+  //   B  `assets/.../scene/`  painted PNG, best looking, fixed resolution
+  //   C  `assets/.../scene3d/` orthographic render of real 3D geometry
+  //
+  // Read C against A for whether the fold/venation/transmission work bought
+  // anything, and against B for whether it is close enough to retire the
+  // fixed-resolution art. Missing C files degrade to a labelled empty cell —
+  // they are produced by `yarn decor:blender`, which needs Blender installed
+  // and is deliberately not a prerequisite of this script.
+  console.log("Rendering decor A/B/C comparison...");
+  const decorRows: { name: string; cells: { label: string; dataUri: string | null }[] }[] = [];
+  const pngDataUri = (repoRelative: string): string | null => {
+    const abs = path.join(__dirname, "..", repoRelative);
+    if (!fs.existsSync(abs)) return null;
+    return `data:image/png;base64,${fs.readFileSync(abs).toString("base64")}`;
+  };
+  for (const [id, piece] of Object.entries(BLENDER_PIECES)) {
+    const cells: { label: string; dataUri: string | null }[] = [];
+
+    if (piece.generatedSpecies) {
+      // Same seed the Blender render used, so the two are the same roll of
+      // the same species rather than two unrelated individuals.
+      const generated = GENERATORS[piece.generatedSpecies]({ seed: 3, scale: 1 });
+      const pad = 8;
+      const box: Box = {
+        x: generated.bbox.x - pad,
+        y: generated.bbox.y - pad,
+        width: generated.bbox.width + pad * 2,
+        height: generated.bbox.height + pad * 2,
+      };
+      const baked = bakeNodes(Skia, generated.nodes, box, 2);
+      cells.push({
+        label: `A · gen/${piece.generatedSpecies}.ts`,
+        dataUri: baked
+          ? `data:image/png;base64,${Buffer.from(baked.image.encodeToBytes()).toString("base64")}`
+          : null,
+      });
+    }
+
+    if (piece.paintedSpriteId) {
+      const painted = SCENE_SPRITES[piece.paintedSpriteId];
+      cells.push({
+        label: `B · ${piece.paintedSpriteId} (painted)`,
+        dataUri: painted ? pngDataUri(painted.file) : null,
+      });
+    }
+
+    cells.push({ label: "C · blender (lit)", dataUri: pngDataUri(piece.file) });
+    if (piece.normal) {
+      cells.push({ label: "C · normal", dataUri: pngDataUri(piece.normal) });
+    }
+    decorRows.push({ name: id, cells });
   }
 
   // Creatures — every non-molly species x its own variant list, through
@@ -583,8 +897,10 @@ async function main() {
   .fail { width: 110px; height: 70px; background: #611; display: flex; align-items: center; justify-content: center; font-size: 10px; }
   .grid { display: flex; flex-wrap: wrap; gap: 12px; }
   .yaw-cell img { width: 170px; }
+  .relight-cell img { width: 300px; image-rendering: auto; }
   .scene-cell img { width: 320px; background: none; }
   .eye-cell img { width: 300px; }
+  .decor-cell img { width: 190px; background: #2f7b86; }
 </style></head><body>
 <h1>Aquarium fish preview</h1>
 <p>Generated by <code>yarn aquarium:preview</code> from the exact code the app runs (real Skia, via scripts/lib/skia-node.ts).</p>
@@ -608,11 +924,31 @@ ${eyeRows
 <h2>Yaw strip — fish-layer.tsx's perspective matrix at 9 headings</h2>
 <p>yaw 0°/±180° = broadside (art is nose-left, so 0° here is mirrored nose-right); ±90° = edge-on, floored at EDGE_ON_MIN_WIDTH. Art is nose-left by default (unmirrored, w&gt;0).</p>
 <div class="grid">${yawCells.map((c) => `<div class="cell yaw-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">bake failed</div>`}</div>`).join("")}</div>
+<h2>Relight — turning the fish (left half OFF, right half ON)</h2>
+<p>Same baked texture, same heading, the only difference is <code>core/shading.ts</code>&#39;s <code>DYNAMIC_RELIGHT</code> gains. The painted highlight is frozen into the texture and reads identically at every yaw; the relit half picks up flank shading and a Fresnel rim as the body turns away from the viewer. This is the tell the flat-card renderer could not fix.</p>
+<div class="grid">${relightYawCells.map((c) => `<div class="cell relight-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">bake failed</div>`}</div>`).join("")}</div>
+<h2>Relight — one tail beat at a fixed heading (left half OFF, right half ON)</h2>
+<p>The spine warp bends both halves identically. On the right the normal is rotated by the same spine slope the warp solved for, so the highlight travels along the flank with the bend instead of riding the texture.</p>
+<div class="grid">${relightBendCells.map((c) => `<div class="cell relight-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">bake failed</div>`}</div>`).join("")}</div>
+<h2>Body normal maps — R = normal x, G = normal y, B = body mask</h2>
+<p>The raw <code>fish/normal-map.ts</code> output, one per body type and life stage — six maps serve every fish in the tank, because the field ignores colour, pattern, tail and dorsal. Look for holes in the blue mask, a seam at the peduncle, or a channel stuck flat.</p>
+<div class="grid">${normalMapCells.map((c) => `<div class="cell relight-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">bake failed</div>`}</div>`).join("")}</div>
 <h2>Full-scene composite — nature-scape theme, decor only</h2>
 <p>Faint vertical lines mark the authored swim lane.</p>
 <div class="grid">${sceneCells.map((c) => `<div class="cell scene-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">bake failed</div>`}</div>`).join("")}</div>
 <h2>Sprite-scape composite — approach "B" (shipped PNGs) for A/B comparison against the composite above</h2>
 <div class="grid">${spriteSceneCells.map((c) => `<div class="cell scene-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">no sprite assets supplied</div>`}</div>`).join("")}</div>
+<h2>Blender-scape composite — approach "C", the same corridor built from 3D-rendered pieces</h2>
+<p>Placed by the SAME <code>compose-sprites.ts</code> machinery as the painted composite above, from <code>themes/blender-scape.ts</code>. Compare against both composites above: this one has no ~1.7x scale ceiling, and its driftwood is one modelled piece rather than three stacked sprites.</p>
+<div class="grid">${blenderSceneCells.map((c) => `<div class="cell scene-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">not rendered</div>`}</div>`).join("")}</div>
+<h2>Decor A/B/C — the same species drawn three ways</h2>
+<p><b>A</b> = <code>scene/gen/*.ts</code>, Skia paths, infinitely variable but flat-lit. <b>B</b> = the painted PNG, best looking but fixed resolution (<code>themes/nature-scape-sprites.ts</code> documents it breaking past ~1.7x). <b>C</b> = an orthographic render of real 3D geometry from <code>scripts/blender/plant.py</code>, which has no resolution ceiling and carries a normal map. Empty C cells mean <code>yarn decor:blender</code> has not been run.</p>
+${decorRows
+  .map(
+    (r) =>
+      `<div class="row"><div class="name">${r.name}</div><div class="cells">${r.cells.map((c) => `<div class="cell decor-cell"><div class="label">${c.label}</div>${c.dataUri ? `<img src="${c.dataUri}" alt="${c.label}" />` : `<div class="fail">not rendered</div>`}</div>`).join("")}</div></div>`,
+  )
+  .join("\n")}
 <h2>Generated breeds — 60 deterministic seeds</h2>
 <p>Procedural molly breeds from <code>shared/fish/generated-breed.ts</code> — no catalog entry, no DB column, the <code>gen:&lt;seed&gt;</code> id IS the recipe. Seeds are a fixed stride so this section only changes when the generator does.</p>
 <div class="grid">${genCells.map(cellHtml).join("")}</div>

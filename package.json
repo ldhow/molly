@@ -77,7 +77,8 @@
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm run lint && npm run format:check",
     "tank:design": "tsx scripts/tank-design-editor.ts",
-    "tank:3d-react": "tsx scripts/tank-3d-react-harness.ts"
+    "tank:3d-react": "tsx scripts/tank-3d-react-harness.ts",
+    "decor:blender": "tsx scripts/render-blender-decor.ts"
   },
   "private": true
 }

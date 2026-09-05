@@ -1,6 +1,6 @@
-// Turtle body plan: a domed oval shell (a plain smooth ellipse — see
-// `frog/anatomy.ts`'s header for why a whole-body silhouette avoids
-// `blobPath`'s seam corner), a small head peeking from the front, and four
+// Turtle body plan: a domed oval shell (a plain smooth ellipse — a wobbled
+// `blobPath`'s 7-point seam reads as a visible corner on a whole-body
+// silhouette this large), a small head peeking from the front, and four
 // flat flipper-paddle legs peeking from under the shell rim. No independent
 // paddle-stroke animation (per the plan's Cut list) — static geometry on a
 // swim-transformed sprite, same as every other rigid creature.
@@ -21,7 +21,7 @@ function ellipsePathD(cx: number, cy: number, rx: number, ry: number): string {
   );
 }
 
-/** A flat paddle — a tapered leaf shape, not a chain of circles (a turtle's flipper reads as one flat plate, unlike a frog's rounded jointed leg). */
+/** A flat paddle — a tapered leaf shape, not a chain of circles (a turtle's flipper reads as one flat plate, unlike a jointed circle-chain leg such as otter's or shrimp's). */
 function paddlePathD(root: XY, tip: XY, width: number): string {
   const dx = tip.x - root.x;
   const dy = tip.y - root.y;

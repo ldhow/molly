@@ -4,7 +4,7 @@ import { db } from "@/db/client";
 import { sessions } from "@/db/schema";
 import { SESSIONS_QUERY_KEY } from "@/shared/hooks/use-sessions-query";
 import { toLocalDate } from "@/shared/lib/dates";
-import { classifyFish, TANK_CAPACITY } from "@/shared/lib/tank-membership";
+import { canJoinTank, classifyFish } from "@/shared/lib/tank-membership";
 
 import type { ActiveSession, RolledCreature, SessionOutcome } from "../types";
 
@@ -23,8 +23,8 @@ export function useEndSessionMutation() {
     mutationFn: async ({ session, outcome, endedAt, rolled }: EndSessionArgs) => {
       // A newly-finished fish auto-joins the tank if there's room, else it
       // lands straight in the Holding Tank — capacity is enforced here, not
-      // by a render-time slice. Species-agnostic: TANK_CAPACITY is one flat
-      // pool shared by every species, same as today's molly-only pool.
+      // by a render-time slice. Crawlers (snail, shrimp) are exempt and
+      // always join: they consume no slot at all, see `occupiesTankSlot`.
       const existing = await db.select().from(sessions);
       const { inTank } = classifyFish(existing, endedAt);
 
@@ -47,7 +47,7 @@ export function useEndSessionMutation() {
         endedAt,
         outcome,
         localDate: toLocalDate(endedAt),
-        inTank: inTank.length < TANK_CAPACITY ? 1 : 0,
+        inTank: canJoinTank(inTank, rolled.speciesId) ? 1 : 0,
       });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY }),

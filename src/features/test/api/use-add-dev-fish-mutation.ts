@@ -6,7 +6,7 @@ import { COLOR_DEFS, rollTraits } from "@/shared/fish/catalog";
 import { SESSIONS_QUERY_KEY } from "@/shared/hooks/use-sessions-query";
 import { toLocalDate } from "@/shared/lib/dates";
 import { createId } from "@/shared/lib/id";
-import { classifyFish, TANK_CAPACITY } from "@/shared/lib/tank-membership";
+import { classifyFish, tankHasRoom } from "@/shared/lib/tank-membership";
 
 /**
  * Dev-only: inserts one completed session with a random color/traits — the
@@ -39,7 +39,9 @@ export function useAddDevFishMutation() {
         endedAt: now,
         outcome: "completed",
         localDate: toLocalDate(now),
-        inTank: inTank.length < TANK_CAPACITY ? 1 : 0,
+        // Always a molly here, so the plain capacity gate is the right one —
+        // no crawler exemption to consider (see `canJoinTank`).
+        inTank: tankHasRoom(inTank) ? 1 : 0,
       });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY }),

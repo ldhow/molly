@@ -297,7 +297,7 @@ export interface SnailAnatomy {
   bounds: Box;
 }
 
-/** Deterministic — every variant shares one body shape; only `pigment.ts` varies per variant (same precedent as `frog/anatomy.ts`). */
+/** Deterministic — every variant shares one body shape; only `pigment.ts` varies per variant (same precedent as `shrimp/anatomy.ts`). */
 export function buildSnailAnatomy(): SnailAnatomy {
   const shellD = buildShellD();
   const footD = buildFootD();

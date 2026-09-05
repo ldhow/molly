@@ -12,7 +12,7 @@
 import type { LifeStage } from "@/shared/fish/types";
 import type { Rarity, RollableDef, UnlockRule } from "@/shared/lib/roll";
 
-export type SpeciesId = "molly" | "otter" | "turtle" | "frog" | "axolotl" | "snail";
+export type SpeciesId = "molly" | "otter" | "turtle" | "shrimp" | "axolotl" | "snail";
 
 /**
  * How this species moves, which decides BOTH its animation and its sim:
@@ -30,7 +30,7 @@ export interface SpeciesCopy {
   grownVerb: string;
   /** "didn't survive" / "couldn't hold on" — completes "Your {noun} {diedVerb}." */
   diedVerb: string;
-  /** Lowercase, for mid-sentence use: "Your otter…", "a healthy tiger frog…" */
+  /** Lowercase, for mid-sentence use: "Your otter…", "a healthy tiger shrimp…" */
   noun: string;
   /**
    * FULL sentences per life stage, mirroring `session-screen.tsx`'s existing

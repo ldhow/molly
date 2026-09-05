@@ -110,8 +110,8 @@ export function buildOtterAnatomy(): OtterAnatomy {
   );
 
   // All four legs hang from the BELLY (`baseBottom`), never the back — this
-  // is a side-view swimming body like a fish's, not a top-down seated pose
-  // like frog's. "Near"/"far" (bake-creature.ts's draw order) is a small x
+  // is a side-view swimming body like a fish's, not a top-down seated pose.
+  // "Near"/"far" (bake-creature.ts's draw order) is a small x
   // offset within the same belly-side pair, the same depth-cue trick fish's
   // pelvicNear/pelvicFar fins use, not a top/bottom split.
   const legs = [

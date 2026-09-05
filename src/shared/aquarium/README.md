@@ -89,7 +89,7 @@ either reaching into `scene/compose-sprites.ts` directly.
   spec/bake composition (`bake-fish.ts`), and the swim-warp math
   (`spine.ts`).
 - `creatures/` — the other 5 species, one directory each
-  (`snail/`, `frog/`, `turtle/`, `axolotl/`, `otter/`), each following the
+  (`snail/`, `shrimp/`, `turtle/`, `axolotl/`, `otter/`), each following the
   `{anatomy,limbs?,pigment,bake-creature}.ts` module pattern. `bake-creature.ts`
   (top level, no species subfolder) is the one dispatcher every render path
   goes through; `bake-placeholder.ts` is the rigid-blob fallback for any

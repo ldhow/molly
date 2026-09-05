@@ -4,7 +4,7 @@
 // screen needing to know the preference exists.
 //
 // Non-molly creatures render correctly ONLY in 2D V2 (3D has no
-// otter/turtle/frog/axolotl/snail art) — a `MollyTankFish[]` is structurally
+// otter/turtle/shrimp/axolotl/snail art) — a `MollyTankFish[]` is structurally
 // a valid subset of `AnyTankFish[]` (see `@/shared/lib/tank-fish.ts`'s
 // header), so filtering to molly-only here is enough to keep 3D completely
 // unmodified: no crash, no wrong art, just "your otter isn't visible if
@@ -37,6 +37,17 @@ interface Props {
    *  around the matching placed item (the Decorate screen's "which item is
    *  selected" frame). No 3D counterpart, same as `userScape`. */
   highlightId?: string | null;
+  /**
+   * Ignore the user's render-mode preference and always draw 2D.
+   *
+   * For views whose SUBJECT is the 2D art itself rather than "the tank" —
+   * the Fishdex swim preview, which exists to show how a species moves.
+   * Without this, a user who has switched to 3D taps an otter and gets an
+   * empty box, because the molly-only filter below removes the one thing
+   * they asked to look at. Do NOT reach for this to work around 3D gaps in
+   * ordinary tank surfaces; there the filter is the intended behaviour.
+   */
+  force2D?: boolean;
 }
 
 export function TankView({
@@ -48,9 +59,10 @@ export function TankView({
   userScape,
   pannable,
   highlightId,
+  force2D,
 }: Props) {
   const renderMode = useRenderModeStore((s) => s.renderMode);
-  if (renderMode === "3d") {
+  if (renderMode === "3d" && !force2D) {
     return <TankCanvas3D fish={fish.filter(isMollyTankFish)} mode={mode} style={style} />;
   }
   return (

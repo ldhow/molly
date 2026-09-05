@@ -1,8 +1,8 @@
 // A chain of overlapping circles, shrinking (or growing) from one end to the
 // other — the generic "tapered limb" primitive shared by any creature module
-// with jointed or stalk-like appendages (a frog's bent leg, an axolotl's
-// gill frond or stub leg, ...). Trivially correct — two overlapping filled
-// circles can't self-intersect or produce a stray spike the way a
+// with jointed or stalk-like appendages (a shrimp's thin walking leg, an
+// axolotl's gill frond or stub leg, ...). Trivially correct — two
+// overlapping filled circles can't self-intersect or produce a stray spike the way a
 // hand-rolled bitangent capsule outline can — and reads identically as a
 // smooth tapered limb once filled solid with `Node[]` circles.
 //

@@ -12,6 +12,8 @@ interface Options {
   /** Multiplier on crawl speed. */
   speedFactor?: number;
   enabled: boolean;
+  /** Opt-in to occasional straight-line dashes through open water between two points on the track — see `crawl.ts`'s `stepCrawl` header. Defaults to false (a snail never dashes). */
+  canDash?: boolean;
 }
 
 export interface Crawl {
@@ -34,7 +36,13 @@ export interface Crawl {
  * swimmer has three, so sharing the engine would mean giving the snail the
  * ability to leave the surface and then steering it back.
  */
-export function useCrawl({ track, seed, speedFactor = 1, enabled }: Options): Crawl {
+export function useCrawl({
+  track,
+  seed,
+  speedFactor = 1,
+  enabled,
+  canDash = false,
+}: Options): Crawl {
   const state = useSharedValue<CrawlState>(initCrawlState(track, seed));
 
   const x = useSharedValue(state.value.x);
@@ -47,6 +55,7 @@ export function useCrawl({ track, seed, speedFactor = 1, enabled }: Options): Cr
 
   const trackRef = useSharedValue(track);
   const speedFactorRef = useSharedValue(speedFactor);
+  const canDashRef = useSharedValue(canDash);
   useEffect(() => {
     // Just hand over the new track: `stepCrawl` notices the length changed and
     // re-seats `s` proportionally itself, on the UI thread where the state
@@ -59,13 +68,16 @@ export function useCrawl({ track, seed, speedFactor = 1, enabled }: Options): Cr
   useEffect(() => {
     speedFactorRef.set(speedFactor);
   }, [speedFactor, speedFactorRef]);
+  useEffect(() => {
+    canDashRef.set(canDash);
+  }, [canDash, canDashRef]);
 
   const frameCallback = useFrameCallback((info) => {
     "worklet";
     const dtMs = info.timeSincePreviousFrame;
     if (dtMs == null) return;
     const s = state.value;
-    stepCrawl(s, trackRef.value, dtMs / 1000, speedFactorRef.value, Math.random);
+    stepCrawl(s, trackRef.value, dtMs / 1000, speedFactorRef.value, Math.random, canDashRef.value);
 
     x.value = s.x;
     y.value = s.y;

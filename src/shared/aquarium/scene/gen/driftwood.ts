@@ -324,6 +324,59 @@ export const generateDriftwood: Generator = ({ seed, scale, mirror = false }) =>
     angleDeg: DESIGN.lowAnchorAngleBase - rng() * DESIGN.lowAnchorAngleRange,
   });
 
+  // Moss on the wood. Every driftwood piece in the sprite art carries it
+  // (`driftwood-log.png` has a green mat along the log's upper surface), and
+  // its absence was the last thing making generated wood read as a bare dead
+  // twig rather than as something that has been underwater for years.
+  //
+  // Placed along the TRUNK's upper edge only: moss grows on the surfaces that
+  // catch light and hold detritus, so a piece mossed evenly all round looks
+  // dipped in paint instead of colonised.
+  const MOSS_DARK = DEFAULT_SCENE_DESIGN.species.seiryuStone.mossDarkColor;
+  const MOSS_MID = DEFAULT_SCENE_DESIGN.species.seiryuStone.mossMidColor;
+  const MOSS_LIGHT = DEFAULT_SCENE_DESIGN.species.seiryuStone.mossLightColor;
+  const mossNodes: Node[] = [];
+  const trunkSmooth = trunk.spine;
+  for (let i = 1; i < trunkSmooth.length - 1; i++) {
+    if (rng() > 0.55) continue;
+    const p = trunkSmooth[i];
+    const half = trunk.widthAt(i / Math.max(1, trunkSmooth.length - 1)) / 2;
+    const r = half * (0.55 + rng() * 0.5);
+    // Sit the clump on the upper side of the limb (-y), which is where the
+    // scene light comes from — see `scene-design.ts`'s `lighting`.
+    const cx = p.x + (rng() - 0.5) * half * 0.6;
+    const cy = p.y - half * 0.45;
+    mossNodes.push({
+      kind: "circle",
+      cx,
+      cy,
+      r,
+      paint: { type: "solid", color: MOSS_MID, opacity: 0.9 },
+    });
+    mossNodes.push({
+      kind: "circle",
+      cx: cx - r * 0.25,
+      cy: cy - r * 0.28,
+      r: r * 0.5,
+      paint: { type: "solid", color: MOSS_LIGHT, opacity: 0.4 },
+    });
+    for (let g = 0; g < 4; g++) {
+      const ga = rng() * Math.PI * 2;
+      const gd = rng() * r * 0.85;
+      mossNodes.push({
+        kind: "circle",
+        cx: cx + Math.cos(ga) * gd,
+        cy: cy + Math.sin(ga) * gd * 0.7,
+        r: r * (0.12 + rng() * 0.12),
+        paint: {
+          type: "solid",
+          color: rng() > 0.5 ? MOSS_LIGHT : MOSS_DARK,
+          opacity: 0.5,
+        },
+      });
+    }
+  }
+
   const shadows = contacts.map((c) => contactShadow(c.cx, c.radius, c.strength));
-  return { nodes: [...shadows, ...nodes], bbox, anchors, swayHeight: 0 }; // wood doesn't sway
+  return { nodes: [...shadows, ...nodes, ...mossNodes], bbox, anchors, swayHeight: 0 }; // wood doesn't sway
 };

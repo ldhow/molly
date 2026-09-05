@@ -18,6 +18,7 @@ import type { Generator } from "@/shared/aquarium/scene/types";
 import { darken, lighten } from "@/shared/lib/color";
 import { makeRng } from "@/shared/lib/rng";
 
+import { contactShadow, depthShade } from "./depth";
 import { ribbonCrossAxis, ribbonPath } from "./ribbon";
 
 const DESIGN = DEFAULT_SCENE_DESIGN.species.kelp;
@@ -55,7 +56,11 @@ export const generateKelp: Generator = ({ seed, scale, mirror }) => {
     const width = (DESIGN.widthMin + rng() * DESIGN.widthRange) * scale;
     const widthAt = (t: number) => width * (1 - t * 0.55) * (1 + 0.12 * Math.sin(t * 9));
     const d = ribbonPath(spine, widthAt);
-    const color = FROND_COLORS[i % FROND_COLORS.length];
+    // Fronds are emitted back-to-front, so the first drawn is the deepest.
+    // A kelp clump is broad and heavily overlapping, which makes it the piece
+    // where uniform brightness reads worst — see `depth.ts`.
+    const depth = frondCount > 1 ? 1 - i / (frondCount - 1) : 0;
+    const color = depthShade(FROND_COLORS[i % FROND_COLORS.length], depth);
     // Shade ACROSS the frond, not along it. This used to be a base-to-tip
     // gradient, which is the wrong axis: a frond's length already reads
     // through its taper and curve, so a gradient there is invisible, while
@@ -95,5 +100,10 @@ export const generateKelp: Generator = ({ seed, scale, mirror }) => {
     });
   }
 
-  return { nodes, bbox, anchors: [], swayHeight: DESIGN.swayHeightFactor * scale };
+  return {
+    nodes: [contactShadow(0, (DESIGN.widthMin + DESIGN.widthRange) * scale * 1.6, 0.24), ...nodes],
+    bbox,
+    anchors: [],
+    swayHeight: DESIGN.swayHeightFactor * scale,
+  };
 };

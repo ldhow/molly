@@ -95,7 +95,7 @@ export function buildOtterAquariumSpec(variant: string): { nodes: Node[]; bounds
   ];
   nodes.push({ kind: "group", children: bodySkin, isolate: true });
 
-  // Gloss + shadow — the exact multiply/screen layering fish/turtle/frog
+  // Gloss + shadow — the exact multiply/screen layering fish/turtle/shrimp
   // already use, just this creature's own palette (fur, not scales).
   nodes.push({
     kind: "path",

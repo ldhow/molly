@@ -3,7 +3,7 @@
 // species, this one spine-warps — see `render/creature-layer.tsx`'s
 // `locomotion === "undulating"` branch), external feathery gill fronds and
 // four small mostly-cosmetic legs (both built from `core/limb-chain.ts`'s
-// tapered circle chain — proven safe on frog's legs), and a small rounded
+// tapered circle chain — proven safe on otter's and shrimp's legs), and a small rounded
 // paddle tail with no fork, authored directly into the same profile tables
 // rather than as a separate fin shape.
 //

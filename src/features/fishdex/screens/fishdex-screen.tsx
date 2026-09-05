@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { CreaturePreview } from "@/shared/aquarium/render/creature-preview";
@@ -8,7 +8,7 @@ import { standardVariant } from "@/shared/creature/catalog";
 import { resolveCreature } from "@/shared/creature/resolve";
 import type { SpeciesId } from "@/shared/creature/types";
 import { useSpeciesUnlocks, useToggleSpeciesGrantMutation } from "@/shared/creature/use-unlocks";
-import { BODY_DEFS, DORSAL_DEFS, TAIL_DEFS } from "@/shared/fish/catalog";
+import { BODY_DEFS, DORSAL_DEFS, standardTraits, TAIL_DEFS } from "@/shared/fish/catalog";
 import { formatRarity, RARITY_COLORS } from "@/shared/fish/rarity";
 import type { Rarity } from "@/shared/fish/types";
 import { useToggleColorGrantMutation, useUnlocks } from "@/shared/fish/use-unlocks";
@@ -16,6 +16,12 @@ import { useSessionsQuery } from "@/shared/hooks/use-sessions-query";
 import { durationHint } from "@/shared/lib/roll";
 
 import { FishdexCard } from "../components/fishdex-card";
+import {
+  creatureTarget,
+  mollyTarget,
+  SwimPreviewSheet,
+  type SwimPreviewTarget,
+} from "../components/swim-preview-sheet";
 
 interface TraitEntry {
   key: string;
@@ -33,6 +39,9 @@ export function FishdexScreen() {
   const { entries: speciesEntries, grantedSpecies } = useSpeciesUnlocks();
   const toggleSpeciesGrant = useToggleSpeciesGrantMutation();
   const { width } = useWindowDimensions();
+  // One preview at a time: the sheet mounts a live Skia canvas, unlike the
+  // baked PNGs the grid uses (see `swim-preview-sheet.tsx`).
+  const [preview, setPreview] = useState<SwimPreviewTarget | null>(null);
   const numColumns = width >= 700 ? 4 : 2;
 
   // Body/tail/dorsal rolls only ever apply to molly rows — a creature row
@@ -127,7 +136,23 @@ export function FishdexScreen() {
             ) : null}
           </View>
         }
-        renderItem={({ item }) => <FishdexCard def={item.def} unlocked={item.unlocked} />}
+        renderItem={({ item }) => (
+          <FishdexCard
+            def={item.def}
+            unlocked={item.unlocked}
+            onPress={() =>
+              setPreview(
+                mollyTarget({
+                  colorId: item.def.id,
+                  traits: standardTraits(item.def.id),
+                  title: item.def.name,
+                  subtitle: item.def.description,
+                  rarity: item.def.rarity,
+                }),
+              )
+            }
+          />
+        )}
         ListFooterComponent={
           <>
             <View style={styles.traitSection}>
@@ -184,15 +209,36 @@ export function FishdexScreen() {
                     ) : null}
                     {unlocked
                       ? def.variants.map((variant) => (
-                          <View key={variant.id} style={styles.traitRow}>
+                          <Pressable
+                            key={variant.id}
+                            style={({ pressed }) => [
+                              styles.traitRow,
+                              styles.variantRow,
+                              pressed && styles.pressedRow,
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityLabel={`See how the ${variant.name} ${def.name} moves`}
+                            onPress={() =>
+                              setPreview(
+                                creatureTarget({
+                                  speciesId: def.id,
+                                  variant: variant.id,
+                                  title: `${variant.name} ${def.name}`,
+                                  subtitle: def.description,
+                                  rarity: variant.rarity,
+                                }),
+                              )
+                            }
+                          >
                             <Text style={styles.traitAxis}>{def.name}</Text>
                             <Text style={styles.traitName}>{variant.name}</Text>
+                            <Text style={styles.tapHint}>▶</Text>
                             <Text
                               style={seen.has(variant.id) ? styles.collected : styles.notCollected}
                             >
                               {seen.has(variant.id) ? "✓" : "—"}
                             </Text>
-                          </View>
+                          </Pressable>
                         ))
                       : null}
                   </View>
@@ -203,6 +249,7 @@ export function FishdexScreen() {
         }
         contentContainerStyle={styles.listContent}
       />
+      <SwimPreviewSheet target={preview} onClose={() => setPreview(null)} />
     </ScreenContainer>
   );
 }
@@ -255,6 +302,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
   },
+  variantRow: { paddingVertical: spacing.xs / 2 },
+  pressedRow: { opacity: 0.6 },
+  tapHint: { color: palette.accent, fontSize: 11, fontWeight: "700" },
   traitAxis: { color: palette.textFaint, fontSize: 11, width: 64 },
   traitName: { color: palette.text, fontSize: 13, fontWeight: "600", flex: 1 },
   traitRarity: { fontSize: 11, fontWeight: "700" },

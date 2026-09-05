@@ -13,6 +13,7 @@ import { DEFAULT_SCENE_DESIGN } from "@/shared/aquarium/scene/scene-design";
 import type { Generator } from "@/shared/aquarium/scene/types";
 import { makeRng } from "@/shared/lib/rng";
 
+import { contactShadow, depthShade } from "./depth";
 import { catmullRomSample, ribbonPath } from "./ribbon";
 
 const DESIGN = DEFAULT_SCENE_DESIGN.species.cabomba;
@@ -48,45 +49,69 @@ export const generateCabomba: Generator = ({ seed, scale }) => {
       paint: { type: "solid", color: STALK_COLOR, opacity: 0.85 },
     });
 
-    // Leaflets: sample the smoothed spine and drop a tiny needle pair at
-    // every 2nd-3rd station, alternating sides — a "whorl" without actually
-    // modelling radial symmetry, which is invisible at this scale anyway.
+    // Leaflets: sample the smoothed spine and put a WHORL at every other
+    // station — a fan of needles on BOTH sides at once, not a single needle
+    // alternating sides. Cabomba's whole read is feathery mass, and mass
+    // needs overlapping fans: at one needle per station this drew a bare
+    // stalk with a few specks attached, which is nothing like `cabomba.png`.
     const sampled = catmullRomSample(spine);
-    let side = 1;
     let colorIdx = 0;
-    for (let s = 4; s < sampled.length - 2; s += 2 + Math.floor(rng() * 2)) {
+    for (let s = 3; s < sampled.length - 2; s += 2) {
       const p = sampled[s];
       const prev = sampled[Math.max(0, s - 1)];
       const next = sampled[Math.min(sampled.length - 1, s + 1)];
       const tangentDeg = (Math.atan2(next.y - prev.y, next.x - prev.x) * 180) / Math.PI;
-      const leafletLen = (DESIGN.leafletLenMin + rng() * DESIGN.leafletLenRange) * scale;
-      nodes.push({
-        kind: "group",
-        children: [
-          {
-            kind: "path",
-            d: ribbonPath(
-              [
-                { x: 0, y: 0 },
-                { x: leafletLen, y: 0 },
-              ],
-              (t) => 1.1 * scale * (1 - t * 0.5),
-            ),
-            paint: {
-              type: "solid",
-              color: LEAFLET_COLORS[colorIdx % LEAFLET_COLORS.length],
-              opacity: 0.9,
+      // Whorls shorten toward the growing tip, the way a real stem's newest
+      // leaves haven't extended yet — this also stops the plant reading as a
+      // uniform-width brush cut off at the top.
+      const along = s / (sampled.length - 1);
+      const taper = 0.55 + 0.45 * Math.sin(Math.min(1, along * 1.15) * Math.PI);
+      const needleCount =
+        DESIGN.whorlNeedleCountMin + Math.floor(rng() * DESIGN.whorlNeedleCountRange);
+
+      for (const side of [-1, 1] as const) {
+        for (let n = 0; n < needleCount; n++) {
+          const fanT = needleCount === 1 ? 0.5 : n / (needleCount - 1);
+          // Fan centred on the stalk normal, opening `whorlArcDeg` wide.
+          const offsetDeg = (fanT - 0.5) * DESIGN.whorlArcDeg;
+          const leafletLen =
+            (DESIGN.leafletLenMin + rng() * DESIGN.leafletLenRange) * scale * taper;
+          nodes.push({
+            kind: "group",
+            children: [
+              {
+                kind: "path",
+                d: ribbonPath(
+                  [
+                    { x: 0, y: 0 },
+                    { x: leafletLen, y: 0 },
+                  ],
+                  (t) => 1.1 * scale * (1 - t * 0.55),
+                ),
+                paint: {
+                  type: "solid",
+                  // Needles at the OUTER edge of a fan point away from the
+                  // viewer, so they take the depth tint; the ones nearest
+                  // the fan's centre stay lit. Applied per-needle this is
+                  // what turns a flat feather stencil into a bottlebrush
+                  // with a near and a far side — see `depth.ts`.
+                  color: depthShade(
+                    LEAFLET_COLORS[colorIdx % LEAFLET_COLORS.length],
+                    Math.abs(fanT - 0.5) * 1.5,
+                  ),
+                  opacity: 0.9,
+                },
+              },
+            ],
+            transform: {
+              translateX: p.x,
+              translateY: p.y,
+              rotateDeg: tangentDeg + side * 90 + offsetDeg,
             },
-          },
-        ],
-        transform: {
-          translateX: p.x,
-          translateY: p.y,
-          rotateDeg: tangentDeg + side * (45 + rng() * 20),
-        },
-      });
-      side *= -1;
-      colorIdx++;
+          });
+          colorIdx++;
+        }
+      }
     }
 
     bbox = unionBox(bbox, {
@@ -97,5 +122,11 @@ export const generateCabomba: Generator = ({ seed, scale }) => {
     });
   }
 
-  return { nodes, bbox, anchors: [], swayHeight: DESIGN.swayHeightFactor * scale };
+  const clumpHalf = ((stalkCount - 1) / 2) * DESIGN.stalkSpacing * scale + 8 * scale;
+  return {
+    nodes: [contactShadow(0, clumpHalf * 1.6, 0.22), ...nodes],
+    bbox,
+    anchors: [],
+    swayHeight: DESIGN.swayHeightFactor * scale,
+  };
 };

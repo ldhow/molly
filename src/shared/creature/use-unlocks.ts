@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Storage from "expo-sqlite/kv-store";
 import { useMemo } from "react";
 
+import { DEV_UNLOCK_ALL } from "@/shared/lib/dev-flags";
 import { useSessionsQuery } from "@/shared/hooks/use-sessions-query";
 
 import { SPECIES_LIST } from "./catalog";
@@ -53,7 +54,8 @@ export function useSpeciesUnlocks() {
     const grantedSpecies = granted ?? [];
     const entries = SPECIES_LIST.map((def) => ({
       def,
-      unlocked: isSpeciesUnlocked(def, sessionRows, grantedSpecies),
+      // Mirrors `useUnlocks` — see `DEV_UNLOCK_ALL`.
+      unlocked: DEV_UNLOCK_ALL || isSpeciesUnlocked(def, sessionRows, grantedSpecies),
     }));
     return {
       entries,

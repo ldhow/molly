@@ -42,7 +42,7 @@ allowlist.
 
 ## How a fish is built
 
-Four stages, each a separate module:
+Five stages, each a separate module:
 
 1. **Anatomy** (`fish/body-profile.ts` for the body curve tables,
    `fish/profile.ts` for the PCHIP math, `fish/fins.ts` for fins,
@@ -305,10 +305,123 @@ source={warpEffect}><ImageShader .../></Shader></Rect>`, degrading to a
    bends and an edge-on one shimmies instead — the two cross-fade with
    `|sin yaw|`.
 
+5. **Relight** (`fish/normal-map.ts` + the relight half of
+   `core/sksl/warp.ts`) — everything in stages 1-3 paints light ONCE, at bake
+   time, from `core/shading.ts`'s single `LIGHT_DIR`: the countershading
+   ramp, the gloss lobes, the keyline. Frozen into the texture, that light
+   cannot respond to anything, and the two non-responses were the loudest
+   remaining "this is a sprite" tells in the art. The body undulates through
+   a full tail beat and the highlight **sits perfectly still**, because stage
+   4 moves pixels that already have their shading written into them. And the
+   fish turns from broadside to edge-on and the shading is **identical at
+   every yaw** — `render/screen-transform.ts`'s `matrixW`/`matrixQ` are an
+   honest perspective on a flat card, but the card is still lit like a card.
+
+   So a second, much smaller texture carries the body's SURFACE NORMAL and
+   the warp shader lights it per-frame. `normal-map.ts` models the body as a
+   stack of elliptical cross-sections: at each `u` the silhouette supplies
+   the ellipse's half-height (from the SAME `baseTop`/`baseBottom` curves
+   stage 1 draws the outline from, so the volume can't disagree with the
+   drawn shape) and `halfWidthAt` its half-thickness — `LATERAL_RATIO` 0.62
+   because a molly is deep and narrow rather than round, plus independent
+   nose and peduncle tapers, since depth and WIDTH don't fall off together on
+   a real fish (a caudal peduncle is a blade). That's a height field
+   `z = f(x, y)` with normal `normalize(-df/dx, -df/dy, 1)`; the `x`
+   derivative is what makes the head and peduncle light differently from the
+   flank, without which every cross-section lights as an isolated tube.
+
+   Written as DIRECT PIXEL WRITES, not through `core/ir.ts` — the IR draws
+   paths and gradients, and a normal field is a per-pixel function of the
+   anatomy with no shape vocabulary at all (`@/shared/fish/raster.ts` set the
+   precedent). Encoding: `R`,`G` = the normal's x,y as `n * 0.5 + 0.5`, `B` =
+   the body mask, `A` = 255 always. `z` isn't stored — the vector is unit
+   length and faces the viewer, so the shader recovers
+   `nz = sqrt(1 - nx² - ny²)` exactly and the freed channel carries the mask;
+   alpha pinned at 255 is what lets the shader read `B` straight out of a
+   premultiplied `eval()`.
+
+   **The pass is close to free**, which is why it's affordable at all. The
+   field depends only on `traits.body` and the stage squish — not colour, not
+   pattern, not tail, not dorsal. Six maps (two bodies × three post-egg
+   stages) serve every fish in the tank, ~0.67 MB total, against one albedo
+   bake per distinct colour/pattern/shape/stage. `render/normal-cache.ts` is
+   therefore a plain `Map`, not an LRU: the key space is bounded by the type
+   system, and the fish sharing a map are exactly the fish most likely to be
+   on screen together. `egg` returns null — an egg is
+   `buildEggAquariumSpec`'s silhouette, not a body.
+
+   In the shader the relight runs after the warp has solved where to sample,
+   reusing values it had already computed. It samples the normal at the SAME
+   warped coordinate as the albedo (so the lighting travels with the bent
+   body, not with the screen; outside the map's rect the `decal` child
+   returns `(0,0,0,0)`, `mask` lands at 0, and fins keep exactly their baked
+   colour — the right answer for a thin membrane anyway). Then it rotates the
+   normal by the spine slope (`spFinal.y` and its `norm`, already solved for
+   the inverse warp, so the lighting can't drift from the curve the pixels
+   were warped by), then about the vertical axis by the heading — the term a
+   flat texture never had. `relightYaw()` reconciles two easy-to-get-wrong
+   corrections there: the fish is broadside at `cos(yaw) = ±1`, so the
+   surface rotation's cosine is `|cos yaw|` rather than `cos yaw`; and the
+   shader runs in PRE-mirror space while the draw mirrors whenever
+   `cos(yaw) >= 0`. The two sign flips cancel to a flat negation of
+   `sin(yaw)`, which is why that function has no branch despite the branchy
+   justification. Lighting itself is half-Lambert diffuse + Blinn-Phong
+   specular (`SPECULAR_TINT`) + a Fresnel rim (`RIM_TINT`); the rim does most
+   of the work at yaw, since as the flank rotates away `n.z` falls and the
+   body picks up the wrap-around edge light a real fish shows.
+
+   `DYNAMIC_RELIGHT`'s gains are deliberately small, and a MODULATION rather
+   than a replacement: the painted pass carries every variety's identity and
+   was tuned against the catalogue breed by breed, so re-lighting from
+   scratch would relitigate all of it. The shader multiplies by
+   `1 + LIGHT_GAIN * mask * dot(n, L)`, exactly 1 at zero gain —
+   `verify-aquarium.ts` asserts the off state is BYTE-IDENTICAL to the
+   pre-relight shader, which is both what keeps stage 4's TS-vs-SkSL
+   agreement check valid (it decodes coordinates out of pixels, so any
+   lighting would corrupt the readback) and what makes the whole pass safe to
+   disable on a struggling device. Past `LIGHT_GAIN` ~0.5 it starts
+   double-shading against the countershading ramp; going further means
+   flattening the painted pass first, not turning this up.
+
+   `yarn aquarium:preview` renders three strips for this: matched OFF|ON
+   pairs across five headings, the same across one tail beat, and the raw
+   normal maps — a hole in the blue mask or a seam at the peduncle is far
+   easier to spot there than in its effect on a lit fish.
+
+   **The axolotl gets this too, and no other creature does.** Not
+   favouritism: it is the only species for which both halves already apply.
+   It is the only creature that spine-warps at all (`locomotion:
+"undulating"`), so the only one drawn through the shader that does the
+   lighting; and it is the only one authored with `fish/profile.ts`'s
+   `baseTop`/`baseBottom` pchip pair rather than bespoke geometry, so the
+   only one the elliptical cross-section model can describe without
+   inventing a shape. `creatures/axolotl/normal-map.ts` supplies its own
+   `BodyVolume` — rounder in section (a salamander, `lateralRatio` 0.78 vs
+   molly's 0.62), and `featherTail: false`, because its paddle tail is
+   authored INTO the profile (it flares out at `u = 1` rather than tapering)
+   and there is no separate fin taking over to hide a seam behind —
+   feathering there would switch the lighting off across the most mobile
+   part of the animal. `verify-aquarium.ts` asserts that pair directly: the
+   axolotl's tail stays at mask ~1.0, the molly's peduncle fades to ~0.01.
+
+   The other four (otter, turtle, shrimp, snail) render as a plain `<Image>`
+   with no shader in the path at all, and their anatomy is per-species
+   silhouette work with no shared half-height curve. Relighting them is real
+   art+geometry work per species, not an extension of this file.
+
+   One trap worth knowing, because it already caught this work once: the
+   warp effect is SHARED with `creature-layer.tsx`, and
+   `makeShaderWithChildren` binds uniforms and child shaders POSITIONALLY.
+   Adding the relight uniforms and the second child broke the axolotl
+   silently — it typechecks, it compiles, it draws, and it is wrong.
+   `verify-aquarium.ts` now asserts the effect's uniform count, name ORDER
+   and float count against `WARP_UNIFORM_KEYS`, and scans both call sites
+   for the right number of `<ImageShader>` children.
+
 ## Creatures — the other 5 species
 
 This tree is also the ONLY renderer that draws non-molly species (otter,
-turtle, frog, axolotl, snail) — 3D only ever sees the molly individuals in a
+turtle, shrimp, axolotl, snail) — 3D only ever sees the molly individuals in a
 tank (`tank-view.tsx` filters the rest out before handing `MollyTankFish[]`
 to it). See `@/shared/lib/tank-fish.ts`'s header for the
 `MollyTankFish`/`CreatureTankFish` discriminated-union trick that makes that
@@ -358,22 +471,23 @@ lives in `core/pigment-toolkit.ts` (rng seeding, `blobPath` for small
 decorative blobs — patches, scutes, spots — and `ribbonAlongPath`, a ribbon
 traced along an arbitrary parametric centerline) and `core/limb-chain.ts`
 (`circleChain` — a tapered chain of overlapping circles for jointed or
-stalk-like limbs: frog's bent legs, axolotl's gill fronds and stub legs,
+stalk-like limbs: shrimp's thin legs, axolotl's gill fronds and stub legs,
 otter's short legs). Two lessons worth knowing before adding a sixth
 species:
 
 - `blobPath` is for SMALL decorative shapes, not a whole-body silhouette —
   its 7-point construction has a real seam/corner at its start angle,
   invisible on a tiny patch but a visible flaw on a large body outline (this
-  cost a debugging pass on frog's body before landing on a plain two-arc
-  ellipse instead). A whole body/shell outline wants `pchip` (elongated,
-  fish-style — snail's shell, axolotl's and otter's bodies) or a plain
-  ellipse (round bodies — frog, turtle's shell), not `blobPath`.
+  cost a debugging pass on an early round-body attempt before landing on a
+  plain two-arc ellipse instead). A whole body/shell outline wants `pchip`
+  (elongated, fish-style — snail's shell, axolotl's and otter's bodies) or a
+  plain ellipse (round bodies — turtle's shell, otter's head), not
+  `blobPath`.
 - `circleChain` (a chain of overlapping filled circles) beats a hand-rolled
   tangent-line capsule outline for any tapered limb — two overlapping
   circles can't self-intersect or produce a stray spike the way bitangent
   math can get subtly wrong at certain radius/length ratios (this also cost
-  a debugging pass, on frog's original leg geometry).
+  a debugging pass on an early hand-rolled leg outline).
 
 **Locomotion.** Three kinds, and they are not three settings on one engine —
 `crawl` is a different engine (see the next section). The swimming two:
@@ -407,6 +521,33 @@ polyline of surfaces) plus a 1-D position along it. The snail cannot leave
 the track — not "is pulled back from open water", but has no degree of
 freedom pointing there — which is why `verify-aquarium.ts`'s crawl trace can
 assert its contact point is on the track to within 0 px over 12 seeds x 90 s.
+The shrimp (`creatures/shrimp/`) is bound by the exact same engine —
+everything below is written against the snail as the concrete example, but
+`sim/crawl.ts` itself has no species-specific code in it.
+
+**The shrimp can dash; the snail cannot.** A shrimp really does dart in a
+straight line through open water, then settle back onto a surface — so
+`stepCrawl` takes an opt-in `canDash` flag (default false, so the snail and
+the generic engine trace are untouched) that adds a third mode alongside
+`glide`/`graze`. A dash picks a target that is **already on the track**,
+freezes `s`, and interpolates `x`/`y` straight there through open water at
+`DASH_SPEED`, snapping `s` to the landing point when it completes — so the
+"cannot leave the track" invariant still holds at every moment the shrimp is
+_crawling_, and the exception is a bounded, always-terminating excursion
+between two legal positions rather than a second free-swimming degree of
+freedom. `render/creature-layer.tsx` needs no special case (its transform
+only ever reads `crawl.x/y/angle`), and the per-species opt-in lives in that
+file's `DASH_CAPABLE` map next to `SWAY_RIG`. `verify-aquarium.ts` asserts
+dashes happen, always finish, stay in the tank box, and stay occasional
+(~2% of the time) rather than becoming the shrimp's main gait.
+
+**Crawlers are free of `TANK_CAPACITY`.** `shared/lib/tank-membership.ts`'s
+`occupiesTankSlot()` returns false for any `locomotion: "crawl"` species, so
+snails and shrimp always auto-join the tank and never push a fish into the
+Holding Tank. The rule is keyed on locomotion, not an id list, so a future
+crawler is free by construction and can never disagree with which renderer
+it actually uses. The cap still bounds the free-swimming population, which is
+what it was always really for.
 
 Three pieces, mirroring the swim engine's split:
 
@@ -445,17 +586,23 @@ than `CLIMBABLE_MIN_HEIGHT` (pebbles, carpet plants) are filtered out, and
 the climb stops at 78% of a piece's height, since the top of a plant is
 foliage rather than a perch.
 
-**Two textures, not one.** The snail is the only species that bakes in
-pieces (`part: "body" | "tentacles" | "full"`, threaded through
-`creatureBakeKey`/`bakeCreature`/`getCachedCreature` as an optional argument
-every other species ignores). A rigid texture sliding along a wall reads as a
-sticker, and a crawler has no body-bend to carry motion of its own — so the
-eye stalks bake separately and rotate about `TENTACLE_PIVOT`, which sits
-inside the head dome so the roots stay buried under the body fill at every
-sway angle (the same "buried root" rule fin roots use). `part: "full"` is the
-whole snail in one texture, tentacles at rest — what every static surface
-(Creaturedex, Holding Tank, the dead snail) draws, since those have no
-animation to justify a second draw call.
+**Two textures, not one.** The two `crawl` species — snail and shrimp — are
+the only ones that bake in pieces (`part: "body" | "tentacles" | "antennae" |
+"full"`, threaded through `creatureBakeKey`/`bakeCreature`/
+`getCachedCreature` as an optional argument every other species ignores). A
+rigid texture sliding along a wall reads as a sticker, and a crawler has no
+body-bend to carry motion of its own — so the snail's eye stalks and the
+shrimp's antennae each bake separately and rotate about their own pivot
+(`TENTACLE_PIVOT`, `ANTENNA_PIVOT`), which sits inside the head/carapace so
+the roots stay buried under the body fill at every sway angle (the same
+"buried root" rule fin roots use). `render/creature-layer.tsx`'s
+`CrawlingCreature` doesn't hardcode either species — a small `SWAY_RIG` map
+keyed by `speciesId` supplies the part name and pivot, so a third `crawl`
+species would need one entry there and nothing else changed in that
+component. `part: "full"` is the whole creature in one texture, the swaying
+appendage at rest — what every static surface (Creaturedex, Holding Tank,
+the dead creature) draws, since those have no animation to justify a second
+draw call.
 
 **A dead crawler rests differently.** The generic dead treatment centres a
 capsized creature's bounds on the sand; a crawler's art hangs entirely above
@@ -1026,9 +1173,14 @@ the transform math or the composition by eye any other way.
 - More decor species (cryptocoryne, dwarf hairgrass, java moss) — the
   `scene/gen/` + `scene/compose.ts:GENERATORS` seam is designed for this to be
   additive.
-- Independent limb articulation for any creature (a frog's hop-kick, an
-  otter's paddle-stroke) — every limb is static geometry on a
-  swim-transformed sprite, deliberately cut from this pass.
+- Independent limb articulation for the swimming/rigid species (an otter's
+  paddle-stroke, a turtle's flipper-stroke) — every limb on those species is
+  static geometry on a swim-transformed sprite, deliberately cut from this
+  pass. The two `crawl` species don't need it: the snail's eye stalks and
+  the shrimp's antennae already sway independently (see the "Creatures"
+  section's two-part-bake note) via the exact same "one shape, rotate the
+  whole piece" trick a limb-kick would use, so the cheapest win in this
+  category already shipped.
 - A per-variant unlock economy within a species (mirroring molly's
   individually-gated colors) — mitigated instead via one deliberately
   low-weight "chase" variant per species plus Fishdex "seen" tracking, not a

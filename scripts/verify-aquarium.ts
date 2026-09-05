@@ -18,15 +18,32 @@ import {
 } from "@/shared/aquarium/core/decor-budget";
 import { boxContainsBox, inflateBox } from "@/shared/aquarium/core/ir";
 import type { Box, Node } from "@/shared/aquarium/core/ir";
-import { getWarpEffect, WARP_UNIFORM_KEYS } from "@/shared/aquarium/core/sksl/warp";
+import {
+  getWarpEffect,
+  RELIGHT_OFF_UNIFORMS,
+  RELIGHT_STATIC_UNIFORMS,
+  relightYaw,
+  WARP_UNIFORM_KEYS,
+} from "@/shared/aquarium/core/sksl/warp";
 import { bodyDepthAt, buildFishAnatomy } from "@/shared/aquarium/fish/anatomy";
 import {
   bakeFish,
   buildFishAquariumSpec,
   densityAwareDpr,
   fishBakeKey,
+  STAGE_SQUISH,
 } from "@/shared/aquarium/fish/bake-fish";
 import { aquariumColorDef, getAquariumColorDef } from "@/shared/aquarium/fish/pattern-defs";
+import {
+  bakeBodyNormalMap,
+  buildBodyNormalMap,
+  buildNormalMap,
+  mollyVolume,
+  NORMAL_PX_PER_UNIT,
+  normalMapBytes,
+  normalMapKey,
+} from "@/shared/aquarium/fish/normal-map";
+import { axolotlVolume } from "@/shared/aquarium/creatures/axolotl/normal-map";
 import { BODY_PROFILES } from "@/shared/aquarium/fish/body-profile";
 import { finPivotsFor } from "@/shared/aquarium/fish/fin-secondary";
 import type { FinShape } from "@/shared/aquarium/fish/fins";
@@ -63,6 +80,11 @@ import {
 import { bakeCreature } from "@/shared/aquarium/creatures/bake-creature";
 import { buildSnailAnatomy } from "@/shared/aquarium/creatures/snail/anatomy";
 import {
+  bodyHalfHeightAt,
+  buildShrimpAnatomy,
+  spineAt,
+} from "@/shared/aquarium/creatures/shrimp/anatomy";
+import {
   buildCrawlTrack,
   CRAWL_SPEED,
   initCrawlState,
@@ -83,7 +105,7 @@ import { contrastRatio, hexToHsl } from "@/shared/lib/color";
 import { SWIM_SPEED } from "@/shared/constants/tank";
 import { flattenPath } from "@/shared/lib/path2d";
 import { wrapToPi } from "@/shared/lib/swim-model";
-import type { BodyId, DorsalId, FishTraits, TailId } from "@/shared/fish/types";
+import type { BodyId, DorsalId, FishTraits, LifeStage, TailId } from "@/shared/fish/types";
 import { FilterMode, MipmapMode, TileMode } from "@shopify/react-native-skia/src/skia/types";
 
 /**
@@ -590,10 +612,79 @@ async function main() {
       pecNearAmp,
       pecFarAmp,
       caudalAmp,
+      // Relight OFF: this check decodes coordinates out of the returned
+      // PIXELS, so any lighting applied to them would corrupt the readback.
+      // The dedicated relight section below asserts that this off state is
+      // byte-identical to the pre-relight shader, which is what makes
+      // turning it off here a valid way to test the warp in isolation.
+      ...RELIGHT_OFF_UNIFORMS,
     };
+    // The warp effect's CALL CONTRACT. `makeShaderWithChildren` takes a flat
+    // `number[]` and a positional `SkShader[]`, so both are bound by ORDER,
+    // by name only for the `<Shader uniforms={}>` component path — which
+    // means a uniform added to the SkSL without a matching
+    // `WARP_UNIFORM_KEYS` entry, or reordered against it, silently binds the
+    // wrong floats to the wrong uniforms. It typechecks, it compiles, it
+    // draws, and it is wrong. These three checks are the only thing standing
+    // between that and a device.
+    //
+    // This is not hypothetical: adding the relight uniforms and the second
+    // child shader broke `render/creature-layer.tsx` (the axolotl shares
+    // this effect) in exactly this way, and nothing in typecheck, lint or
+    // the rest of this suite noticed.
+    check(
+      "warp uniform count matches WARP_UNIFORM_KEYS",
+      effect.getUniformCount() === WARP_UNIFORM_KEYS.length,
+      `SkSL declares ${effect.getUniformCount()}, keys list ${WARP_UNIFORM_KEYS.length}`,
+    );
+    const declaredNames = Array.from({ length: effect.getUniformCount() }, (_, i) =>
+      effect.getUniformName(i),
+    );
+    const orderMismatch = declaredNames
+      .map((name, i) =>
+        name === WARP_UNIFORM_KEYS[i] ? null : `${i}: ${name} != ${WARP_UNIFORM_KEYS[i]}`,
+      )
+      .filter(Boolean);
+    check(
+      "warp uniform ORDER matches WARP_UNIFORM_KEYS (flatMap binds positionally)",
+      orderMismatch.length === 0,
+      orderMismatch.join(", "),
+    );
+    check(
+      "the flattened uniform payload is exactly the float count the effect wants",
+      WARP_UNIFORM_KEYS.flatMap((key) => uniforms[key as keyof typeof uniforms]).length ===
+        effect.getUniformFloatCount(),
+      `payload ${WARP_UNIFORM_KEYS.flatMap((key) => uniforms[key as keyof typeof uniforms]).length}, effect wants ${effect.getUniformFloatCount()}`,
+    );
+
+    // Child-shader arity, checked against the call sites rather than the
+    // effect: there is no `getChildCount()` in the Skia JS API, and the
+    // failure mode is a call site passing too few `<ImageShader>` children,
+    // which no amount of introspection on the effect itself can see. A
+    // source scan is blunt, but it is aimed at precisely the regression that
+    // happened, and it fails loudly the moment a third child is declared.
+    {
+      const shaderChildCount = (effect.source().match(/^uniform\s+shader\s+\w+;/gm) ?? []).length;
+      const callSites = ["fish-layer.tsx", "creature-layer.tsx"];
+      for (const file of callSites) {
+        const src = fs.readFileSync(
+          path.join(__dirname, "..", "src", "shared", "aquarium", "render", file),
+          "utf8",
+        );
+        // Everything between the opening `<Shader ...>` and its `</Shader>`.
+        const block = /<Shader\b[\s\S]*?<\/Shader>/.exec(src)?.[0] ?? "";
+        const children = (block.match(/<ImageShader\b/g) ?? []).length;
+        check(
+          `${file} binds all ${shaderChildCount} warp child shaders`,
+          children === shaderChildCount,
+          `passes ${children}`,
+        );
+      }
+    }
+
     const warpShader = effect.makeShaderWithChildren(
       WARP_UNIFORM_KEYS.flatMap((key) => uniforms[key as keyof typeof uniforms]),
-      [childShader],
+      [childShader, childShader],
     );
     const pad = 30;
     const outSurf = Skia.Surface.Make(srcW + pad * 2, srcH + pad * 2)!;
@@ -630,6 +721,440 @@ async function main() {
       maxAgreementErr < 1.5,
       `max disagreement ${maxAgreementErr.toFixed(2)}px across ${sampleCount} points`,
     );
+  }
+
+  // 7b. Dynamic relighting (`fish/normal-map.ts` + the relight half of
+  // `core/sksl/warp.ts`). Four things have to hold, and the first is the one
+  // everything else is built on: with the gains at zero the extended shader
+  // must be BYTE-identical to the shader before relighting existed. That is
+  // what lets check 7 above go on decoding coordinates out of pixels, and it
+  // is what makes the whole pass safe to turn off on a device that struggles.
+  console.log("\n-- Dynamic relighting --");
+  {
+    const RELIGHT_STAGES: LifeStage[] = ["fry", "juvenile", "adult"];
+    // Every map the app can ask for, at once — the real resident cost, since
+    // `render/normal-cache.ts` deliberately holds all of them rather than
+    // evicting. Two orders of magnitude under the albedo LRU's 24MB; the cap
+    // is here to catch someone raising NORMAL_PX_PER_UNIT without noticing.
+    const NORMAL_SET_BUDGET_BYTES = 4 * 1024 * 1024;
+    // Built on the JS thread on first sight of a body type, so this is frame
+    // time, the same reasoning as verify-fish-3d.ts's skin-bake budget.
+    const NORMAL_BUILD_BUDGET_MS = 60;
+
+    let totalBytes = 0;
+    let worstBuildMs = 0;
+    let worstBuildId = "";
+    const keys = new Set<string>();
+
+    for (const body of BODIES) {
+      for (const stage of RELIGHT_STAGES) {
+        const traits: FishTraits = { color: "gold", body, tail: "round", dorsal: "standard" };
+        const id = `${body}/${stage}`;
+        const t0 = performance.now();
+        const map = buildBodyNormalMap(traits, stage);
+        const ms = performance.now() - t0;
+        if (ms > worstBuildMs) {
+          worstBuildMs = ms;
+          worstBuildId = id;
+        }
+        totalBytes += normalMapBytes(map);
+        keys.add(normalMapKey(traits, stage));
+
+        // Decoded normals must be physically recoverable: the shader rebuilds
+        // z as sqrt(1 - nx^2 - ny^2), so nx^2 + ny^2 > 1 anywhere would mean a
+        // silently clamped-to-zero z and a flat-lit patch.
+        let overshoot = 0;
+        let maskedPx = 0;
+        let upperWrongSign = 0;
+        let lowerWrongSign = 0;
+        let upperPx = 0;
+        let lowerPx = 0;
+        const { baseTop, baseBottom, landmarks } = buildFishAnatomy(traits);
+        const squish = STAGE_SQUISH[stage];
+        for (let py = 0; py < map.height; py++) {
+          const localY = map.box.y + (py + 0.5) / NORMAL_PX_PER_UNIT;
+          for (let px = 0; px < map.width; px++) {
+            const i = (py * map.width + px) * 4;
+            const mask = map.data[i + 2] / 255;
+            if (mask < 0.9) continue;
+            maskedPx++;
+            const nx = (map.data[i] / 255) * 2 - 1;
+            const ny = (map.data[i + 1] / 255) * 2 - 1;
+            overshoot = Math.max(overshoot, nx * nx + ny * ny - 1);
+            // Sign convention, and the single most likely way this file gets
+            // silently broken: y is screen-DOWN, so the top of the body must
+            // face up (ny < 0) and the belly must face down (ny > 0). A
+            // flipped sign here inverts the entire lighting and still looks
+            // "lit", which is exactly why it needs an assertion rather than
+            // an eyeball.
+            //
+            // Split on the LOCAL centreline, recomputed from the same curves
+            // the map was built from, not on one global midline: the body axis
+            // rises and falls along its length (steeply so on `balloon`), so a
+            // flat divider misfiles genuinely-ventral head and peduncle pixels
+            // as dorsal and manufactures failures the art does not have.
+            const localX = map.box.x + (px + 0.5) / NORMAL_PX_PER_UNIT;
+            const u = (localX - landmarks.x0) / landmarks.length;
+            const t =
+              (localY / squish - (baseBottom(u) - baseTop(u)) / 2) /
+              Math.max(1e-3, (baseBottom(u) + baseTop(u)) / 2);
+            if (t < -0.08) {
+              upperPx++;
+              if (ny > 0.02) upperWrongSign++;
+            } else if (t > 0.08) {
+              lowerPx++;
+              if (ny < -0.02) lowerWrongSign++;
+            }
+          }
+        }
+
+        check(`${id}: normal map has body pixels`, maskedPx > 500, `${maskedPx} px`);
+        check(
+          `${id}: decoded normals stay unit-representable`,
+          overshoot <= 1e-6,
+          `worst nx^2+ny^2 - 1 = ${overshoot.toExponential(2)}`,
+        );
+        check(
+          `${id}: back faces up, belly faces down (screen-down y)`,
+          upperPx > 100 &&
+            lowerPx > 100 &&
+            upperWrongSign / upperPx < 0.02 &&
+            lowerWrongSign / lowerPx < 0.02,
+          `back ${upperWrongSign}/${upperPx} wrong, belly ${lowerWrongSign}/${lowerPx} wrong`,
+        );
+      }
+    }
+
+    check(
+      `one map per body x stage, no colour/tail/dorsal in the key`,
+      keys.size === BODIES.length * RELIGHT_STAGES.length,
+      `${keys.size} distinct keys`,
+    );
+    check(
+      `the whole normal-map set fits its budget`,
+      totalBytes < NORMAL_SET_BUDGET_BYTES,
+      `${(totalBytes / 1024 / 1024).toFixed(2)} MB`,
+    );
+    check(
+      `slowest normal-map build stays within budget`,
+      worstBuildMs < NORMAL_BUILD_BUDGET_MS,
+      `${worstBuildId} ${worstBuildMs.toFixed(1)}ms`,
+    );
+
+    // The axolotl — the one creature with a body volume, and the one whose
+    // profile flares OUT at u=1 (a paddle tail) instead of tapering into a
+    // separate fin. That makes it the only exercise of `featherTail: false`,
+    // and the check below is specifically that the tail end stays LIT: an
+    // accidental feather there would switch the lighting off across the most
+    // mobile part of the animal and nothing else in this suite would notice.
+    {
+      const volume = axolotlVolume();
+      const map = buildNormalMap(volume);
+      let overshoot = 0;
+      let maskedPx = 0;
+      let upperWrong = 0;
+      let lowerWrong = 0;
+      let upperPx = 0;
+      let lowerPx = 0;
+      let tailMaskSum = 0;
+      let tailPx = 0;
+      for (let py = 0; py < map.height; py++) {
+        const localY = map.box.y + (py + 0.5) / NORMAL_PX_PER_UNIT;
+        for (let px = 0; px < map.width; px++) {
+          const i = (py * map.width + px) * 4;
+          const localX = map.box.x + (px + 0.5) / NORMAL_PX_PER_UNIT;
+          const u = (localX - volume.x0) / volume.length;
+          const mask = map.data[i + 2] / 255;
+          // Sample the mask along the paddle tail's own vertical extent.
+          if (u > 0.93 && u <= 1) {
+            const halfH = (volume.baseBottom(u) + volume.baseTop(u)) / 2;
+            const cy = (volume.baseBottom(u) - volume.baseTop(u)) / 2;
+            if (Math.abs((localY - cy) / Math.max(1e-3, halfH)) < 0.5) {
+              tailMaskSum += mask;
+              tailPx++;
+            }
+          }
+          if (mask < 0.9) continue;
+          maskedPx++;
+          const nx = (map.data[i] / 255) * 2 - 1;
+          const ny = (map.data[i + 1] / 255) * 2 - 1;
+          overshoot = Math.max(overshoot, nx * nx + ny * ny - 1);
+          const halfHeight = Math.max(1e-3, (volume.baseBottom(u) + volume.baseTop(u)) / 2);
+          const t = (localY - (volume.baseBottom(u) - volume.baseTop(u)) / 2) / halfHeight;
+          if (t < -0.08) {
+            upperPx++;
+            if (ny > 0.02) upperWrong++;
+          } else if (t > 0.08) {
+            lowerPx++;
+            if (ny < -0.02) lowerWrong++;
+          }
+        }
+      }
+      check(`axolotl: normal map has body pixels`, maskedPx > 500, `${maskedPx} px`);
+      check(
+        `axolotl: decoded normals stay unit-representable`,
+        overshoot <= 1e-6,
+        `worst nx^2+ny^2 - 1 = ${overshoot.toExponential(2)}`,
+      );
+      check(
+        `axolotl: back faces up, belly faces down`,
+        upperPx > 100 &&
+          lowerPx > 100 &&
+          upperWrong / upperPx < 0.02 &&
+          lowerWrong / lowerPx < 0.02,
+        `back ${upperWrong}/${upperPx} wrong, belly ${lowerWrong}/${lowerPx} wrong`,
+      );
+      check(
+        `axolotl: the paddle tail stays lit (featherTail: false)`,
+        tailPx > 20 && tailMaskSum / tailPx > 0.85,
+        `${tailPx} px, mean mask ${(tailMaskSum / Math.max(1, tailPx)).toFixed(3)}`,
+      );
+      // The molly's caudal peduncle is the opposite case and must still fade,
+      // or the body would end in a hard lit edge where the fin takes over.
+      const molly = buildNormalMap(
+        mollyVolume(
+          { color: "gold", body: "standard", tail: "round", dorsal: "standard" },
+          "adult",
+        ),
+      );
+      let mollyTailMask = 0;
+      let mollyTailPx = 0;
+      const mv = mollyVolume(
+        { color: "gold", body: "standard", tail: "round", dorsal: "standard" },
+        "adult",
+      );
+      for (let py = 0; py < molly.height; py++) {
+        const localY = molly.box.y + (py + 0.5) / NORMAL_PX_PER_UNIT;
+        for (let px = 0; px < molly.width; px++) {
+          const localX = molly.box.x + (px + 0.5) / NORMAL_PX_PER_UNIT;
+          const u = (localX - mv.x0) / mv.length;
+          if (u <= 0.995 || u > 1) continue;
+          const halfH = Math.max(1e-3, (mv.baseBottom(u) + mv.baseTop(u)) / 2);
+          if (Math.abs((localY - (mv.baseBottom(u) - mv.baseTop(u)) / 2) / halfH) > 0.5) continue;
+          mollyTailMask += molly.data[(py * molly.width + px) * 4 + 2] / 255;
+          mollyTailPx++;
+        }
+      }
+      check(
+        `molly: the peduncle DOES fade out (featherTail: true) where the caudal takes over`,
+        mollyTailPx > 5 && mollyTailMask / mollyTailPx < 0.15,
+        `${mollyTailPx} px, mean mask ${(mollyTailMask / Math.max(1, mollyTailPx)).toFixed(3)}`,
+      );
+    }
+
+    // Colour-blindness, stated as an assertion rather than a comment: two
+    // fish differing only in colour/tail/dorsal must produce identical bytes,
+    // which is the property the cache's tiny key space depends on.
+    const a = buildBodyNormalMap(
+      { color: "gold", body: "standard", tail: "round", dorsal: "standard" },
+      "adult",
+    );
+    const b = buildBodyNormalMap(
+      { color: "black", body: "standard", tail: "lyretail", dorsal: "sailfin" },
+      "adult",
+    );
+    check(
+      `normal map ignores colour, tail and dorsal`,
+      a.data.length === b.data.length && a.data.every((v, i) => v === b.data[i]),
+    );
+
+    // `relightYaw` must be a rotation, and the transform it composes with
+    // `mirrorX` must be continuous in the heading — EXCEPT at the two edge-on
+    // crossings, where the animal genuinely swaps which flank it shows and
+    // the draw mirror (`matrixW`) flips with it.
+    //
+    // Measuring the raw (cos, sin) pair instead of the composed transform
+    // reports a discontinuity the lighting does not have: with the mirror
+    // handled by its own uniform, `yawSin` and `mirrorX` each jump by 2 at the
+    // crossing while their PRODUCT stays put. Compose them and measure that.
+    {
+      // A representative off-axis body normal. `nx` must be nonzero or the
+      // mirror term cancels and this proves nothing.
+      const n = { x: 0.4, y: -0.3, z: Math.sqrt(1 - 0.16 - 0.09) };
+      const screenNormal = (yaw: number) => {
+        const r = relightYaw(yaw);
+        return {
+          x: (n.x * r.yawCos + n.z * r.yawSin) * r.mirrorX,
+          y: n.y,
+          z: -n.x * r.yawSin + n.z * r.yawCos,
+        };
+      };
+      let worstNorm = 0;
+      let worstSmoothStep = 0;
+      let crossingStep = 0;
+      let prev: ReturnType<typeof screenNormal> | null = null;
+      const STEPS = 2000;
+      for (let i = 0; i <= STEPS; i++) {
+        const yaw = -Math.PI + (i / STEPS) * 2 * Math.PI;
+        const r = relightYaw(yaw);
+        worstNorm = Math.max(worstNorm, Math.abs(r.yawCos ** 2 + r.yawSin ** 2 - 1));
+        const v = screenNormal(yaw);
+        if (prev) {
+          const step = Math.hypot(v.x - prev.x, v.y - prev.y, v.z - prev.z);
+          if (Math.abs(Math.abs(yaw) - Math.PI / 2) < 0.01) {
+            crossingStep = Math.max(crossingStep, step);
+          } else {
+            worstSmoothStep = Math.max(worstSmoothStep, step);
+          }
+        }
+        prev = v;
+      }
+      check(
+        `relightYaw is a unit rotation at every heading`,
+        worstNorm < 1e-9,
+        `worst |cos^2+sin^2-1| = ${worstNorm.toExponential(2)}`,
+      );
+      check(
+        `relit normal is continuous in heading away from edge-on`,
+        worstSmoothStep < 0.02,
+        `worst step ${worstSmoothStep.toFixed(4)}`,
+      );
+      // Bounded, and bounded by the RIGHT thing: swapping flanks can only
+      // move the body-axis component, so 2*|nx| is the ceiling. Anything
+      // larger would mean the dome itself was inverting at the crossing.
+      // The sample straddling the crossing also advances the heading by one
+      // step, so the smooth motion of that step rides on top of the jump and
+      // belongs in the ceiling — otherwise this fails by exactly the
+      // sweep resolution and tempts someone into fudging the bound.
+      const swapCeiling = 2 * Math.abs(n.x) + worstSmoothStep;
+      check(
+        `the edge-on flank swap stays within its 2*|nx| ceiling`,
+        crossingStep <= swapCeiling,
+        `step ${crossingStep.toFixed(4)}, ceiling ${swapCeiling.toFixed(4)}`,
+      );
+    }
+
+    // The shader half. Identity at zero gain, and demonstrably NOT identity
+    // once the gains are real — the second half is what stops a mis-wired
+    // uniform or an unused child shader from passing as "no regression".
+    if (effect) {
+      const W = 48;
+      const H = 24;
+      const flat = Skia.Surface.Make(W, H)!;
+      const fp = Skia.Paint();
+      fp.setColor(Skia.Color("rgb(200,120,60)"));
+      flat.getCanvas().drawRect(Skia.XYWHRect(0, 0, W, H), fp);
+      const flatImage = flat.makeImageSnapshot();
+      const flatShader = flatImage.makeShaderOptions(
+        TileMode.Decal,
+        TileMode.Decal,
+        FilterMode.Nearest,
+        MipmapMode.None,
+      );
+      const normalArt = bakeBodyNormalMap(
+        Skia,
+        { color: "gold", body: "standard", tail: "round", dorsal: "standard" },
+        "adult",
+      );
+      check("normal map bakes to an SkImage", normalArt !== null);
+
+      // A normal child that covers the whole test rect, so mask is high
+      // everywhere and the relight terms actually fire.
+      const litNormal = Skia.Surface.Make(W, H)!;
+      const lp = Skia.Paint();
+      // A TILTED normal (nx ~ 0.45, ny ~ -0.45, encoded n*0.5+0.5), mask 255.
+      // Deliberately not the flat (128,128) one: the diffuse term is centred
+      // on the flat case, so a flat normal leaves only the specular and rim
+      // firing and the check below would still pass with the whole diffuse
+      // half of the pass deleted. Curvature is what makes it a real test.
+      lp.setColor(Skia.Color("rgb(185,70,255)"));
+      litNormal.getCanvas().drawRect(Skia.XYWHRect(0, 0, W, H), lp);
+      const litShader = litNormal
+        .makeImageSnapshot()
+        .makeShaderOptions(TileMode.Decal, TileMode.Decal, FilterMode.Nearest, MipmapMode.None);
+
+      const identityWarp = {
+        boundsX: 0,
+        boundsWidth: W,
+        ampScale: 0,
+        k: SPINE_K,
+        phase: 0,
+        bendAmp: 0,
+        pecNearHub: [0, 0, 1, 1],
+        pecFarHub: [0, 0, 1, 1],
+        caudalHub: [0, 0, 1, 1],
+        pecNearAmp: 0,
+        pecFarAmp: 0,
+        caudalAmp: 0,
+      };
+      const render = (
+        extra: Record<string, number | number[]>,
+        nrmChild: typeof flatShader,
+      ): Uint8Array | null => {
+        const uniforms: Record<string, number | number[]> = { ...identityWarp, ...extra };
+        const shader = effect.makeShaderWithChildren(
+          WARP_UNIFORM_KEYS.flatMap((key) => uniforms[key]),
+          [flatShader, nrmChild],
+        );
+        const out = Skia.Surface.Make(W, H)!;
+        const op = Skia.Paint();
+        op.setShader(shader);
+        out.getCanvas().drawRect(Skia.XYWHRect(0, 0, W, H), op);
+        return out.makeImageSnapshot().readPixels(W / 2, H / 2) as Uint8Array | null;
+      };
+
+      const off = render({ ...RELIGHT_OFF_UNIFORMS }, litShader);
+      check(
+        "zero gain is byte-identical to the unlit source",
+        !!off && off[0] === 200 && off[1] === 120 && off[2] === 60 && off[3] === 255,
+        off ? `got ${Array.from(off.slice(0, 4)).join(",")}` : "no pixel",
+      );
+
+      const lit = render({ ...RELIGHT_STATIC_UNIFORMS, ...relightYaw(0) }, litShader);
+      const litDelta =
+        lit && off
+          ? Math.max(
+              Math.abs(lit[0] - off[0]),
+              Math.abs(lit[1] - off[1]),
+              Math.abs(lit[2] - off[2]),
+            )
+          : 0;
+      check(
+        "real gains visibly change a CURVED pixel (the diffuse path is live)",
+        litDelta >= 8,
+        lit
+          ? `lit ${Array.from(lit.slice(0, 3)).join(",")} vs off ${Array.from(off!.slice(0, 3)).join(",")}`
+          : "no pixel",
+      );
+
+      // Alpha is never touched by the relight, and the result stays a valid
+      // premultiplied colour (rgb <= a) at every heading — the `min` clamp at
+      // the end of the shader is what guarantees the second half.
+      let alphaDrift = 0;
+      let premulViolations = 0;
+      for (let i = 0; i < 16; i++) {
+        const yaw = (i / 16) * Math.PI * 2;
+        const px = render({ ...RELIGHT_STATIC_UNIFORMS, ...relightYaw(yaw) }, litShader);
+        if (!px) continue;
+        alphaDrift = Math.max(alphaDrift, Math.abs(px[3] - 255));
+        if (px[0] > px[3] || px[1] > px[3] || px[2] > px[3]) premulViolations++;
+      }
+      check("relight leaves alpha untouched", alphaDrift === 0, `worst drift ${alphaDrift}`);
+      check(
+        "relit output stays a valid premultiplied colour at every heading",
+        premulViolations === 0,
+        `${premulViolations} violations`,
+      );
+
+      // Turning the fish must change the shading — the entire justification
+      // for the yaw uniform. Broadside (yaw 0) vs edge-on (yaw pi/2) on the
+      // same pixel of the same texture.
+      const broadside = render({ ...RELIGHT_STATIC_UNIFORMS, ...relightYaw(0) }, litShader);
+      const edgeOn = render({ ...RELIGHT_STATIC_UNIFORMS, ...relightYaw(Math.PI / 2) }, litShader);
+      const yawDelta =
+        broadside && edgeOn
+          ? Math.max(
+              Math.abs(broadside[0] - edgeOn[0]),
+              Math.abs(broadside[1] - edgeOn[1]),
+              Math.abs(broadside[2] - edgeOn[2]),
+            )
+          : 0;
+      check(
+        "shading responds to yaw (broadside vs edge-on differ)",
+        yawDelta >= 3,
+        `max channel delta ${yawDelta}`,
+      );
+    }
   }
 
   // 8. Scene composition. The old check summed each piece's bbox WIDTH
@@ -1293,7 +1818,140 @@ async function main() {
       anatomy.eyeStalks[1].tip.x > 0 && anatomy.bodyBounds.y < -20,
       `head tip x=${anatomy.eyeStalks[1].tip.x.toFixed(1)}, top y=${anatomy.bodyBounds.y.toFixed(1)}`,
     );
+  }
 
+  // 9c. The shrimp is bound by the exact same `sim/crawl.ts` engine as the
+  // snail (see `aquarium-guide.md`'s "The snail doesn't swim" section) —
+  // only its own anatomy contract (sole line, facing) needs a species-
+  // specific assertion; the engine trace above already covers genericity.
+  console.log("\n-- Shrimp crawl --");
+  {
+    const anatomy = buildShrimpAnatomy();
+    check(
+      "shrimp art sits on its own sole line (nothing below local y = 0)",
+      // Slightly more slack than the snail's identical check: the shrimp's
+      // foot circles have their own radius (~1.6) plus the same padding, so
+      // the bounding box legitimately extends a little past y = 0 — this
+      // asserts "the sole line, not open space below it", not "exactly 0".
+      anatomy.bodyBounds.y + anatomy.bodyBounds.height <= 5.5,
+      `lowest point y=${(anatomy.bodyBounds.y + anatomy.bodyBounds.height).toFixed(2)}`,
+    );
+    check(
+      "shrimp art faces +x (rostrum and eye forward of the body centre)",
+      anatomy.rostrumTip.x > 0 && anatomy.eye.x > 0 && anatomy.bodyBounds.y < -20,
+      `rostrum x=${anatomy.rostrumTip.x.toFixed(1)}, eye x=${anatomy.eye.x.toFixed(1)}, top y=${anatomy.bodyBounds.y.toFixed(1)}`,
+    );
+    // The abdomen's plates and the coloured bands both come from `spineAt`,
+    // so a band can never drift off the body the way a straight bar did on
+    // the old flat silhouette — assert the shared spine actually stays inside
+    // the outline it also generates.
+    const strayEdge = [0, 0.25, 0.5, 0.75, 1].some((u) => {
+      const s = spineAt(u);
+      const hw = bodyHalfHeightAt(u);
+      return (
+        Math.min(s.point.y + s.normal.y * hw, s.point.y - s.normal.y * hw) < anatomy.bodyBounds.y ||
+        Math.max(s.point.y + s.normal.y * hw, s.point.y - s.normal.y * hw) >
+          anatomy.bodyBounds.y + anatomy.bodyBounds.height
+      );
+    });
+    check("shrimp spine + half-height stay inside the body bounds they generate", !strayEdge);
+  }
+
+  // 9d. The shrimp's dash — `stepCrawl`'s `canDash` branch, exercised at the
+  // trace level rather than by inspecting a single call, since the load-
+  // bearing property is behaviour over time: it must actually happen, it
+  // must always finish, and it must stay the OCCASIONAL exception, not
+  // become the shrimp's primary way of getting around (that would just be a
+  // swimmer wearing a crawler's render path).
+  console.log("\n-- Shrimp dash --");
+  {
+    const BOX = { minX: 6, maxX: 394, floorY: 560, ceilY: 150 };
+    const PROPS = [{ x: 150, baseY: 560, topY: 340 }];
+    const SEEDS = 12;
+    const DT = 1 / 60;
+    const STEPS = 90 * 60;
+    let anyNaN = false;
+    let outOfBounds = 0;
+    let dashCount = 0;
+    let dashSeconds = 0;
+    let stuckDash = false;
+    let backwardsDash = false;
+
+    for (let k = 0; k < SEEDS; k++) {
+      const seed = (k + 0.5) / SEEDS;
+      const track = buildCrawlTrack(BOX, seed, PROPS);
+      let rngState = (k + 1) * 2654435761;
+      const rng = () => {
+        rngState = (rngState * 1664525 + 1013904223) >>> 0;
+        return rngState / 4294967296;
+      };
+      const state = initCrawlState(track, seed);
+      let wasDash = false;
+      let dashEpisodeSeconds = 0;
+      for (let i = 0; i < STEPS; i++) {
+        stepCrawl(state, track, DT, 1, rng, true);
+        if (
+          !Number.isFinite(state.x) ||
+          !Number.isFinite(state.y) ||
+          !Number.isFinite(state.angle)
+        ) {
+          anyNaN = true;
+        }
+        if (
+          state.x < BOX.minX - 2 ||
+          state.x > BOX.maxX + 2 ||
+          state.y > BOX.floorY + 2 ||
+          state.y < BOX.ceilY - 2
+        ) {
+          outOfBounds++;
+        }
+        if (state.mode === "dash") {
+          dashSeconds += DT;
+          if (!wasDash) {
+            dashCount++;
+            wasDash = true;
+            dashEpisodeSeconds = 0;
+          }
+          dashEpisodeSeconds += DT;
+          // Generous relative to `DASH_SPEED`/`DASH_MIN_FRACTION` — this is a
+          // stuck-forever guard, not a tuning assertion.
+          if (dashEpisodeSeconds > 10) stuckDash = true;
+          // The renderer draws the sprite along `dir * (cos angle, sin
+          // angle)` and the dash points `angle` straight at the target, so
+          // any facing OTHER than `dir === 1` is the shrimp swimming its
+          // dash backwards — the exact bug this guards against.
+          if (state.dir !== 1) backwardsDash = true;
+        } else {
+          wasDash = false;
+        }
+      }
+    }
+
+    const totalSeconds = SEEDS * STEPS * DT;
+    check("shrimp dash trace: no NaN over 12 seeds x 90s", !anyNaN);
+    check(
+      "shrimp dash trace: stays within the tank box (2px slack) even mid-dash",
+      outOfBounds === 0,
+      `${outOfBounds} out-of-bounds samples`,
+    );
+    check(
+      "shrimp dash trace: dashes actually happen",
+      dashCount > 0,
+      `${dashCount} dashes across ${SEEDS} seeds x 90s`,
+    );
+    check("shrimp dash trace: every dash finishes (none gets stuck)", !stuckDash);
+    check(
+      "shrimp dash trace: never dashes backwards (sprite mirror stays neutral)",
+      !backwardsDash,
+    );
+    check(
+      "shrimp dash trace: dashing stays occasional, not constant",
+      dashSeconds / totalSeconds < 0.25,
+      `${((dashSeconds / totalSeconds) * 100).toFixed(1)}% of time spent dashing`,
+    );
+  }
+
+  {
     const BOX = { minX: 6, maxX: 394, floorY: 560, ceilY: 150 };
     const PROPS = [{ x: 150, baseY: 560, topY: 340 }];
 

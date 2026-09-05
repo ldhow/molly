@@ -68,6 +68,12 @@ const STEM_HALF = 3;
 
 /** Cruise speed in px/s at `speedFactor` 1 — a real snail is glacial, and reading as glacial next to a swimming molly is the whole point. */
 export const CRAWL_SPEED = 7.5;
+/** Straight-line dash speed in px/s at `speedFactor` 1 — a real shrimp's escape flick is a burst, not a cruise; several times `CRAWL_SPEED` so it reads as a decisive swim, not a fast crawl. Only species opted in via `stepCrawl`'s `canDash` ever reach this branch — a snail never does. */
+const DASH_SPEED = 70;
+/** Chance a finishing `"glide"` spell becomes a dash instead of a graze, for `canDash` species only. */
+const DASH_CHANCE = 0.22;
+/** A dash always covers at least this fraction of the track's total length — a jump to a nearby point would be too small to read as "decided to swim somewhere". */
+const DASH_MIN_FRACTION = 0.35;
 /** Pedal-wave frequency, Hz-ish. Each wave is one muscular surge down the sole. */
 const WAVE_FREQ = 1.9;
 /** How much of the glide speed the pedal wave modulates — a snail advances in visible pulses, not at a constant rate. */
@@ -181,10 +187,10 @@ export function sampleTrack(track: CrawlTrack, s: number): CrawlSample {
   };
 }
 
-export type CrawlMode = "glide" | "graze";
+export type CrawlMode = "glide" | "graze" | "dash";
 
 export interface CrawlState {
-  /** Arc position along the track. */
+  /** Arc position along the track. Frozen (not advanced) mid-`"dash"` — `x`/`y` fly straight through open water instead; `s` jumps to the landing point only once the dash completes. */
   s: number;
   /** Which way along the track it is heading. Also mirrors the sprite. */
   dir: 1 | -1;
@@ -193,16 +199,24 @@ export interface CrawlState {
   modeLeft: number;
   /** Pedal wave — drives both the forward surge and the render-side body pulse. */
   wavePhase: number;
-  /** Smoothed heading actually rendered; lags `sampleTrack().angle` through corners. */
+  /** Smoothed heading actually rendered; lags `sampleTrack().angle` through corners. Snaps to the dash heading instead of lagging while `mode === "dash"` — a decisive swim, not a crawl. */
   angle: number;
   x: number;
   y: number;
-  /** [0,1] fraction of cruise speed, for the render layer's motion cues. */
+  /** [0,1] fraction of cruise speed, for the render layer's motion cues. Pinned to 1 for the whole dash. */
   speedNorm: number;
-  /** Seconds simulated, so the tentacle sway can run off a phase that survives pauses. */
+  /** Seconds simulated, so the appendage sway can run off a phase that survives pauses. */
   elapsed: number;
   /** Length of the track this `s` was measured against. A layout change rebuilds the track at a different length, and `stepCrawl` re-seats `s` proportionally when it notices — done HERE rather than from the JS side because mutating the state object off the UI thread would only touch that thread's copy of it. */
   trackTotal: number;
+  /** Dash-only fields — the current dash's start point, end point, arc-length destination and progress. Meaningless outside `mode === "dash"`; kept as plain numbers (not a nested optional object) so the whole state stays one flat, cheaply-cloned shape for the SharedValue. */
+  dashFromX: number;
+  dashFromY: number;
+  dashToX: number;
+  dashToY: number;
+  dashToS: number;
+  dashElapsed: number;
+  dashDuration: number;
 }
 
 export function initCrawlState(track: CrawlTrack, seed: number): CrawlState {
@@ -222,6 +236,13 @@ export function initCrawlState(track: CrawlTrack, seed: number): CrawlState {
     speedNorm: 0,
     elapsed: 0,
     trackTotal: track.total,
+    dashFromX: 0,
+    dashFromY: 0,
+    dashToX: 0,
+    dashToY: 0,
+    dashToS: 0,
+    dashElapsed: 0,
+    dashDuration: 0,
   };
 }
 
@@ -229,6 +250,14 @@ export function initCrawlState(track: CrawlTrack, seed: number): CrawlState {
  * One frame. Pure in `(state, track, dt, speedFactor, rng)` — `rng` is passed
  * in rather than called globally so the headless trace in
  * `scripts/verify-aquarium.ts` can drive it deterministically.
+ *
+ * `canDash` is opt-in and defaults to false, so every existing caller (the
+ * snail, the generic engine trace) is completely unaffected — a snail has no
+ * swim degree of freedom at all (see this file's header) and must never take
+ * this branch. Species that DO opt in (the shrimp) still spend most of their
+ * time on the track exactly like a snail; a dash is an occasional, decisive
+ * straight-line swim from one point on the track to another (jumping clean
+ * through open water), not a second locomotion mode replacing the first.
  */
 export function stepCrawl(
   state: CrawlState,
@@ -236,6 +265,7 @@ export function stepCrawl(
   dt: number,
   speedFactor: number,
   rng: () => number,
+  canDash = false,
 ): void {
   "worklet";
   if (dt <= 0 || track.total <= 0) return;
@@ -247,9 +277,70 @@ export function stepCrawl(
   const step = Math.min(dt, 0.05); // a backgrounded tab's catch-up frame must not teleport it
   state.elapsed += step;
 
+  if (state.mode === "dash") {
+    state.dashElapsed += step;
+    const t = Math.min(1, state.dashDuration > 0 ? state.dashElapsed / state.dashDuration : 1);
+    state.x = state.dashFromX + (state.dashToX - state.dashFromX) * t;
+    state.y = state.dashFromY + (state.dashToY - state.dashFromY) * t;
+    // Decisive: faces straight at where it's going, no ANGLE_TAU lag — a
+    // swim burst doesn't ease into its heading the way a crawl turn does.
+    state.angle = Math.atan2(state.dashToY - state.dashFromY, state.dashToX - state.dashFromX);
+    state.speedNorm = 1;
+    // A faster tail-flick pulse than the crawl gait's pedal wave.
+    state.wavePhase += step * WAVE_FREQ * Math.PI * 2 * 1.6;
+    if (state.wavePhase > Math.PI * 2) state.wavePhase -= Math.PI * 2;
+    if (t >= 1) {
+      state.s = state.dashToS;
+      // Land facing the way it was already travelling. The renderer draws the
+      // sprite along `dir * (cos angle, sin angle)`, and once `angle` snaps
+      // back to the landing surface's tangent, only `dir` can express "which
+      // end of that tangent am I pointing at" — so pick the sign whose facing
+      // is continuous with the dash heading. Choosing it from arc-length
+      // order instead (`dashToS >= startS`) is wrong on a track that doubles
+      // back, e.g. a shrimp that dashed rightward but landed on the far side
+      // of a stem, where increasing `s` runs left.
+      const landing = sampleTrack(track, state.dashToS);
+      const dot =
+        Math.cos(landing.angle) * (state.dashToX - state.dashFromX) +
+        Math.sin(landing.angle) * (state.dashToY - state.dashFromY);
+      state.dir = dot >= 0 ? 1 : -1;
+      state.mode = "glide";
+      state.modeLeft = 4 + rng() * 8;
+      state.speed = CRAWL_SPEED * speedFactor;
+    }
+    return;
+  }
+
   state.modeLeft -= step;
   if (state.modeLeft <= 0) {
     if (state.mode === "glide") {
+      if (canDash && rng() < DASH_CHANCE) {
+        // Jump to a point well away from here, in a random direction along
+        // the track's own arc length — the target is always ON the track
+        // (so it lands somewhere crawlable), only the path to it cuts
+        // straight through open water instead of following the surface.
+        const jump = track.total * (DASH_MIN_FRACTION + rng() * (1 - DASH_MIN_FRACTION));
+        const targetS =
+          (((state.s + (rng() < 0.5 ? -jump : jump)) % track.total) + track.total) % track.total;
+        const from = sampleTrack(track, state.s);
+        const to = sampleTrack(track, targetS);
+        state.dashFromX = from.x;
+        state.dashFromY = from.y;
+        state.dashToX = to.x;
+        state.dashToY = to.y;
+        state.dashToS = targetS;
+        state.dashElapsed = 0;
+        const distance = Math.hypot(to.x - from.x, to.y - from.y);
+        state.dashDuration = Math.max(0.4, distance / (DASH_SPEED * speedFactor));
+        state.mode = "dash";
+        // Load-bearing: the renderer draws the sprite along
+        // `dir * (cos angle, sin angle)`, and the dash sets `angle` to point
+        // straight AT the target — so the mirror has to be neutral or the
+        // shrimp swims its whole dash backwards. Leaving `dir` at whatever
+        // the preceding crawl happened to be reversed roughly half of them.
+        state.dir = 1;
+        return;
+      }
       // Grazing: a snail stops to rasp algae far more often than it moves.
       state.mode = "graze";
       state.modeLeft = 2.5 + rng() * 6;

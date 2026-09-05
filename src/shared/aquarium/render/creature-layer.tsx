@@ -3,21 +3,21 @@
 //
 // The non-molly counterpart to `fish-layer.tsx`: shares its exact swim
 // engine (`sim/use-v2-swim.ts`, already species-agnostic) and perspective-
-// matrix transform math. Every `locomotion: "rigid"` species (frog, turtle,
-// otter) renders a plain `<Image>` — no spine-warp shader, since a
-// shell/legs silhouette isn't meant to bend. The one `locomotion:
-// "undulating"` species (axolotl) DOES spine-warp, via the same
-// `core/sksl/warp.ts` shader and `fish/spine.ts` amplitude/wavenumber
-// constants `fish-layer.tsx` uses — the warp operates on a baked texture's
-// bounds generically, nothing about it is fish-shaped, so reusing those
-// tuned constants here is a reasonable starting point (not re-measured for
-// axolotl's own proportions the way `verify-aquarium.ts` measures fish's).
+// matrix transform math. Every `locomotion: "rigid"` species (turtle, otter)
+// renders a plain `<Image>` — no spine-warp shader, since a shell/legs
+// silhouette isn't meant to bend. The one `locomotion: "undulating"` species
+// (axolotl) DOES spine-warp, via the same `core/sksl/warp.ts` shader and
+// `fish/spine.ts` amplitude/wavenumber constants `fish-layer.tsx` uses — the
+// warp operates on a baked texture's bounds generically, nothing about it is
+// fish-shaped, so reusing those tuned constants here is a reasonable
+// starting point (not re-measured for axolotl's own proportions the way
+// `verify-aquarium.ts` measures fish's).
 //
-// The one `locomotion: "crawl"` species (snail) does neither: it is bound to
-// a surface by `sim/crawl.ts` and rendered by `CrawlingCreature` below, which
-// shares none of the swim transform math — a crawler has one degree of
-// freedom (arc length along a track), so there is no yaw, no depth steering
-// and no edge-on width floor to reproduce.
+// The `locomotion: "crawl"` species (snail, shrimp) do neither: they are
+// bound to a surface by `sim/crawl.ts` and rendered by `CrawlingCreature`
+// below, which shares none of the swim transform math — a crawler has one
+// degree of freedom (arc length along a track), so there is no yaw, no depth
+// steering and no edge-on width floor to reproduce.
 //
 // The transform math below is a deliberate, documented duplication of
 // `fish-layer.tsx`'s — not a shared import — so shipping this file can never
@@ -49,9 +49,17 @@ import { getSpeciesDef } from "@/shared/creature/catalog";
 
 import type { BakedArt } from "../core/bake";
 import { densityAwareDpr } from "../core/bake";
-import { getWarpEffect } from "../core/sksl/warp";
+import {
+  getWarpEffect,
+  RELIGHT_OFF_UNIFORMS,
+  RELIGHT_STATIC_UNIFORMS,
+  relightYaw,
+} from "../core/sksl/warp";
+import type { CreaturePart } from "../creatures/bake-creature";
 import type { CreatureSpeciesId } from "../creatures/bake-placeholder";
+import { ANTENNA_PIVOT } from "../creatures/shrimp/anatomy";
 import { TENTACLE_PIVOT } from "../creatures/snail/anatomy";
+import type { XY } from "../core/ir";
 import { SPINE_AMP_MAX, SPINE_AMP_MIN, SPINE_K, SPINE_PAD } from "../fish/spine";
 import type { SceneLayer } from "../scene/types";
 import {
@@ -65,6 +73,7 @@ import { biasedDepthRange, personalityFor } from "../sim/personality";
 import { Z_MAX } from "../sim/swim";
 import { useV2Swim, type V2WanderBox } from "../sim/use-v2-swim";
 import { getCachedCreature } from "./creature-cache";
+import { getCachedAxolotlNormalMap } from "./normal-cache";
 import { DEAD_GRAYSCALE_MATRIX, DEAD_OPACITY } from "./dead-fish";
 
 function lerp(a: number, b: number, t: number): number {
@@ -83,6 +92,14 @@ const TURN_BEND_GAIN_PX_PER_RAD = 8;
 
 interface WarpedCreatureBodyProps {
   baked: BakedArt;
+  /**
+   * The species' body normal field, or null for a species that has none —
+   * which is every creature except the axolotl (see
+   * `creatures/axolotl/normal-map.ts`). Null means the relight gains go to
+   * zero, at which point the second child shader's contents stop mattering
+   * and this can reuse `baked` rather than allocate a placeholder.
+   */
+  normal: BakedArt | null;
   phaseOffset: number;
   beatPhase: SharedValue<number>;
   speedNorm: SharedValue<number>;
@@ -94,6 +111,7 @@ interface WarpedCreatureBodyProps {
 /** `fish-layer.tsx`'s `WarpedBody`, unchanged in every particular except its name — see this file's header for why that's a deliberate duplication, not a shared import. */
 function WarpedCreatureBody({
   baked,
+  normal,
   phaseOffset,
   beatPhase,
   speedNorm,
@@ -106,6 +124,16 @@ function WarpedCreatureBody({
     baked.bounds.y,
     baked.bounds.width,
     baked.bounds.height,
+  );
+  // Both children sample the same local-space coordinate, so differing
+  // rects align by construction — see fish-layer.tsx for the same note.
+  const hasNormal = normal !== null;
+  const normalArt = normal ?? baked;
+  const normalRect = Skia.XYWHRect(
+    normalArt.bounds.x,
+    normalArt.bounds.y,
+    normalArt.bounds.width,
+    normalArt.bounds.height,
   );
 
   const uniforms = useDerivedValue<Uniforms>(() => {
@@ -133,6 +161,12 @@ function WarpedCreatureBody({
       pecNearAmp: 0,
       pecFarAmp: 0,
       caudalAmp: 0,
+      // Relight (core/shading.ts DYNAMIC_RELIGHT). Live for the axolotl,
+      // which is the only creature with a body normal field; identity for
+      // everything else. Not optional either way — SkSL binds uniforms by
+      // name and the draw throws if a declared one is missing.
+      ...(hasNormal ? RELIGHT_STATIC_UNIFORMS : RELIGHT_OFF_UNIFORMS),
+      ...(hasNormal ? relightYaw(yaw.value) : { yawCos: 1, yawSin: 0 }),
     };
   });
 
@@ -156,6 +190,19 @@ function WarpedCreatureBody({
           tx="decal"
           ty="decal"
           sampling={{ filter: FilterMode.Linear, mipmap: MipmapMode.Linear }}
+        />
+        {/* The relight child: the axolotl's normal field, or the body
+            texture itself for every other species — with the gains at zero
+            its contents are never read, so that costs nothing and avoids a
+            placeholder allocation. `decal` is load-bearing: outside the rect
+            the shader must read (0,0,0,0) so its mask lands at 0. */}
+        <ImageShader
+          image={normalArt.image}
+          rect={normalRect}
+          fit="fill"
+          tx="decal"
+          ty="decal"
+          sampling={{ filter: FilterMode.Linear, mipmap: MipmapMode.None }}
         />
       </Shader>
     </Rect>
@@ -290,6 +337,7 @@ function SwimmingCreature({
     return (
       <Group transform={liveTransform} opacity={depthOpacity}>
         <WarpedCreatureBody
+          normal={speciesId === "axolotl" ? getCachedAxolotlNormalMap() : null}
           baked={baked}
           phaseOffset={phase}
           beatPhase={swim.beatPhase}
@@ -318,28 +366,58 @@ function SwimmingCreature({
 // Crawling species
 // ---------------------------------------------------------------------------
 
-/** How far the sand line the snail's sole sits — a hair INTO the substrate, so it reads as gripping it rather than balanced on top (same "grounded" trick `compose-sprites.ts` uses for decor). */
+/** How far the sand line a crawler's sole sits — a hair INTO the substrate, so it reads as gripping it rather than balanced on top (same "grounded" trick `compose-sprites.ts` uses for decor). */
 const SUBSTRATE_BITE = 3;
 /** Inset from the canvas edge for the two panes of glass. */
 const GLASS_INSET = 5;
-/** Tentacle sway: peak swing in radians, and how fast it wanders. */
+/** Sway: peak swing in radians, and how fast it wanders. */
 const SWAY_AMP = 0.13;
 const SWAY_FREQ = 0.62;
-/** Peak longitudinal stretch of the body over one pedal wave. A snail's foot visibly lengthens and gathers as each muscular wave runs down it. */
+/** Peak longitudinal stretch of the body over one pedal wave. A crawler's foot visibly lengthens and gathers as each muscular wave runs down it. */
 const PEDAL_STRETCH = 0.035;
 
 /**
- * A `locomotion: "crawl"` species: stuck to `sim/crawl.ts`'s track, never in
- * open water. The whole transform is "put the sole on the surface and turn to
- * match it" — `translate(contact)` then `rotate(surface tangent)` — which
- * works unchanged on the substrate, on either pane of glass, and up and over
- * a plant stem, because the art is authored with its sole at local y = 0 (see
- * `creatures/snail/anatomy.ts`).
+ * Every `locomotion: "crawl"` species bakes a second, independently-swaying
+ * appendage on top of its otherwise-rigid body — the snail's eye stalks, the
+ * shrimp's antennae — because a rigid texture sliding along a wall with
+ * nothing else moving reads as a sticker, not an animal (see
+ * `creatures/snail/bake-creature.ts`'s header). This is the one place that
+ * knows which `CreaturePart` and which pivot each species uses; a species
+ * with no entry here just draws its `"full"` bake with no second piece.
+ */
+const SWAY_RIG: Partial<Record<CreatureSpeciesId, { part: CreaturePart; pivot: XY }>> = {
+  snail: { part: "tentacles", pivot: TENTACLE_PIVOT },
+  shrimp: { part: "antennae", pivot: ANTENNA_PIVOT },
+};
+
+/**
+ * Which `crawl` species can occasionally dash — a decisive straight-line
+ * swim through open water between two points on the track, instead of
+ * following the surface the whole way (see `sim/crawl.ts`'s `stepCrawl`
+ * header). A snail has no swim degree of freedom at all and is never in this
+ * map; a shrimp spends most of its time crawling exactly like a snail but
+ * occasionally darts, which is what real aquarium shrimp actually do.
+ */
+const DASH_CAPABLE: Partial<Record<CreatureSpeciesId, boolean>> = {
+  shrimp: true,
+};
+
+/**
+ * A `locomotion: "crawl"` species: stuck to `sim/crawl.ts`'s track for
+ * almost all of its time on screen. The whole transform is "put the sole on
+ * the surface and turn to match it" — `translate(contact)` then
+ * `rotate(surface tangent)` — which works unchanged on the substrate, on
+ * either pane of glass, and up and over a plant stem, because the art is
+ * authored with its sole at local y = 0 (see `creatures/snail/anatomy.ts`).
+ * `DASH_CAPABLE` species (the shrimp) are the one exception: `crawl.x/y`
+ * briefly leave the track mid-dash, and this same transform still places
+ * them correctly since it only ever reads `crawl.x/y/angle`, never the track
+ * itself.
  *
- * Two textures, not one: the tentacles bake separately (`part: "tentacles"`)
- * and rotate about `TENTACLE_PIVOT` under the body, so the eye stalks wave
- * independently of the shell. See `creatures/snail/bake-creature.ts` for why
- * that is worth a second draw call for this species specifically.
+ * Two textures, not one, for any species with a `SWAY_RIG` entry: the swaying
+ * appendage bakes separately and rotates about its own pivot under the body,
+ * independently of the shell/carapace. See `creatures/snail/bake-creature.ts`
+ * for why that is worth a second draw call.
  */
 function CrawlingCreature({
   speciesId,
@@ -361,8 +439,9 @@ function CrawlingCreature({
     PixelRatio.get(),
     shrink ? MAX_RENDER_SCALE_TANK : MAX_RENDER_SCALE_CENTER,
   );
+  const swayRig = SWAY_RIG[speciesId];
   const body = getCachedCreature(speciesId, variant, dpr, "body");
-  const tentacles = getCachedCreature(speciesId, variant, dpr, "tentacles");
+  const swayPiece = swayRig ? getCachedCreature(speciesId, variant, dpr, swayRig.part) : null;
 
   const personality = personalityFor(seed);
   const sand = sandHeightFor(bounds.height);
@@ -397,6 +476,7 @@ function CrawlingCreature({
     seed,
     speedFactor: (mode === "center" ? 0.6 : 1) * personality.speedFactor,
     enabled: true,
+    canDash: DASH_CAPABLE[speciesId] ?? false,
   });
 
   const depthScale = hasDepth ? scale * lerp(0.86, 1.06, depth ?? 0) : scale;
@@ -417,8 +497,9 @@ function CrawlingCreature({
     ];
   });
 
-  const tentacleTransform = useDerivedValue<Transforms3d>(() => {
-    // Two incommensurate frequencies so the stalks never settle into an
+  const swayPivot = swayRig?.pivot ?? { x: 0, y: 0 };
+  const swayTransform = useDerivedValue<Transforms3d>(() => {
+    // Two incommensurate frequencies so the appendage never settles into an
     // obvious loop, plus a slow lean into the direction of travel.
     const t = crawl.elapsed.value;
     const sway =
@@ -426,11 +507,11 @@ function CrawlingCreature({
       SWAY_AMP * 0.55 * Math.sin(t * SWAY_FREQ * 1.61 * Math.PI * 2 + phase * 1.7) -
       0.06 * crawl.speedNorm.value;
     return [
-      { translateX: TENTACLE_PIVOT.x },
-      { translateY: TENTACLE_PIVOT.y },
+      { translateX: swayPivot.x },
+      { translateY: swayPivot.y },
       { rotate: sway },
-      { translateX: -TENTACLE_PIVOT.x },
-      { translateY: -TENTACLE_PIVOT.y },
+      { translateX: -swayPivot.x },
+      { translateY: -swayPivot.y },
     ];
   });
 
@@ -438,9 +519,9 @@ function CrawlingCreature({
 
   return (
     <Group transform={bodyTransform} opacity={depthOpacity}>
-      {tentacles ? (
-        <Group transform={tentacleTransform}>
-          <SkiaImage image={tentacles.image} rect={rectOf(tentacles)} fit="fill" />
+      {swayPiece ? (
+        <Group transform={swayTransform}>
+          <SkiaImage image={swayPiece.image} rect={rectOf(swayPiece)} fit="fill" />
         </Group>
       ) : null}
       <SkiaImage image={body.image} rect={rectOf(body)} fit="fill" />

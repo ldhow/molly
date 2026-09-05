@@ -32,4 +32,27 @@ export const SPRITE_SOURCES: Record<SpriteId, number> = {
   rockSmall: require("@/assets/images/scene/rock-small.png"),
   leafyBush: require("@/assets/images/scene/leafy-bush.png"),
   grassSpiky: require("@/assets/images/scene/grass-spiky.png"),
+
+  // Blender-rendered pieces — see the section of the same name in
+  // `sprite-manifest.ts`. Same `require` contract as everything above.
+  b3Sword: require("@/assets/images/scene3d/sword-3.png"),
+  b3SwordB: require("@/assets/images/scene3d/sword-11.png"),
+  b3Grass: require("@/assets/images/scene3d/grass-3.png"),
+  b3GrassB: require("@/assets/images/scene3d/grass-11.png"),
+  b3Kelp: require("@/assets/images/scene3d/kelp-3.png"),
+  b3KelpB: require("@/assets/images/scene3d/kelp-11.png"),
+  b3Anubias: require("@/assets/images/scene3d/anubias-3.png"),
+  b3AnubiasB: require("@/assets/images/scene3d/anubias-11.png"),
+  b3Cabomba: require("@/assets/images/scene3d/cabomba-3.png"),
+  b3CabombaB: require("@/assets/images/scene3d/cabomba-11.png"),
+  b3Rock: require("@/assets/images/scene3d/rock-3.png"),
+  b3RockB: require("@/assets/images/scene3d/rock-11.png"),
+  b3Rocksmall: require("@/assets/images/scene3d/rocksmall-3.png"),
+  b3RocksmallB: require("@/assets/images/scene3d/rocksmall-11.png"),
+  b3Driftwood: require("@/assets/images/scene3d/driftwood-3.png"),
+  b3DriftwoodB: require("@/assets/images/scene3d/driftwood-11.png"),
+  b3Mossball: require("@/assets/images/scene3d/mossball-3.png"),
+  b3MossballB: require("@/assets/images/scene3d/mossball-11.png"),
+  b3Bush: require("@/assets/images/scene3d/bush-3.png"),
+  b3BushB: require("@/assets/images/scene3d/bush-11.png"),
 };

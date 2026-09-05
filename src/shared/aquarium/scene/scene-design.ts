@@ -162,6 +162,27 @@ export interface SeiryuStoneDesign {
   facetCountMin: number;
   facetCountRange: number;
   seamColor: string;
+  /**
+   * Moss over the stone's crown. Sampled straight off the sprite art
+   * (`rock-a.png`, `rock-huge.png`, `rock-small.png`): in every one of them
+   * the stone is a MOSSY dome, never bare rock, and that green cap is most of
+   * what makes it read as an aquarium stone rather than a grey polygon. The
+   * procedural stone had no equivalent at all.
+   */
+  mossDarkColor: string;
+  mossMidColor: string;
+  mossLightColor: string;
+  /** How far down the stone the moss reaches, as a fraction of its height. */
+  mossCoverage: number;
+  /** Scalloped blobs along the crown — the moss edge is lumpy, never a clean line. */
+  mossBlobCountMin: number;
+  mossBlobCountRange: number;
+  /** Loose stones at the foot, also straight from the sprite art — no boulder there sits on clean sand. */
+  pebbleCountMin: number;
+  pebbleCountRange: number;
+  /** As a fraction of the stone's own width. */
+  pebbleRadiusMin: number;
+  pebbleRadiusRange: number;
 }
 
 export interface SubstrateMoundDesign {
@@ -255,6 +276,17 @@ export interface CabombaDesign {
   stalkWidthRange: number;
   leafletLenMin: number;
   leafletLenRange: number;
+  /**
+   * Needles per WHORL. `cabomba.png` is a bottlebrush: at every node a whole
+   * fan of fine needles radiates out on both sides, and the overlapping fans
+   * are what make the plant read as feathery. The generator used to emit ONE
+   * needle per station, alternating sides, which read as a bare wire with
+   * specks stuck to it.
+   */
+  whorlNeedleCountMin: number;
+  whorlNeedleCountRange: number;
+  /** Total angular spread of one side's fan, degrees. */
+  whorlArcDeg: number;
   swayHeightFactor: number;
 }
 
@@ -354,6 +386,12 @@ export interface SceneDesign {
     speckleDensity: number;
     speckleColor: string;
   };
+  /**
+   * `spriteSize` is the bubble sprite in px at scale 1. Kept small on
+   * purpose: at 28 a bubble was ~7% of a 390px canvas width, which is bigger
+   * than a fish eye and read as floating balls rather than as aeration. The
+   * count is raised to compensate so the tank does not lose the motion.
+   */
   bubbles: { count: number; spriteSize: number };
   layers: {
     opacityFar: number;
@@ -366,6 +404,28 @@ export interface SceneDesign {
     opacityFront: number;
     /** Same as front — decor-tier only, see `opacityBackMid`. */
     opacityFrontMost: number;
+    /**
+     * How far each layer is pulled toward the water haze colour — the other
+     * half of atmospheric perspective, alongside the opacity table above.
+     *
+     * Alpha alone does not read as distance: a back piece at `opacityFar`
+     * over bright water goes translucent and shows the background through
+     * its middle, which reads as a decal in front of the water, not an
+     * object far inside it. Real distance underwater desaturates and tints
+     * toward the water while staying opaque. Lives here rather than in the
+     * renderer so `scripts/aquarium-preview.ts` composites the same way the
+     * device does — it previously drew sprites with a bare paint and showed
+     * no depth falloff at all.
+     */
+    hazeFar: number;
+    hazeBack: number;
+    hazeBackMid: number;
+    hazeMid: number;
+    hazeFrontMid: number;
+    /** The colour distance is hazed toward — the mid/bottom water tone actually behind decor, not the pale surface. */
+    hazeColor: string;
+    /** Opacity falloff is compressed by this once haze carries the depth cue; 1 = use the table raw. */
+    hazeOpacityRelief: number;
     /** How far a swaying piece leans with the shared tank current, on top of its own faster individual flutter. */
     currentLean: number;
     /** Autonomous horizontal drift camera — px at `parallaxFront` (factor 1). */
@@ -388,10 +448,14 @@ export interface SceneDesign {
 export const DEFAULT_SCENE_DESIGN: SceneDesign = {
   species: {
     driftwood: {
-      darkColor: "#3a281b",
-      midColor: "#5c4029",
-      highlightColor: "#9c7c55",
-      knotColor: "#2a1c12",
+      // Sampled from `driftwood-log.png`'s bark (its p25/p50 bands, excluding
+      // the moss growing over it). The old mid `#5c4029` sat a full stop
+      // darker than the painted log, which is why generated wood read as a
+      // charred twig beside it.
+      darkColor: "#44361e",
+      midColor: "#725329",
+      highlightColor: "#a98757",
+      knotColor: "#2a2916",
       knotCountMin: 1,
       knotCountRange: 2,
       knotRadiusMin: 2.2,
@@ -400,8 +464,14 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       contactShadowStrength: 0.32,
       heightMin: 118,
       heightRange: 72,
-      baseWidthMin: 15,
-      baseWidthRange: 7,
+      // `driftwood-log.png` is 320x168 — a piece roughly twice as wide as it
+      // is tall, whose trunk is a good fifth of its own length thick. At
+      // 15-22 against a 118-190 trunk this generator was drawing something
+      // nearer 1:8, i.e. a twig. Widening the trunk is what lets the branch
+      // and root factors below inherit real thickness too, since both are
+      // expressed as fractions of it.
+      baseWidthMin: 26,
+      baseWidthRange: 10,
       headingBase: -42,
       headingRange: 38,
       wanderDeg: 26,
@@ -412,7 +482,7 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       rootHeadingRange: 20,
       rootLenMin: 0.26,
       rootLenRange: 0.26,
-      rootWidthFactor: 0.55,
+      rootWidthFactor: 0.62,
       rootSegments: 3,
       branchCountMin: 3,
       branchCountRange: 2,
@@ -422,17 +492,18 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       forkAngleRange: 40,
       branchLenMin: 0.32,
       branchLenRange: 0.3,
-      branchWidthFactor: 0.36,
+      branchWidthFactor: 0.46,
       branchSegments: 4,
       lowAnchorT: 0.15,
       lowAnchorAngleBase: -100,
       lowAnchorAngleRange: 40,
     },
     anubias: {
-      leafDarkColor: "#206130",
-      leafMidColor: "#3d984b",
-      leafTipLighten: 0.2,
-      veinColor: "#12361b",
+      // From `anubias-a.png` — the one sprite whose subject IS this species.
+      leafDarkColor: "#1e6434",
+      leafMidColor: "#3e8433",
+      leafTipLighten: 0.24,
+      veinColor: "#144023",
       unattachedBaseAngle: -90,
       leafCountMin: 3,
       leafCountRange: 3,
@@ -452,9 +523,14 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 14,
     },
     vallisneria: {
-      color1: "#3a854b",
-      color2: "#2f723f",
-      color3: "#439a5b",
+      // Ramp lifted off `tall-grass.png` (see this block's palette note): a
+      // strap blade runs deep green in its shaded fold to a near-chartreuse
+      // edge, and it is that VALUE SPAN, not the hue, that reads as a lit
+      // leaf. The old trio spanned barely 15% lightness and all three were
+      // the same blue-green, so a clump read as flat cut paper.
+      color1: "#3d7f1a",
+      color2: "#296719",
+      color3: "#53921c",
       bladeCountMin: 5,
       bladeCountRange: 4,
       heightMin: 180,
@@ -465,16 +541,21 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       bladeSpacing: 5,
       // Blades are RIBBONS, not wires. At 2.2 a clump scaled up for the
       // background canopy came out ~100:1 — thinner than any real vallisneria
-      // and thin enough to alias away against the water.
-      widthMin: 3.2,
-      widthRange: 1.8,
+      // and thin enough to alias away against the water. Raised again to 7.5
+      // to match the sprite: `tall-grass.png` is 222x414 carrying ~9 blades,
+      // i.e. roughly 13:1 per blade, against the ~40:1 these were drawing.
+      // That single number is most of why the procedural scene read as wire
+      // where the painted one reads as foliage.
+      widthMin: 7.5,
+      widthRange: 3.5,
       swayHeightFactor: 90,
     },
     stemBush: {
-      leafColor1: "#297139",
-      leafColor2: "#3d984b",
-      leafColor3: "#206130",
-      stemColor: "#12361b",
+      // From `leafy-bush.png`.
+      leafColor1: "#24631c",
+      leafColor2: "#428110",
+      leafColor3: "#1a4c1a",
+      stemColor: "#0f3917",
       stemCountMin: 5,
       stemCountRange: 4,
       angleSpreadBase: 14,
@@ -487,20 +568,46 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 24,
     },
     seiryuStone: {
-      darkColor: "#393632",
-      midColor: "#5a554f",
-      lightColor: "#857f79",
+      // Stone ramp from `rock-small.png`'s bare faces — warmer and greener
+      // than the old neutral grey, because in the sprite art even the
+      // unmossed rock carries a green cast bounced off everything around it.
+      darkColor: "#3a4438",
+      midColor: "#576b51",
+      lightColor: "#84876e",
       widthMin: 92,
       widthRange: 58,
-      heightMin: 60,
-      heightRange: 42,
-      vertexCountMin: 8,
-      vertexCountRange: 4,
-      jitterMin: 0.78,
-      jitterRange: 0.44,
+      // Rounder than before (was 60+42). Every sprite rock is a DOME —
+      // `rock-huge.png` is a broad rounded hump — where this generator's
+      // low-and-wide jagged wedge read as rubble. The silhouette is still
+      // faceted; it just sits taller relative to its width now.
+      heightMin: 74,
+      heightRange: 48,
+      // More vertices than the original 8-12: at that count the per-vertex
+      // radius jitter below lands on a coarse polygon, so each perturbation
+      // became a visible corner and the stone read as chipped slate. Sampling
+      // the dome more finely lets the same jitter read as surface irregularity
+      // on a rounded boulder — which is the silhouette every sprite rock has.
+      vertexCountMin: 16,
+      vertexCountRange: 6,
+      // Tightened from 0.78+0.44: at that spread the radius could nearly
+      // double between neighbouring vertices, which is what made the
+      // silhouette read as shattered slate rather than a weathered boulder.
+      jitterMin: 0.88,
+      jitterRange: 0.2,
       facetCountMin: 1,
       facetCountRange: 2,
       seamColor: "#e1deda",
+      // Moss ramp from `moss-ball.png` / the mossed crowns of `rock-a.png`.
+      mossDarkColor: "#235705",
+      mossMidColor: "#476d0b",
+      mossLightColor: "#6f9607",
+      mossCoverage: 0.62,
+      mossBlobCountMin: 5,
+      mossBlobCountRange: 4,
+      pebbleCountMin: 2,
+      pebbleCountRange: 3,
+      pebbleRadiusMin: 0.05,
+      pebbleRadiusRange: 0.045,
     },
     substrateMound: {
       topColor: "#6b5540",
@@ -527,9 +634,13 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       radiusRange: 4,
     },
     kelp: {
-      color1: "#183e29",
-      color2: "#113221",
-      color3: "#1e4932",
+      // From `kelp.png`. The old trio topped out at #1e4932 — so dark that a
+      // clump was a black cutout at any size, which the theme comment in
+      // `nature-scape.ts` describes as reading like "flat dark PLANKS". The
+      // sprite's own kelp is a legible mid-green with a bright lit edge.
+      color1: "#377f30",
+      color2: "#226332",
+      color3: "#539832",
       // Six-ish fronds, not three. At three, a clump this tall reads as a
       // few flat dark PLANKS rather than planting — the fronds are ~20:1
       // aspect and never overlap, so nothing tells you it's a mass. More
@@ -564,10 +675,11 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 14,
     },
     cabomba: {
-      stalkColor: "#27522c",
-      leafletColor1: "#3b853f",
-      leafletColor2: "#4ea856",
-      leafletColor3: "#2f723a",
+      // From `cabomba.png`.
+      stalkColor: "#26601e",
+      leafletColor1: "#2d691c",
+      leafletColor2: "#4f921e",
+      leafletColor3: "#1e5715",
       stalkCountMin: 3,
       stalkCountRange: 3,
       heightMin: 170,
@@ -578,15 +690,20 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       stalkSpacing: 6,
       stalkWidthMin: 1.6,
       stalkWidthRange: 0.6,
-      leafletLenMin: 7,
-      leafletLenRange: 6,
+      leafletLenMin: 10,
+      leafletLenRange: 7,
+      whorlNeedleCountMin: 4,
+      whorlNeedleCountRange: 3,
+      whorlArcDeg: 74,
       swayHeightFactor: 110,
     },
     sword: {
-      leafDarkColor: "#164e22",
-      leafMidColor: "#4aab5a",
-      leafTipLighten: 0.22,
-      veinColor: "#0f3618",
+      // From `grass-spiky.png` — the spiky strap-leaf sprite this species is
+      // the procedural equivalent of.
+      leafDarkColor: "#1d5314",
+      leafMidColor: "#458517",
+      leafTipLighten: 0.24,
+      veinColor: "#12360c",
       leafCountMin: 5,
       leafCountRange: 4,
       spreadMin: 7,
@@ -601,9 +718,11 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
       swayHeightFactor: 20,
     },
     carpet: {
-      leafColor1: "#4ea856",
-      leafColor2: "#3d984b",
-      leafColor3: "#6ab26e",
+      // From `moss-ball.png` — a tight mound of small bright leaves, which is
+      // exactly what a carpet clump is.
+      leafColor1: "#476d0b",
+      leafColor2: "#235705",
+      leafColor3: "#6f9607",
       clumpCountMin: 6,
       clumpCountRange: 6,
       leafRadiusMin: 2,
@@ -630,20 +749,28 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
     },
   },
   lighting: { dirX: -0.45, dirY: -0.89, formDarken: 0.3, formLighten: 0.16 },
-  // Freshwater-pond palette, not a tropical marine one — the whole scene is
-  // aimed at the soft, hand-illustrated "cozy pond" look (Pondlife and that
-  // genre) rather than the saturated cartoon reef `scene.png` still shows.
+  // PLANT AND HARDSCAPE COLOURS ABOVE ARE SAMPLED FROM THE SPRITE ART, not
+  // chosen by eye. Every ramp cites the `assets/images/scene/*.png` it came
+  // from; they were read out of the actual pixels (opaque-only, by luminance
+  // percentile) so the procedural mode and the painted mode agree on what a
+  // plant is coloured like. Two properties of that art carry the look, and
+  // both are easy to undo by accident:
   //
-  // Three things carry that read, and they're easy to undo by accident:
-  //   - GREEN, not cyan. A pond is algal water over silt; the old top stop
-  //     (#2f86ab) was a reef blue.
-  //   - LOW top-to-bottom contrast. A pond is shallow, so the bottom stop is
-  //     a readable deep teal, NOT the old near-black (#08202e). That darkness
-  //     bought depth in a deep-tank look and fights a shallow one.
-  //   - Nothing fully saturated. Every plant green below is pulled ~15% out
-  //     of saturation and rotated toward yellow-green; hardscape is warmed
-  //     off blue-grey. Storybook art reads soft because its palette is soft,
-  //     not because its edges are.
+  //   - YELLOW-GREEN, not blue-green. Every sampled leaf highlight has a
+  //     blue channel near zero (#92bf18, #b1cc0c, #71a70c). The palette this
+  //     replaced was built on spring-greens like #3d984b/#439a5b, whose blue
+  //     channel is 3-4x higher — that one difference is most of why the
+  //     generated scene read cold and synthetic beside the painted one.
+  //   - A WIDE VALUE SPAN per species. The sampled ramps run from a deep
+  //     shadow (~#1a4c1a) to a near-chartreuse lit edge (~#71a70c). The old
+  //     trios spanned barely 15% lightness, so form shading had nothing to
+  //     work with and every leaf read flat.
+  //
+  // The WATER below is deliberately NOT sampled from the sprites: it stays
+  // the softer freshwater-pond gradient (green, not cyan; low top-to-bottom
+  // contrast, so a shallow pond rather than a deep tank). Sprite mode has its
+  // own brighter cyan water in `render/sprite-layers.tsx`; the two art modes
+  // are allowed to disagree about the WATER even while agreeing about plants.
   water: { top: "#7ac8b6", mid: "#3d8f8a", bottom: "#1a4950" },
   substrate: {
     top: "#c8b48c",
@@ -652,7 +779,7 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
     speckleDensity: 0.1,
     speckleColor: "#5a4d38",
   },
-  bubbles: { count: 14, spriteSize: 28 },
+  bubbles: { count: 18, spriteSize: 15 },
   layers: {
     opacityFar: 0.45,
     opacityBack: 0.7,
@@ -661,6 +788,13 @@ export const DEFAULT_SCENE_DESIGN: SceneDesign = {
     opacityFrontMid: 1,
     opacityFront: 1,
     opacityFrontMost: 1,
+    hazeFar: 0.62,
+    hazeBack: 0.4,
+    hazeBackMid: 0.24,
+    hazeMid: 0.1,
+    hazeFrontMid: 0.04,
+    hazeColor: "#3d99b8",
+    hazeOpacityRelief: 0.4,
     currentLean: 0.05,
     parallaxAmplitude: 14,
     parallaxPeriodSec: 48,

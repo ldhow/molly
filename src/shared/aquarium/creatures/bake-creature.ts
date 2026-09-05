@@ -16,18 +16,21 @@ import {
   type CreatureSpeciesId,
 } from "./bake-placeholder";
 import { bakeAxolotl, axolotlBakeKey } from "./axolotl/bake-creature";
-import { bakeFrog, frogBakeKey } from "./frog/bake-creature";
 import { bakeOtter, otterBakeKey } from "./otter/bake-creature";
+import { bakeShrimp, shrimpBakeKey } from "./shrimp/bake-creature";
 import { bakeSnail, snailBakeKey } from "./snail/bake-creature";
 import { bakeTurtle, turtleBakeKey } from "./turtle/bake-creature";
 
 /**
- * Which piece of a species to bake. Only the snail has more than one (see
- * `snail/bake-creature.ts`: its eye stalks sway independently of its body);
- * every other species ignores it and returns its single texture, so callers
- * that do not care never pass it.
+ * Which piece of a species to bake. Snail (eye stalks) and shrimp (antennae
+ * — see `shrimp/bake-creature.ts`) sway independently of their body; every
+ * other species ignores it and returns its single texture, so callers that
+ * do not care never pass it. `"tentacles"` is snail-only, `"antennae"` is
+ * shrimp-only — a caller that passes the wrong species' part name just gets
+ * that species' `"full"` fallback rather than a crash, matching the "unbuilt
+ * species falls through to a placeholder" tolerance this file already has.
  */
-export type CreaturePart = "full" | "body" | "tentacles";
+export type CreaturePart = "full" | "body" | "tentacles" | "antennae";
 
 export function creatureBakeKey(
   speciesId: CreatureSpeciesId,
@@ -36,9 +39,9 @@ export function creatureBakeKey(
 ): string {
   switch (speciesId) {
     case "snail":
-      return snailBakeKey(variant, part);
-    case "frog":
-      return frogBakeKey(variant);
+      return snailBakeKey(variant, part === "antennae" ? "full" : part);
+    case "shrimp":
+      return shrimpBakeKey(variant, part === "tentacles" ? "full" : part);
     case "turtle":
       return turtleBakeKey(variant);
     case "axolotl":
@@ -59,9 +62,9 @@ export function bakeCreature(
 ): BakedArt | null {
   switch (speciesId) {
     case "snail":
-      return bakeSnail(Skia, variant, dpr, part);
-    case "frog":
-      return bakeFrog(Skia, variant, dpr);
+      return bakeSnail(Skia, variant, dpr, part === "antennae" ? "full" : part);
+    case "shrimp":
+      return bakeShrimp(Skia, variant, dpr, part === "tentacles" ? "full" : part);
     case "turtle":
       return bakeTurtle(Skia, variant, dpr);
     case "axolotl":
